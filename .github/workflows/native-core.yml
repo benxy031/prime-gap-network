@@ -56,8 +56,8 @@ jobs:
           build-native/bin/pgn-native-epoch3-reset-test.exe
           build-native/bin/pgn-native-audit-availability-test.exe
           build-native/bin/pgn-native-hourly-consensus-math-test.exe
-          build-native/bin/pgn-native-hourly-consensus-quote-test.exe
-          build-native/bin/pgn-native-hourly-complete-returns-test.exe
+          build-native/bin/pgn-native-hourly-consensus-quote-test.exe "$PWD/build-native/hourly-consensus-fixture"
+          build-native/bin/pgn-native-hourly-complete-returns-test.exe "$PWD/build-native/hourly-complete-fixture"
           build-native/bin/pgn-hourly-receipt-histogram-test.exe
           build-native/bin/pgn-native-leaderboard-test.exe "$PWD/build-native/leaderboard-fixture"
           build-native/bin/riecoind.exe --version
@@ -72,6 +72,7 @@ jobs:
           if ($info.FileDescription -notlike 'PGN Core*' -or $info.ProductName -ne 'PGN Core' -or $info.InternalName -ne 'pgn-core' -or $info.OriginalFilename -ne 'pgn-core.exe') { throw 'Native Windows project identity mismatch' }
           if ($info.LegalCopyright -notmatch 'Riecoin') { throw 'Upstream copyright was lost' }
       - name: Collect the native program and its actual DLL closure
+        if: always()
         run: |
           mkdir -p native-artifact
           cp build-native/bin/riecoind.exe native-artifact/pgn-core.exe
@@ -91,6 +92,7 @@ jobs:
         shell: pwsh
         run: python tests/native_peer_clock_latency.py --core native-artifact/pgn-core.exe --expected-version 2026.11.14.19 --report build-native/peer-clock.json
       - name: Preserve the exact qualified native programs
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-core-windows-${{ github.run_id }}
@@ -123,8 +125,8 @@ jobs:
           build-native/bin/pgn-native-epoch3-reset-test
           build-native/bin/pgn-native-audit-availability-test
           build-native/bin/pgn-native-hourly-consensus-math-test
-          build-native/bin/pgn-native-hourly-consensus-quote-test
-          build-native/bin/pgn-native-hourly-complete-returns-test
+          build-native/bin/pgn-native-hourly-consensus-quote-test "$PWD/build-native/hourly-consensus-fixture"
+          build-native/bin/pgn-native-hourly-complete-returns-test "$PWD/build-native/hourly-complete-fixture"
           build-native/bin/pgn-hourly-receipt-histogram-test
           build-native/bin/pgn-native-leaderboard-test "$PWD/build-native/leaderboard-fixture"
           build-native/bin/riecoind --version
@@ -133,6 +135,7 @@ jobs:
           build-native/bin/pgn-native-project-identity-test
           build-native/bin/riecoind --version | grep '^PGN Core daemon version '
       - name: Collect the native program and dependency description
+        if: always()
         run: |
           mkdir -p native-artifact
           cp build-native/bin/riecoind native-artifact/pgn-core
@@ -143,6 +146,7 @@ jobs:
       - name: Verify delayed native peer handshake and extreme VERSION times
         run: python3 tests/native_peer_clock_latency.py --core native-artifact/pgn-core --expected-version 2026.11.14.19 --report build-native/peer-clock.json
       - name: Preserve the exact qualified native programs
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-core-ubuntu-${{ github.run_id }}
