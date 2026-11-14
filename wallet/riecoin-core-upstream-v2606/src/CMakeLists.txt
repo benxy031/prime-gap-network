@@ -541,3 +541,6 @@ endif()
 
 add_executable(pgn-native-leaderboard-test EXCLUDE_FROM_ALL pgn/native_leaderboard_test.cpp)
 target_link_libraries(pgn-native-leaderboard-test PRIVATE core_interface riecoin_node univalue)
+
+add_executable(pgn-native-epoch3-reset-test EXCLUDE_FROM_ALL pgn/epoch3_reset_test.cpp)
+target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoin_node univalue)
