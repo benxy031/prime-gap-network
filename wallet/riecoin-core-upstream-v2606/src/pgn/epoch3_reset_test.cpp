@@ -35,9 +35,9 @@ int main(){try{
  HashWriter monetary{TaggedHash("PGN/CANDIDATE/NATIVE-MONETARY-POLICY/1")};monetary<<epoch.pinned_genesis<<epoch.pinned_genesis<<monetary_payload;
  need(PgnTestnetServiceActivation(epoch.pinned_genesis)->monetary_policy==monetary.GetHash(),"Audit settlement activation belongs to another epoch policy");
  const auto own=ConfiguredNativeAuditOperatorRules(epoch.pinned_genesis);
- need(own&&own->height==1,"Self rechecks not active from fresh epoch");
+ need(own&&own->activation_height==1,"Self rechecks not active from fresh epoch");
  const auto old=*uint256::FromHex("0ccd1f2349ed75f9cf4d0279871a204e107683e5baa1dd6641c4e6f08a25a17d");
- need(!ConfiguredNativeHourlyMerit(old)&&ConfiguredNativeAuditOperatorRules(old)->height==16640,"Old history was reinterpreted");
+ need(!ConfiguredNativeHourlyMerit(old)&&ConfiguredNativeAuditOperatorRules(old)->activation_height==16640,"Old history was reinterpreted");
  const auto main=BuildBaseMainDefinition();
  need(!PgnTestnetServiceActivation(main.pinned_genesis)&&!ConfiguredNativeHourlyMerit(main.pinned_genesis)&&!ConfiguredNativeAuditOperatorRules(main.pinned_genesis),"Mainnet rule contamination");
  std::cout<<"{\"PASS\":true,\"fresh_genesis\":\"710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314\",\"initial_and_floor\":27.5,\"hourly_enabled\":true,\"old_history_unchanged\":true,\"mainnet_unchanged\":true}\n";
