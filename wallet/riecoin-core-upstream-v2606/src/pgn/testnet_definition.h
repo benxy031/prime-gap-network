@@ -12,7 +12,7 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(){
     const Integer limit=Integer{1}<<95;
     const RangePoolDefinition ranges{origin,width,(limit-origin+width-1)/width,2,144,10000,limit};
     const EncodingLimits records{1000000,2000000,512,100};
-    const CommittedGapPolicy evidence{records,{{4096,4096,256},65536},{4096,256,512},{128,256},29,1};
+    const CommittedGapPolicy evidence{records,{{4096,4096,256},65536},{4096,256,512},{128,256},55,2};
     const ScienceVerificationDefinition science{100,evidence,{65536,2000000,512,100}};
     const CAmount coin=PGN_ATOMIC_UNITS_PER_COIN;
     // Total ordinary budget includes the audit allocation. 342:128:25 of
@@ -20,7 +20,7 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(){
     const MonetaryPolicyDefinition money{99000000*coin,1000000*coin,{495*coin/2,1},
         495,342,128,25,FeeRoutingDefinition{1,1}};
     const NativeWorkDefinition work{arith_uint256{1}<<32,arith_uint256{1}};
-    const MeritControllerDefinition controller{29*65536,16*65536,64*65536,600,172800};
+    const MeritControllerDefinition controller{55*32768,55*32768,64*65536,600,172800};
     constexpr uint32_t bootstrap_bits=0x207fffff;
     const auto range_script=BuildCandidateRangePolicyEnvelope(ranges,budget);
     const auto science_script=BuildCandidateSciencePolicyEnvelope(science,budget);
@@ -42,12 +42,12 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(){
     put(40*65536,4);
     const std::string rewards_tag="PGNTESTNET-REWARDS-1";
     CMutableTransaction coinbase;coinbase.vin.resize(1);coinbase.vin[0].prevout.SetNull();
-    const std::string identity="PGN TESTNET / prime gaps / reset 2026-11-06";
+    const std::string identity="PGN TESTNET / prime gaps / reset 2026-11-14";
     coinbase.vin[0].scriptSig=CScript{}<<OP_0<<Bytes{identity.begin(),identity.end()};
     coinbase.vout={{0,*range_script},{0,*science_script},{0,*money_script},{0,*bootstrap_script},
         {0,*work_script},{0,*controller_script},
         {0,CScript{}<<OP_RETURN<<Bytes{rewards_tag.begin(),rewards_tag.end()}<<rewards}};
-    CBlock genesis;genesis.nVersion=4;genesis.nTime=1793923200;
+    CBlock genesis;genesis.nVersion=4;genesis.nTime=1794614400;
     genesis.nBits=bootstrap_bits;genesis.nNonce=NativeBootstrapNonce(0);
     genesis.vtx={MakeTransactionRef(coinbase)};genesis.hashMerkleRoot=BlockMerkleRoot(genesis);
     const auto target=*CanonicalBootstrapHashTarget(bootstrap_bits);
@@ -61,7 +61,7 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(){
     }
     const auto id=genesis.GetHash();
     const auto addresses=PgnTestnetAddressPolicy();
-    return {genesis,id,{0xd7,0x54,0x4e,0x32},48941,48942,addresses,
+    return {genesis,id,{0xd7,0x54,0x4e,0x33},48951,48952,addresses,
         {Bytes{0x04,0x35,0x87,0xcf},Bytes{0x04,0x35,0x83,0x94}},
         {128},AtomicFeeRatePolicy{coin,{128}},budget};
 }

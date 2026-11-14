@@ -9,7 +9,7 @@ from pathlib import Path,PurePosixPath
 import argparse,hashlib,json,os,platform,re,shutil,subprocess,sys,sysconfig,tarfile,tempfile,urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
-GENESIS='0ccd1f2349ed75f9cf4d0279871a204e107683e5baa1dd6641c4e6f08a25a17d'
+GENESIS='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314'
 ABI='pgn.epoch2.2026.11'
 INPUT_URL='https://github.com/wizz13150/prime-gap-network/releases/download/v0.1.0-alpha.1/PGN-Horizon-testnet-preview-Ubuntu24.04-x86_64.tar.gz'
 INPUT_SHA='0bc3768ecb953b789b5ea79e1d506ba71333451b260b24f8ce4a8c719a0d6eee'

@@ -5,7 +5,7 @@ import json
 import math
 import secrets
 import time
-from pgn_native_contract import fields
+from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import audit_commitment, canonical_bytes
 from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged
@@ -16,6 +16,10 @@ from horizon_audit_snapshot import AnchoredAuditStates
 
 def save(file, value):
     atomic_bytes(Path(file), canonical_bytes(value) + b"\n")
+
+
+class RetainedAuditPublicationError(RuntimeError):
+    """One immutable receipt needs recovery; it cannot block other receipts."""
 
 
 def partition_ticket(audit, part):
@@ -48,6 +52,19 @@ class NetworkAudits:
         self.reassignment_needed = reassignment_needed
         self.on_retired = on_retired
 
+    def retained_signer(self, script, owner):
+        if (type(script) is not str or not script or len(script) > 8192
+                or len(script) % 2 or any(c not in '0123456789abcdef' for c in script)):
+            raise RetainedAuditPublicationError('Invalid canonical audit signer; private answer retained')
+        address = self.worker.rpc.call('decodescript', [script]).get('address')
+        if type(address) is not str or not address:
+            raise RetainedAuditPublicationError('Canonical audit signer has no supported address; private answer retained')
+        if address != owner:
+            info = self.worker.rpc.call('getaddressinfo', [address], wallet=True)
+            if info.get('ismine') is not True or info.get('scriptPubKey') != script:
+                raise RetainedAuditPublicationError('Retained audit signer key is unavailable in this wallet; private answer retained')
+        return address
+
     def event(self, action, request=None, slot=None, attempt=None, body=None):
         owner = self.worker.address()
         if action == 'reveal':
@@ -58,20 +75,20 @@ class NetworkAudits:
             job = next((j for j in state.get('jobs', [])
                         if j.get('slot') == slot and j.get('attempt') == attempt), None)
             if not job or job.get('commitment') != hashlib.sha256(bytes.fromhex(body)).hexdigest():
-                raise RuntimeError('Retained audit no longer matches its canonical commitment; private answer retained')
+                raise RetainedAuditPublicationError('Retained audit no longer matches its canonical commitment; private answer retained')
             script = job.get('actor')
             if script is not None:
-                if (type(script) is not str or not script or len(script) > 8192
-                        or len(script) % 2 or bytes.fromhex(script).hex() != script):
-                    raise ValueError('Invalid canonical audit signer; private answer retained')
-                address = self.worker.rpc.call('decodescript', [script]).get('address')
-                if type(address) is not str or not address:
-                    raise RuntimeError('Canonical audit signer has no supported address; private answer retained')
-                if address != owner:
-                    info = self.worker.rpc.call('getaddressinfo', [address], wallet=True)
-                    if info.get('ismine') is not True or info.get('scriptPubKey') != script:
-                        raise RuntimeError('Retained audit signer key is unavailable in this wallet; private answer retained')
-                    owner = address
+                owner = self.retained_signer(script, owner)
+        elif action == 'reveal_report':
+            # Reports can outlive the selected mining address too. Their
+            # original commitment and owning script are chain facts; a current
+            # address is never authority to reveal somebody else's report.
+            reports = self.worker.rpc.call('getpgnreports', [0, 1, request])
+            if (not isinstance(reports, list) or len(reports) != 1
+                    or reports[0].get('request_id') != request
+                    or reports[0].get('report_root') != hashlib.sha256(bytes.fromhex(body)).hexdigest()):
+                raise RetainedAuditPublicationError('Retained owner report no longer matches its canonical commitment; private report retained')
+            owner = self.retained_signer(reports[0].get('miner_script'), owner)
         args = [action, owner, request, slot, attempt, body]
         proposal = self.worker.rpc.call("getpgnauditevent", args)
         if not proposal.get("available"):
@@ -257,7 +274,16 @@ class NetworkAudits:
             if job["state"] != "committed" or not state.get("details_root"):
                 keep.append(name)
                 continue
-            proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
+            try:
+                proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
+            except RetainedAuditPublicationError as error:
+                # Preserve this exact commitment and its waiting row. An
+                # unavailable historic key must not starve unrelated results
+                # in the same bounded publication page. Transport failures
+                # still propagate; no successful publication is fabricated.
+                self.answers.publication_issues += (dict(name=name, error_type=type(error).__name__, reason=str(error)),)
+                keep.append(name)
+                continue
             if not proposal.get("available"):
                 # The assignment can change between the initial read and send.
                 # An unavailable proposal is not a publication acknowledgement.
@@ -475,10 +501,7 @@ class NetworkAudits:
             save(journal, audit)
         if "target_merit_q16" not in audit:
             work = self.worker.rpc.call("getpgnscientificwork", [audit["request_id"], audit["report_root"]])
-            numerator, denominator = int(work["target_numerator"]), int(work["target_denominator"])
-            if denominator <= 0 or numerator <= 0 or numerator * 65536 % denominator:
-                raise ValueError("Invalid fixed-point audit target")
-            audit["target_merit_q16"] = numerator * 65536 // denominator
+            audit["target_merit_q16"] = encode_target_q16(work)
             save(journal, audit)
         if type(audit["target_merit_q16"]) is not int or not 0 < audit["target_merit_q16"] < 1 << 31:
             raise ValueError("Invalid retained audit target")

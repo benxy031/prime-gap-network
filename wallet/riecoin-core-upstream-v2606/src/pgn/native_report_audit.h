@@ -247,6 +247,13 @@ inline void ApplyNativeAuditEvent(NativeAuditLedger& ledger,const NativeAuditEve
         const auto& computed=body["computed"];RequireAudit(computed["schema"].get_str()=="PGN_HORIZON_COMPUTED_REPORT_V1"&&
             AuditInteger(computed["start"])==report.range.start&&AuditInteger(computed["end"])==report.range.start+report.range.length&&AuditInteger(computed["positions"])==report.range.length&&computed["ticket_id"].get_str()==HexStr(report.range.ticket_id),"Wrong report coverage");
         const auto& counts=computed["counts"].get_array();RequireAudit(counts.size()==100,"One hundred report counts required");std::array<uint64_t,100> values;Integer total{};for(size_t i=0;i<100;++i){values[i]=AuditCount(counts[i]);total+=values[i];}RequireAudit(total<=report.range.length/2+1,"Report counts exceed owned positions");
+        if(chain==*uint256::FromHex("710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314")){
+            for(size_t i=0;i<100;++i){
+                const Integer first=report.range.start+(report.range.length*i)/100;
+                const Integer end=report.range.start+(report.range.length*(i+1))/100;
+                RequireAudit(Integer{values[i]}<=end/2-first/2,"Report count exceeds owned partition positions");
+            }
+        }
         const auto& best=computed["best"].get_array();RequireAudit(best.size()<=100&&Integer{best.size()}<=total,"Too many detailed gaps");std::vector<SegmentResult> segments(100);for(uint32_t i=0;i<100;++i)segments[i].index=i;
         std::set<Integer> seen;
         for(const auto& item:best.getValues()){
@@ -254,6 +261,8 @@ inline void ApplyNativeAuditEvent(NativeAuditLedger& ledger,const NativeAuditEve
             RequireAudit(gap>0&&gap<=(int64_t{1}<<32)&&gap%2==0&&lower%2==1&&lower>=report.range.start&&lower<report.range.start+report.range.length&&upper==lower+gap&&seen.insert(lower).second,"Invalid larger-gap record");
             const auto index=(((lower-report.range.start+1)*100-1)/report.range.length).convert_to<size_t>();segments[index].records.push_back({lower,Integer{gap},0});
         }
+        if(chain==*uint256::FromHex("710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314"))for(size_t i=0;i<100;++i)
+            RequireAudit(segments[i].records.size()<=values[i],"Detailed gap records exceed their partition count");
         for(auto& segment:segments)std::sort(segment.records.begin(),segment.records.end(),[](const auto& a,const auto& b){return a.lower<b.lower;});
         const auto commitment=commitRange(report.range,segments,{100,65536,32,100},AuditSha);
         if(!report.owner_reveal.empty())RequireAudit(report.owner_reveal==text,"Report answers already revealed");
