@@ -182,6 +182,9 @@ class MiningFlow:
                 before_commit=lambda value, index=index: self.before_audit_commit(index, value))
             proxy.audit = audit
             self.audit_lanes.append(audit)
+        for publisher in self.audit_lanes:
+            publisher.worker.audit_publishers = tuple(self.audit_lanes)
+            publisher.worker.audit_group_journal = worker.root / 'audit-assignment-group.json'
         self.unbound_service_audits = set()
         self.unbound_service_completed = set()
         self.unbound_service_lock = threading.RLock()
