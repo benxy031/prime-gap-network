@@ -155,7 +155,7 @@ RPCMethod getpgnstate(){
   result.pushKV("bestblockhash",tip.GetBlockHash().GetHex());result.pushKV("median_time_past",tip.GetMedianTimePast());result.pushKV("phase",phase==NativeBootstrapPhaseVerdict::Bootstrap?"bootstrap":"scientific");
   result.pushKV("cap_atomic",std::to_string(money->cap));result.pushKV("minted_atomic",std::to_string(money->minted));result.pushKV("promised_atomic",std::to_string(money->promised));
   result.pushKV("near_miss_pool_atomic",std::to_string(money->pools->near_miss));result.pushKV("audit_pool_atomic",std::to_string(money->pools->audit));
-   result.pushKV("issuance_snapshot_version",money->audit_settlement?5:money->epochs?4:money->pools?3:money->partition?2:1);
+   result.pushKV("issuance_snapshot_version",money->audit_settlement?(money->audit_settlement->grouped?6:5):money->epochs?4:money->pools?3:money->partition?2:1);
    if(money->audit_settlement)result.pushKV("audit_paid_atomic",std::to_string(money->audit_settlement->total_paid));
    if(const auto activation=ConfiguredAuditSettlementActivation(manager.GetConsensus().hashGenesisBlock);activation&&activation->chain==manager.GetConsensus().hashGenesisBlock){
        result.pushKV("audit_activation_contract",activation->Id().GetHex());result.pushKV("audit_activation_height",activation->height);

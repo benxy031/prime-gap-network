@@ -232,7 +232,7 @@ inline VerifyDBResult VerifyNativeDatabase(Chainstate& chainstate,const Consensu
             const auto& policy=*money_policy.policy;
             IssuanceSnapshot initial{lowest->GetBlockHash(),PGN_MAX_SUPPLY_ATOMIC,0,0,
                 IssuanceBudgetPartition{policy.Id(),policy.Definition().ordinary_cap,0,0,0,0},OrdinaryRewardPools{0,0}};
-            if(policy.Audits()&&!policy.Activation()){initial.epochs=GoldEpochBalances{};initial.audit_settlement=AuditSettlementBalances{};}
+            if(policy.Audits()&&!policy.Activation()){initial.epochs=GoldEpochBalances{};initial.audit_settlement=AuditSettlementBalances{};initial.audit_settlement->grouped=policy.Audits()->grouped;}
             if(metadata.GetPgnIssuanceState()!=initial||metadata.GetPgnFactHead()!=std::optional{FactHead{policy.Chain(),lowest->GetBlockHash()}})
                 return held("native genesis initial issuance/head mismatch");
         }

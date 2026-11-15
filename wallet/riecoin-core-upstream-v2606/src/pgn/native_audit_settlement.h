@@ -49,8 +49,8 @@ inline bool IsAuditSettlementPage(const CScript& script){
     auto at=script.begin();opcodetype op;Bytes tag;
     return script.GetOp(at,op)&&op==OP_RETURN&&script.GetOp(at,op,tag)&&tag==Bytes{AuditSettlementPageTag.begin(),AuditSettlementPageTag.end()};
 }
-inline CScript AuditSettlementReceipt(const AuditSettlementActive& active,uint64_t first,uint64_t count){
-    detail::Writer out{{},EncodingLimits{1,256,32,128}};out.byte(1);out.byte(1);
+inline CScript AuditSettlementReceipt(const AuditSettlementActive& active,uint64_t first,uint64_t count,bool grouped=false){
+    detail::Writer out{{},EncodingLimits{1,256,32,128}};out.byte(1);out.byte(grouped?2:1);
     out.raw({active.cutoff.begin(),32});out.raw({active.root.begin(),32});
     for(const auto v:{active.golds,active.tasks,first,count,uint64_t(active.pot)})out.little(v,8);
     return CScript{}<<OP_RETURN<<Bytes{AuditSettlementPageTag.begin(),AuditSettlementPageTag.end()}<<out.data;
@@ -106,11 +106,86 @@ inline std::pair<uint64_t,uint256> AuditSettlementTaskCommitment(const NativeAud
     });
     return {tasks,hash.GetHash()};
 }
+// Grouped settlement preserves every original task's atomic rounding. Only
+// the output representation changes. Caller authenticates the complete ledger.
+struct GroupedAuditEntitlements {uint64_t tasks{};uint256 root;std::vector<CTxOut> recipients;};
+inline GroupedAuditEntitlements GroupAuditEntitlements(const NativeAuditLedger& ledger,int32_t after,int32_t cutoff,CAmount pot){
+    const auto [tasks,task_root]=AuditSettlementTaskCommitment(ledger,after,cutoff);
+    RequireAudit(pot>=0&&pot<=PGN_MAX_SUPPLY_ATOMIC,"Invalid grouped pot");
+    std::map<CScript,CAmount> sums;uint64_t ordinal{};CAmount total{};
+    VisitAuditSettlementTasks(ledger,after,cutoff,[&](const uint256&,const uint256&,uint8_t,const NativeAuditJob& job){
+        const auto amount=QuoteAuditPotRange(pot,tasks,ordinal++,1);
+        RequireAudit(amount.has_value(),"Invalid grouped task amount");
+        auto& sum=sums[job.actor];RequireAudit(*amount<=pot-sum&&*amount<=pot-total,"Grouped amount overflow");
+        sum+=*amount;total+=*amount;
+    });
+    RequireAudit(ordinal==tasks&&(!tasks||total==pot),"Grouped entitlement conservation failed");
+    GroupedAuditEntitlements result;result.tasks=tasks;
+    HashWriter hash{TaggedHash("PGN/AUDIT-SETTLEMENT/RECIPIENTS/2")};hash<<after<<cutoff<<tasks<<task_root<<pot<<uint64_t(sums.size());
+    result.recipients.reserve(sums.size());
+    for(const auto& [script,amount]:sums){hash<<script<<amount;result.recipients.emplace_back(amount,script);}
+    result.root=hash.GetHash();return result;
+}
+template<class LoadLedger>
+inline std::optional<AuditSettlementPage> ApplyGroupedAuditSettlementPageLazy(
+    LoadLedger&& load_ledger,const GoldEpochDefinition& definition,uint16_t maximum_outputs,
+    uint64_t cutoff_golds,int32_t cutoff_height,const uint256& cutoff,IssuanceSnapshot& after){
+    if(!maximum_outputs||maximum_outputs>128||!GoldEpochDefinitionValid(definition)||!after.Valid()||
+       !after.audit_settlement||!after.audit_settlement->grouped||!after.epochs||!after.partition||!after.pools)return {};
+    auto next=after;auto& state=*next.audit_settlement;
+    if(state.completed_golds%definition.audit_period||state.completed_golds>next.epochs->golds||state.completed_height>next.epochs->last_gold_height)return {};
+    if(state.active&&(state.active->golds%definition.audit_period||state.active->golds>next.epochs->golds||state.active->height>next.epochs->last_gold_height))return {};
+    const auto accrued=QuoteCumulativeAuditAccrual(definition,next.epochs->golds);
+    if(!accrued||state.total_paid>*accrued||next.pools->audit!=*accrued-state.total_paid)return {};
+    AuditSettlementPage page;
+    if(!state.active&&cutoff_golds<=state.completed_golds)return page;
+    const auto ledger=load_ledger();if(!ledger)return {};
+    CAmount pot{};
+    if(state.active)pot=state.active->pot;
+    else{
+        if(cutoff_golds>next.epochs->golds||cutoff_golds%definition.audit_period||cutoff_height<=state.completed_height||cutoff.IsNull())return {};
+        const auto reserved=QuoteCumulativeAuditAccrual(definition,cutoff_golds);
+        if(!reserved||*reserved<state.total_paid||*reserved-state.total_paid>next.pools->audit)return {};
+        pot=*reserved-state.total_paid;
+    }
+    const auto book=GroupAuditEntitlements(*ledger,state.completed_height,state.active?state.active->height:cutoff_height,pot);
+    if(!state.active){
+        if(!book.tasks){state.completed_golds=cutoff_golds;state.completed_height=cutoff_height;after=next;return page;}
+        state.active=AuditSettlementActive{cutoff_golds,uint64_t(book.recipients.size()),0,cutoff_height,cutoff,book.root,pot,pot};
+    }
+    auto& active=*state.active;
+    if(book.root!=active.root||book.recipients.size()!=active.tasks||active.next>=active.tasks)return {};
+    CAmount remaining{};
+    for(size_t i=active.next;i<book.recipients.size();++i){
+        const auto value=book.recipients[i].nValue;if(value<0||value>active.pot-remaining)return {};remaining+=value;
+    }
+    if(remaining!=active.grouped_remaining)return {};
+    page.first=active.next;page.count=std::min<uint64_t>(maximum_outputs,active.tasks-active.next);
+    for(uint64_t i=page.first;i<page.first+page.count;++i){
+        const auto& output=book.recipients[i];if(output.nValue>active.pot-page.paid)return {};
+        page.paid+=output.nValue;if(output.nValue)page.outputs.push_back(output);
+    }
+    page.receipt=AuditSettlementReceipt(active,page.first,page.count,true);
+    const auto total=IssuanceBudgetState::Create(next.cap,next.minted,next.promised);
+    const auto ordinary=IssuanceBudgetState::Create(next.partition->ordinary_cap,next.partition->ordinary_minted,next.partition->ordinary_promised);
+    if(!total||!ordinary)return {};
+    const auto minted=total->MintReserved(page.paid),minted_ordinary=ordinary->MintReserved(page.paid);
+    if(!minted||!minted_ordinary||page.paid>next.pools->audit||page.paid>active.grouped_remaining)return {};
+    next.minted=minted->CumulativeMinted();next.promised=minted->Promised();
+    next.partition->ordinary_minted=minted_ordinary->CumulativeMinted();next.partition->ordinary_promised=minted_ordinary->Promised();
+    next.pools->audit-=page.paid;state.total_paid+=page.paid;active.grouped_remaining-=page.paid;active.next+=page.count;
+    if(active.next==active.tasks){if(active.grouped_remaining)return {};state.completed_golds=active.golds;state.completed_height=active.height;state.active.reset();}
+    if(!next.Valid())return {};after=std::move(next);return page;
+}
+
 // Financial kernel exercised separately from authentication. No mint authority.
 template<class LoadLedger>
 inline std::optional<AuditSettlementPage> ApplyAuditSettlementPageLazy(
     LoadLedger&& load_ledger,const GoldEpochDefinition& definition,uint16_t maximum_outputs,
     uint64_t cutoff_golds,int32_t cutoff_height,const uint256& cutoff,IssuanceSnapshot& after){
+    if(after.audit_settlement&&after.audit_settlement->grouped)
+        return ApplyGroupedAuditSettlementPageLazy(std::forward<LoadLedger>(load_ledger),definition,maximum_outputs,
+            cutoff_golds,cutoff_height,cutoff,after);
     if(!maximum_outputs||maximum_outputs>128||!GoldEpochDefinitionValid(definition)||!after.Valid()||!after.audit_settlement||!after.epochs||!after.partition||!after.pools)return {};
     auto next=after;auto& state=*next.audit_settlement;
     if(state.completed_golds%definition.audit_period||state.completed_golds>next.epochs->golds||state.completed_height>next.epochs->last_gold_height)return {};
@@ -175,7 +250,13 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
         // only after its exact no-value migration has committed atomically.
         AuditSettlementPage page;page.activation=AuditSettlementActivationReceipt(*policy.Activation());return page;
     }
-    if(!before->epochs)return {};
+    if(!before->epochs||!after.audit_settlement)return {};
+    auto pending=after;
+    if(policy.Audits()->grouped!=pending.audit_settlement->grouped){
+        if(!policy.Audits()->grouped||pending.audit_settlement->grouped||before->audit_settlement->active||
+           !AuditGroupingScheduled(policy.Chain(),int64_t(parent.nHeight)+1))return {};
+        pending.audit_settlement->grouped=true;
+    }
     if(const auto& active=before->audit_settlement->active;active){
         const auto* anchor=parent.GetAncestor(active->height);
         if(!anchor||anchor->GetBlockHash()!=active->cutoff)return {};
@@ -193,9 +274,10 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
         }
         if(!cutoff_height)return {};
     }
-    return ApplyAuditSettlementPageLazy([&]{return ReadNativeAuditLedger(view,parent,
+    const auto page=ApplyAuditSettlementPageLazy([&]{return ReadNativeAuditLedger(view,parent,
         context->history,context->policy,context->schedule,context->signature);},
-        *policy.Epochs(),policy.Audits()->page_outputs,cutoff_golds,cutoff_height,cutoff,after);
+        *policy.Epochs(),policy.Audits()->page_outputs,cutoff_golds,cutoff_height,cutoff,pending);
+    if(page)after=std::move(pending);return page;
 }
 struct NativeAuditCoordinationPlan {IssuanceHistoryStep forward;AuditSettlementPage page;};
 // Settlement consumes already-promised audit reserves. It grants neither a Gold
