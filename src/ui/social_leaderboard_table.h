@@ -69,7 +69,7 @@ protected:
         if(!r.isValid())return;p->save();p->fillRect(r,col==hovered_&&col<6?QColor("#d6e6df"):QColor("#e2ece6"));
         p->setPen(QColor("#bfd2c8"));p->drawLine(r.bottomLeft(),r.bottomRight());
         QFont font("Segoe UI");font.setPixelSize(11);font.setWeight(QFont::DemiBold);p->setFont(font);p->setPen(QColor("#46666e"));
-        if(col>=6){const auto icon=qvariant_cast<QIcon>(model()->headerData(col,orientation(),Qt::DecorationRole));icon.paint(p,QRect(r.center().x()-12,r.top()+25,24,28));}
+        if(col>=6){const auto icon=qvariant_cast<QIcon>(model()->headerData(col,orientation(),Qt::DecorationRole));const int x=r.center().x()-19;icon.paint(p,QRect(x,r.top()+25,24,28));font.setPixelSize(12);font.setWeight(QFont::Bold);p->setFont(font);p->setPen(QColor("#244951"));p->drawText(QRect(x+25,r.top()+27,13,23),Qt::AlignCenter,QString("QGSBR").mid(col-6,1));}
         else{
             const QStringList captions{"Miner","Positions","Reported","Validated","Audits","Last activity"};
             const QStringList groups{"","VALIDATED","","","VALIDATED","BLOCK HEIGHT"};
