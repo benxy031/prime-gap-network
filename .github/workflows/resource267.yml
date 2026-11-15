@@ -1,0 +1,55 @@
+name: Stable Qt resource identity
+on:
+  push:
+    branches: [qualification/resource267]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+      - name: Prepare Python
+        shell: pwsh
+        run: python -m venv .ci-python
+      - name: Exercise exact production CMake command
+        run: |
+          .ci-python/Scripts/python.exe tests/test_rcc_reproducible.py --rcc "$MINGW_PREFIX/share/qt6/bin/rcc.exe" --cmake "$MINGW_PREFIX/bin/cmake.exe" --output RCC267-WINDOWS.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rcc267-windows
+          path: RCC267-WINDOWS.json
+          if-no-files-found: error
+  ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Qt tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends qt6-base-dev-tools cmake ninja-build
+      - name: Exercise exact production CMake command
+        run: python3 tests/test_rcc_reproducible.py --rcc /usr/lib/qt6/libexec/rcc --cmake /usr/bin/cmake --output RCC267-UBUNTU.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rcc267-ubuntu
+          path: RCC267-UBUNTU.json
+          if-no-files-found: error

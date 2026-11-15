@@ -687,7 +687,8 @@ if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/audit3d/four-audit-entit
  set(_pgn_audit_bundle "${CMAKE_CURRENT_BINARY_DIR}/audit-artifacts/audit-animation.rcc")
  add_custom_command(OUTPUT "${_pgn_audit_bundle}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/audit-artifacts"
-  COMMAND Qt6::rcc --binary --no-compress -o "${_pgn_audit_bundle}" "${CMAKE_CURRENT_SOURCE_DIR}/assets/audit-animation.qrc"
+  # Resource mtimes are not runtime data; keep identical assets byte-identical.
+  COMMAND "${CMAKE_COMMAND}" -E env SOURCE_DATE_EPOCH=1 QT_RCC_SOURCE_DATE_OVERRIDE=1 $<TARGET_FILE:Qt6::rcc> --binary --no-compress -o "${_pgn_audit_bundle}" "${CMAKE_CURRENT_SOURCE_DIR}/assets/audit-animation.qrc"
   DEPENDS ${_pgn_audit_inputs} VERBATIM)
  add_custom_target(pgn-audit-assets DEPENDS "${_pgn_audit_bundle}")
 endif()
