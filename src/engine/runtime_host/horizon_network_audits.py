@@ -119,6 +119,60 @@ class NetworkAudits:
                 if stopping is not None and stopping.is_set() or running is not None and not running.is_set():
                     raise
 
+    def apply_reveals(self, ready):
+        """Publish independent ready answers under one exact parent.
+
+        Every answer already has a durable seal/catalogue entry. The existing
+        ledger journal retains the exact candidate across ambiguous sends.
+        Nothing is acknowledged here; canonical terminal observation does that.
+        """
+        if len(ready) > 64 or len({name for name, _ in ready}) != len(ready):
+            raise ValueError('Reveal batch exceeds the durable selected page')
+        for retry in range(2):
+            results = {}
+            envelopes = []
+            byte_count = 0
+            try:
+                with self.worker.network_lock:
+                    for name, audit in ready:
+                        stopping = getattr(self.worker, 'quitting', None)
+                        if stopping is not None and stopping.is_set():
+                            return {}
+                        try:
+                            proposal = self.event('reveal', audit['request_id'], audit['slot'],
+                                                  audit['attempt'], canonical_bytes(audit['answer']['body']).hex())
+                        except RetainedAuditPublicationError as error:
+                            results[name] = error
+                            continue
+                        if not proposal.get('available'):
+                            results[name] = proposal
+                            continue
+                        envelope = proposal['envelope']
+                        if not isinstance(envelope, str) or len(envelope) % 2:
+                            raise ValueError('Core returned an invalid signed reveal')
+                        size = len(envelope) // 2
+                        # Leave larger payloads on the ordinary exact single
+                        # publication path rather than creating oversized blocks.
+                        if byte_count + size > 262144:
+                            continue
+                        bytes.fromhex(envelope)
+                        byte_count += size
+                        envelopes.append(envelope)
+                        results[name] = proposal
+                    if envelopes:
+                        receipt = self.worker.ledger(envelopes)
+                        block = receipt.get('block_hash') if isinstance(receipt, dict) else None
+                        if not isinstance(block, str) or len(block) != 64 or block == '0' * 64 or any(c not in '0123456789abcdef' for c in block):
+                            raise RuntimeError('Reveal batch has no canonical block receipt; sealed answers retained')
+                        for name, proposal in list(results.items()):
+                            if isinstance(proposal, dict) and proposal.get('available'):
+                                results[name] = dict(proposal, confirmed_block=receipt['block_hash'])
+                    return results
+            except CoordinationParentChanged:
+                if retry:
+                    raise
+        raise RuntimeError('Unreachable reveal batch retry state')
+
     def state(self, request):
         values = self.worker.rpc.call("getpgnauditstate", [0, 1, request])
         return values[0] if values else {}
@@ -207,7 +261,7 @@ class NetworkAudits:
                         and states.current(self.worker.rpc))
         # Only the final ACK needs this exact atomic projection. The ordinary
         # batched progress read stays cheap. Before/after tip equality alone
-        # cannot exclude an A→B→A branch race during that read.
+        # cannot exclude an AÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢BÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢A branch race during that read.
         view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, audit["request_id"]])
         state = view.get("state", {})
         rows = view.get("audits", [])
@@ -253,6 +307,17 @@ class NetworkAudits:
             return
         if isinstance(states, AnchoredAuditStates):
             anchor = states.anchor
+        batched = {}
+        if getattr(self.worker, 'batch_audit_reveals', False):
+            ready = []
+            for name, audit in saved:
+                state = states.get(audit['request_id'], {})
+                job = next((j for j in state.get('jobs', [])
+                            if j['slot'] == audit['slot'] and j['attempt'] == audit['attempt']), None)
+                if job and job['state'] == 'committed' and state.get('details_root'):
+                    ready.append((name, audit))
+            if len(ready) > 1:
+                batched = self.apply_reveals(ready)
         keep = []
         for name, audit in saved:
             stopping = getattr(self.worker, 'quitting', None)
@@ -275,7 +340,11 @@ class NetworkAudits:
                 keep.append(name)
                 continue
             try:
-                proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
+                proposal = batched.get(name)
+                if isinstance(proposal, RetainedAuditPublicationError):
+                    raise proposal
+                if proposal is None:
+                    proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
             except RetainedAuditPublicationError as error:
                 # Preserve this exact commitment and its waiting row. An
                 # unavailable historic key must not starve unrelated results

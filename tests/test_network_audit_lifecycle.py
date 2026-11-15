@@ -20,7 +20,7 @@ class Rpc:
    return dict(available=True,challenge='fixture',envelope=action,request_id='11'*32,slot=0,attempt=0,ranges=ranges)
   if method=='getpgnreports':return [dict(ticket='22'*32,report_root='33'*32)]
   if method=='getpgnscientificwork':return dict(target_numerator='32',target_denominator='1')
-  if method=='getpgnauditstate':return [dict(request_id='11'*32,jobs=[dict(slot=0,attempt=0,state=self.stage)],**({'details_root':'44'*32}if self.disclosed else{}))]
+  if method=='getpgnauditstate':return [dict(request_id='11'*32,jobs=[dict(slot=0,attempt=0,state=self.stage,commitment=self.committed)],**({'details_root':'44'*32}if self.disclosed else{}))]
   raise AssertionError(method)
 class Source:
  def __init__(self):self.jobs=[]
