@@ -1,0 +1,451 @@
+name: UI157 affected source qualification and UI-only runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/horizon-ui157-20261115]
+permissions:
+  contents: read
+concurrency:
+  group: ui157-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    name: UCRT64 GUI and affected tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: c724d01665dc264aa63ae522530645e9f12f76d3
+
+      - name: Install the UCRT64 build dependencies
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Install pinned updater test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          if ($LASTEXITCODE -ne 0) { throw "Python test environment creation failed" }
+          & ./.ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned updater test dependencies failed" }
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': 'c724d01665dc264aa63ae522530645e9f12f76d3', 'tree': '1670e6dee87a94c88874293a675b867838e8fe40', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f71211b3d17189dbf6344ecaa244a95e236fd891b90c0a188dea8b56d145d69d'}, {'path': 'src/app/main.cpp', 'patched_sha256': '24c0353bf244578733431f08665ed2bae48feea655a569763db28523e23b6610'}, {'path': 'src/engine/runtime_host/horizon_engine_host.py', 'patched_sha256': '6e3bc4431da26421ff31ce40325443e2d42ab3fe090077bc394561fc15dfac7c'}, {'path': 'src/engine/runtime_host/horizon_mining_flow.py', 'patched_sha256': 'e73f2dbfc1ca7798d9b5858ad4874e5106dcd79c0043c2affa68330059e111cf'}, {'path': 'src/engine/runtime_host/horizon_service_presentation.py', 'patched_sha256': 'aa768305165d9d1533e7ae8e00869a524ce2aa4ce83eea2f96424d1894c6214e'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'e5ee28cd50580c5be1ee94c1c69303456ad43f6f431d9064c266afead3ab6f3a'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/mining_cycle_progress.h', 'patched_sha256': '3ebf36924d0b92dd346b9ef686be22416c6e226f653dd72a86992d4a38f530b9'}, {'path': 'src/ui/mining_ticket_progress.cpp', 'patched_sha256': 'a7a46c0dfed078b7f953003631f276db07c852c7d08acf4b8d39c5fec3b3f9c5'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_chat_style.h', 'patched_sha256': 'dc545777b18738003de668ae0f0b99ef28ac2e2c26e61068676df5eaf4d98695'}, {'path': 'src/ui/social_compose_edit.h', 'patched_sha256': '6cd6f4964184299830732cd79447e7c68acecf6802062726f625d64db4c65b9b'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '9835f31bbfdd652f842e309e823a709eaa64c0ed77ce17f283c28b86ac84d79e'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': 'b173374f5fc0aa75153ef139dd18378903ceddae932e50e15958ddda50123bdb'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'aa229e1edffa73b6c3872026a7faececeb8811bd228ec8cf24d1f39748aa0ce0'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '0e8028f8f140ef2e81ed93339dd3e101e49fafbf7a662f7d4ef290c226cab762'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/mining_preparation_progress_test.cpp', 'patched_sha256': '76329c1f91879c22597731d0b1674448b7675d5ab1ee53664691e91a24bf2016'}, {'path': 'tests/social_chat_checks.h', 'patched_sha256': 'b48b3e25062362e9be7503aee26dfaf07a5e77806dd7e8e6a632802366281c5b'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': 'cda20d7cd9dfcf64aa73e89948719b61ddf67e9fc518e19c29183d2347dcc9be'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '201ecb45f77296940b366723a2ed9566820f37e20b64ef086afa3a8c13ef6825'}, {'path': 'tests/test_audit_service_presentation.py', 'patched_sha256': 'c38ab10fb6c04a44912a05f250e39eb22e9d60f5b1d15b5c3d048cb2fc555243'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/build_audit_batch233_host.py', 'patched_sha256': '0bca5f712ab27cad6a14c60ca726bc9369565aef67b93218134ab7591e3dc507'}, {'path': 'tools/component_versions.json', 'patched_sha256': '70d80e14772d451f48416fe7b61cc0e25638045a8eb53dada346d364e48890d8'}]}
+          git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          sdk=Path(os.environ['PGN_UI_SDK'])
+          for tool in ['g++.exe','ninja.exe','objdump.exe','windeployqt.exe']:
+              assert (sdk/'bin'/tool).is_file(),tool
+          qmake=next(p for p in [sdk/'bin/qmake6.exe',sdk/'bin/qmake.exe']if p.is_file())
+          assert subprocess.check_output([str(qmake),'-query','QT_VERSION'],text=True).startswith('6.')
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure a clean Release tree
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+
+      - name: Build GUI and affected targets
+        id: ui_build
+        run: |
+          pgn_build_jobs="$(nproc)"
+          if [ "$pgn_build_jobs" -gt 4 ]; then pgn_build_jobs=4; fi
+          printf 'Build workers: %s\n' "$pgn_build_jobs"
+          cmake --build build-ci --parallel "$pgn_build_jobs" --target PGN-Horizon pgn-social-view-test pgn-social-core-adapter-test pgn-mining-preparation-progress-test
+
+      - name: Collect exact UI157 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_UI_COLLECTOR'
+          """Collect only the compiled UI, matching Qt runtime and native DLL closure."""
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          
+          ROOT=Path(__file__).resolve().parent
+          SDK=Path(os.environ['PGN_UI_SDK'])
+          BUILD=ROOT/'build-ci'
+          SOURCE=ROOT
+          STAGE=ROOT/'ui-stage'
+          sha=lambda path:hashlib.file_digest(path.open('rb'),'sha256').hexdigest()
+          
+          def main():
+              assert shutil.disk_usage(ROOT).free>2*1024**3,'Insufficient disk reserve before collection'
+              frozen={'source': 'c724d01665dc264aa63ae522530645e9f12f76d3', 'tree': '1670e6dee87a94c88874293a675b867838e8fe40', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f71211b3d17189dbf6344ecaa244a95e236fd891b90c0a188dea8b56d145d69d'}, {'path': 'src/app/main.cpp', 'patched_sha256': '24c0353bf244578733431f08665ed2bae48feea655a569763db28523e23b6610'}, {'path': 'src/engine/runtime_host/horizon_engine_host.py', 'patched_sha256': '6e3bc4431da26421ff31ce40325443e2d42ab3fe090077bc394561fc15dfac7c'}, {'path': 'src/engine/runtime_host/horizon_mining_flow.py', 'patched_sha256': 'e73f2dbfc1ca7798d9b5858ad4874e5106dcd79c0043c2affa68330059e111cf'}, {'path': 'src/engine/runtime_host/horizon_service_presentation.py', 'patched_sha256': 'aa768305165d9d1533e7ae8e00869a524ce2aa4ce83eea2f96424d1894c6214e'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'e5ee28cd50580c5be1ee94c1c69303456ad43f6f431d9064c266afead3ab6f3a'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/mining_cycle_progress.h', 'patched_sha256': '3ebf36924d0b92dd346b9ef686be22416c6e226f653dd72a86992d4a38f530b9'}, {'path': 'src/ui/mining_ticket_progress.cpp', 'patched_sha256': 'a7a46c0dfed078b7f953003631f276db07c852c7d08acf4b8d39c5fec3b3f9c5'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_chat_style.h', 'patched_sha256': 'dc545777b18738003de668ae0f0b99ef28ac2e2c26e61068676df5eaf4d98695'}, {'path': 'src/ui/social_compose_edit.h', 'patched_sha256': '6cd6f4964184299830732cd79447e7c68acecf6802062726f625d64db4c65b9b'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '9835f31bbfdd652f842e309e823a709eaa64c0ed77ce17f283c28b86ac84d79e'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': 'b173374f5fc0aa75153ef139dd18378903ceddae932e50e15958ddda50123bdb'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'aa229e1edffa73b6c3872026a7faececeb8811bd228ec8cf24d1f39748aa0ce0'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '0e8028f8f140ef2e81ed93339dd3e101e49fafbf7a662f7d4ef290c226cab762'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/mining_preparation_progress_test.cpp', 'patched_sha256': '76329c1f91879c22597731d0b1674448b7675d5ab1ee53664691e91a24bf2016'}, {'path': 'tests/social_chat_checks.h', 'patched_sha256': 'b48b3e25062362e9be7503aee26dfaf07a5e77806dd7e8e6a632802366281c5b'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': 'cda20d7cd9dfcf64aa73e89948719b61ddf67e9fc518e19c29183d2347dcc9be'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '201ecb45f77296940b366723a2ed9566820f37e20b64ef086afa3a8c13ef6825'}, {'path': 'tests/test_audit_service_presentation.py', 'patched_sha256': 'c38ab10fb6c04a44912a05f250e39eb22e9d60f5b1d15b5c3d048cb2fc555243'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/build_audit_batch233_host.py', 'patched_sha256': '0bca5f712ab27cad6a14c60ca726bc9369565aef67b93218134ab7591e3dc507'}, {'path': 'tools/component_versions.json', 'patched_sha256': '70d80e14772d451f48416fe7b61cc0e25638045a8eb53dada346d364e48890d8'}]}
+              git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+              assert Path(git).is_file(), 'Verified Git executable required'
+              assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==frozen['source']
+              for row in frozen['verified_files']:
+                  assert sha(SOURCE/row['path'])==row['patched_sha256'],row['path']
+              STAGE.mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'PGN-Horizon.exe',STAGE/'PGN-Horizon.exe')
+              shutil.copy2(BUILD/'WebView2Loader.dll',STAGE/'WebView2Loader.dll')
+              # This plugin is an explicit dependency of the real application target;
+              # static import scanning alone does not discover Qt's SQL driver loading.
+              (STAGE/'sqldrivers').mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'sqldrivers/qsqlite.dll',STAGE/'sqldrivers/qsqlite.dll')
+              (STAGE/'assets').mkdir(exist_ok=True)
+              resource=BUILD/'assets/audit-animation.rcc';target=STAGE/'assets/audit-animation.rcc'
+              if not target.exists():
+                  # Both aliases are immutable outputs owned by this bounded build.
+                  # Share the 79 MB resource without aliasing any SDK or user file.
+                  try:os.link(resource,target)
+                  except OSError:shutil.copy2(resource,target)
+              else:assert sha(resource)==sha(target),'Staged audit resource changed'
+              environment=dict(os.environ,PATH=str(SDK/'bin')+';'+os.environ['PATH'])
+              command=[str(SDK/'bin/windeployqt.exe'),'--release','--no-translations',
+                       '--compiler-runtime',str(STAGE/'PGN-Horizon.exe')]
+              with (ROOT/'windeployqt.log').open('w',encoding='utf-8')as output:
+                  subprocess.run(command,env=environment,stdout=output,stderr=subprocess.STDOUT,check=True)
+              sdk_names={p.name.casefold():p for p in (SDK/'bin').glob('*.dll')}
+              system=Path(os.environ['SystemRoot'])/'System32'
+              visited=set();imports={};copied={};unresolved=[]
+              while True:
+                  pending=[p for p in STAGE.rglob('*')if p.suffix.lower()in ('.exe','.dll')and p not in visited]
+                  if not pending:break
+                  for image in pending:
+                      visited.add(image)
+                      detail=subprocess.check_output([str(SDK/'bin/objdump.exe'),'-p',str(image)],env=environment,text=True,errors='replace')
+                      names=re.findall(r'^\s*DLL Name:\s*(\S+)\s*$',detail,re.M)
+                      imports[image.relative_to(STAGE).as_posix()]=names
+                      for name in names:
+                          key=name.casefold()
+                          local={p.name.casefold()for folder in (STAGE,image.parent)for p in folder.glob('*.dll')}
+                          if key in local:continue
+                          if key in sdk_names:
+                              origin=sdk_names[key];shutil.copy2(origin,STAGE/origin.name);copied[origin.name]=str(origin)
+                          elif (system/name).is_file()or key.startswith(('api-ms-win-','ext-ms-win-')):continue
+                          else:unresolved.append(dict(image=str(image.relative_to(STAGE)),dependency=name))
+              if unresolved:raise RuntimeError('Unresolved native imports: '+json.dumps(unresolved))
+              assert not(STAGE/'Core').exists()and not(STAGE/'EngineRuntime').exists(),'UI-only artifact required'
+              binaries=[]
+              for path in sorted(STAGE.rglob('*')):
+                  if not path.is_file():continue
+                  relative=path.relative_to(STAGE).as_posix();origin=None
+                  for candidate in (SDK/'bin'/path.name,SDK/'share/qt6/plugins'/relative):
+                      if candidate.is_file()and sha(candidate)==sha(path):origin=str(candidate);break
+                  binaries.append(dict(path=relative,bytes=path.stat().st_size,sha256=sha(path),sdk_origin=origin))
+              inputs=set()
+              process=subprocess.Popen([str(SDK/'bin/ninja.exe'),'-t','deps'],cwd=BUILD,
+                                       env=environment,stdout=subprocess.PIPE,text=True,errors='replace')
+              for line in process.stdout:
+                  if not line.startswith('    '):continue
+                  name=line.strip().replace('\\','/')
+                  dependency=Path(name)
+                  if not dependency.is_absolute():dependency=(BUILD/dependency).resolve()
+                  if dependency.is_relative_to(SOURCE):
+                      relative=dependency.relative_to(SOURCE).as_posix()
+                      if (SOURCE/relative).is_file():inputs.add(relative)
+              if process.wait()!=0:raise RuntimeError('Cannot read observed compilation dependencies')
+              inputs.update(['CMakeLists.txt','tools/component_versions.json','assets/pgn.qrc','assets/audit-animation.qrc'])
+              observed=[dict(path=name,bytes=(SOURCE/name).stat().st_size,sha256=sha(SOURCE/name))for name in sorted(inputs)]
+              result=dict(schema='PGN_WINDOWS_UI_BUILD_V1',source=frozen['source'],
+                          qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),
+                          source_tree=frozen['tree'],
+                          base_product_commit='1ea788c04d55f0bb06810ac8ff8c5961e0f0872d',
+                          ui_version='2026.11.15.157',target='PGN-Horizon',compiler=subprocess.check_output([str(SDK/'bin/g++.exe'),'--version'],text=True).splitlines()[0],qt_version=subprocess.check_output([str(next(p for p in (SDK/'bin/qmake6.exe',SDK/'bin/qmake.exe')if p.is_file())),'-query','QT_VERSION'],text=True).strip(),
+                          flags=next(line for line in (BUILD/'CMakeCache.txt').read_text().splitlines()if line.startswith('CMAKE_CXX_FLAGS_RELEASE:')),parallelism=min(os.cpu_count()or 1,4),
+                          observed_compilation_scope='GUI and affected Social/Mining tests; unchanged native arithmetic inherits full UI156 qualification 43715553665',
+                          sources=observed,files=binaries,imports=imports,extra_sdk_copies=copied,
+                          unresolved_native_imports=unresolved,stage=str(STAGE),
+                          live_processes_launched=False,network_requested=False,core_built=False,gpu_host_built=False,
+                          disk_free_bytes=shutil.disk_usage(ROOT).free)
+              (ROOT/'WINDOWS-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
+              assert shutil.disk_usage(ROOT).free>=1.5*1024**3,'Disk reserve breached'
+              print(json.dumps(dict(PASS=True,stage=str(STAGE),files=len(binaries),sources=len(observed),
+                                   executable_sha256=sha(STAGE/'PGN-Horizon.exe'),bytes=sum(x['bytes']for x in binaries))))
+          
+          if __name__=='__main__':main()
+          
+          PGN_UI_COLLECTOR
+      - name: Run the isolated registered tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R '^(social-view|social-core-adapter-protocol|mining-preparation-progress|audit-service-presentation)$'
+
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/Scripts/python.exe -I tests/test_late_cycle_completion.py
+          .ci-python/Scripts/python.exe -I tests/test_audit_reveal_batch.py
+          .ci-python/Scripts/python.exe -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual affected-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/Scripts/python.exe - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('WINDOWS-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['affected_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success';v['qualification']['full_suite_pass']=False;v['qualification']['unchanged_base_full_suite_run']=43715553665
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui157-windows.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui157-windows-${{ github.run_id }}
+          path: ui157-windows.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: c724d01665dc264aa63ae522530645e9f12f76d3
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv xvfb xauth
+      - name: Install pinned updater test dependencies
+        run: |
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Record the actual toolchain
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          dpkg-query -W qt6-base-dev libgmp-dev libsqlite3-dev
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          .ci-python/bin/python - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': 'c724d01665dc264aa63ae522530645e9f12f76d3', 'tree': '1670e6dee87a94c88874293a675b867838e8fe40', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f71211b3d17189dbf6344ecaa244a95e236fd891b90c0a188dea8b56d145d69d'}, {'path': 'src/app/main.cpp', 'patched_sha256': '24c0353bf244578733431f08665ed2bae48feea655a569763db28523e23b6610'}, {'path': 'src/engine/runtime_host/horizon_engine_host.py', 'patched_sha256': '6e3bc4431da26421ff31ce40325443e2d42ab3fe090077bc394561fc15dfac7c'}, {'path': 'src/engine/runtime_host/horizon_mining_flow.py', 'patched_sha256': 'e73f2dbfc1ca7798d9b5858ad4874e5106dcd79c0043c2affa68330059e111cf'}, {'path': 'src/engine/runtime_host/horizon_service_presentation.py', 'patched_sha256': 'aa768305165d9d1533e7ae8e00869a524ce2aa4ce83eea2f96424d1894c6214e'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'e5ee28cd50580c5be1ee94c1c69303456ad43f6f431d9064c266afead3ab6f3a'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/mining_cycle_progress.h', 'patched_sha256': '3ebf36924d0b92dd346b9ef686be22416c6e226f653dd72a86992d4a38f530b9'}, {'path': 'src/ui/mining_ticket_progress.cpp', 'patched_sha256': 'a7a46c0dfed078b7f953003631f276db07c852c7d08acf4b8d39c5fec3b3f9c5'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_chat_style.h', 'patched_sha256': 'dc545777b18738003de668ae0f0b99ef28ac2e2c26e61068676df5eaf4d98695'}, {'path': 'src/ui/social_compose_edit.h', 'patched_sha256': '6cd6f4964184299830732cd79447e7c68acecf6802062726f625d64db4c65b9b'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '9835f31bbfdd652f842e309e823a709eaa64c0ed77ce17f283c28b86ac84d79e'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': 'b173374f5fc0aa75153ef139dd18378903ceddae932e50e15958ddda50123bdb'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'aa229e1edffa73b6c3872026a7faececeb8811bd228ec8cf24d1f39748aa0ce0'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '0e8028f8f140ef2e81ed93339dd3e101e49fafbf7a662f7d4ef290c226cab762'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/mining_preparation_progress_test.cpp', 'patched_sha256': '76329c1f91879c22597731d0b1674448b7675d5ab1ee53664691e91a24bf2016'}, {'path': 'tests/social_chat_checks.h', 'patched_sha256': 'b48b3e25062362e9be7503aee26dfaf07a5e77806dd7e8e6a632802366281c5b'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': 'cda20d7cd9dfcf64aa73e89948719b61ddf67e9fc518e19c29183d2347dcc9be'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '201ecb45f77296940b366723a2ed9566820f37e20b64ef086afa3a8c13ef6825'}, {'path': 'tests/test_audit_service_presentation.py', 'patched_sha256': 'c38ab10fb6c04a44912a05f250e39eb22e9d60f5b1d15b5c3d048cb2fc555243'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/build_audit_batch233_host.py', 'patched_sha256': '0bca5f712ab27cad6a14c60ca726bc9369565aef67b93218134ab7591e3dc507'}, {'path': 'tools/component_versions.json', 'patched_sha256': '70d80e14772d451f48416fe7b61cc0e25638045a8eb53dada346d364e48890d8'}]}
+          git='git'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          for tool in ['c++','ninja','ldd','qmake6']:assert shutil.which(tool),tool
+          for plugin in ['platforms/libqxcb.so','sqldrivers/libqsqlite.so']:assert (Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')/plugin).is_file(),plugin
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure from a fresh checkout
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+      - name: Build GUI and affected targets
+        id: ui_build
+        run: cmake --build build-ci --parallel 2 --target PGN-Horizon pgn-social-view-test pgn-social-core-adapter-test pgn-mining-preparation-progress-test
+      - name: Collect exact UI157 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          .ci-python/bin/python - <<'PGN_UI_COLLECTOR'
+          
+          from pathlib import Path
+          import hashlib,json,os,re,shutil,subprocess,tarfile
+          ROOT=Path.cwd();BUILD=ROOT/'build-ci';STAGE=ROOT/'ui-stage';STAGE.mkdir()
+          FROZEN={'source': 'c724d01665dc264aa63ae522530645e9f12f76d3', 'tree': '1670e6dee87a94c88874293a675b867838e8fe40', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f71211b3d17189dbf6344ecaa244a95e236fd891b90c0a188dea8b56d145d69d'}, {'path': 'src/app/main.cpp', 'patched_sha256': '24c0353bf244578733431f08665ed2bae48feea655a569763db28523e23b6610'}, {'path': 'src/engine/runtime_host/horizon_engine_host.py', 'patched_sha256': '6e3bc4431da26421ff31ce40325443e2d42ab3fe090077bc394561fc15dfac7c'}, {'path': 'src/engine/runtime_host/horizon_mining_flow.py', 'patched_sha256': 'e73f2dbfc1ca7798d9b5858ad4874e5106dcd79c0043c2affa68330059e111cf'}, {'path': 'src/engine/runtime_host/horizon_service_presentation.py', 'patched_sha256': 'aa768305165d9d1533e7ae8e00869a524ce2aa4ce83eea2f96424d1894c6214e'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'e5ee28cd50580c5be1ee94c1c69303456ad43f6f431d9064c266afead3ab6f3a'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/mining_cycle_progress.h', 'patched_sha256': '3ebf36924d0b92dd346b9ef686be22416c6e226f653dd72a86992d4a38f530b9'}, {'path': 'src/ui/mining_ticket_progress.cpp', 'patched_sha256': 'a7a46c0dfed078b7f953003631f276db07c852c7d08acf4b8d39c5fec3b3f9c5'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_chat_style.h', 'patched_sha256': 'dc545777b18738003de668ae0f0b99ef28ac2e2c26e61068676df5eaf4d98695'}, {'path': 'src/ui/social_compose_edit.h', 'patched_sha256': '6cd6f4964184299830732cd79447e7c68acecf6802062726f625d64db4c65b9b'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '9835f31bbfdd652f842e309e823a709eaa64c0ed77ce17f283c28b86ac84d79e'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': 'b173374f5fc0aa75153ef139dd18378903ceddae932e50e15958ddda50123bdb'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'aa229e1edffa73b6c3872026a7faececeb8811bd228ec8cf24d1f39748aa0ce0'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '0e8028f8f140ef2e81ed93339dd3e101e49fafbf7a662f7d4ef290c226cab762'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/mining_preparation_progress_test.cpp', 'patched_sha256': '76329c1f91879c22597731d0b1674448b7675d5ab1ee53664691e91a24bf2016'}, {'path': 'tests/social_chat_checks.h', 'patched_sha256': 'b48b3e25062362e9be7503aee26dfaf07a5e77806dd7e8e6a632802366281c5b'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': 'cda20d7cd9dfcf64aa73e89948719b61ddf67e9fc518e19c29183d2347dcc9be'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '201ecb45f77296940b366723a2ed9566820f37e20b64ef086afa3a8c13ef6825'}, {'path': 'tests/test_audit_service_presentation.py', 'patched_sha256': 'c38ab10fb6c04a44912a05f250e39eb22e9d60f5b1d15b5c3d048cb2fc555243'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/build_audit_batch233_host.py', 'patched_sha256': '0bca5f712ab27cad6a14c60ca726bc9369565aef67b93218134ab7591e3dc507'}, {'path': 'tools/component_versions.json', 'patched_sha256': '70d80e14772d451f48416fe7b61cc0e25638045a8eb53dada346d364e48890d8'}]}
+          def sha(p):
+              with p.open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          for row in FROZEN['verified_files']:assert sha(ROOT/row['path'])==row['patched_sha256'],row['path']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==FROZEN['source']
+          shutil.copy2(BUILD/'PGN-Horizon',STAGE/'PGN-Horizon')
+          # CMake declares this WebView2 deployment on Windows only.
+          assert not (BUILD/'assets/audit-animation.rcc').exists(), 'Unexpected Linux RCC; recheck declared deployment'
+          imports={'PGN-Horizon':subprocess.check_output(['ldd',str(STAGE/'PGN-Horizon')],text=True)}
+          assert 'not found'not in imports['PGN-Horizon']
+          files=[dict(path='PGN-Horizon',bytes=(STAGE/'PGN-Horizon').stat().st_size,sha256=sha(STAGE/'PGN-Horizon'))]
+          system={'contract':'system Qt6, unchanged from public UI152 portable package'}
+          result=dict(schema='PGN_LINUX_UI_BUILD_V1',qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],qt_version=subprocess.check_output(['qmake6','-query','QT_VERSION'],text=True).strip(),source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.15.157',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
+          (ROOT/'LINUX-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(dict(PASS=True,source=FROZEN['source'],files=len(files),executable_sha256=sha(STAGE/'PGN-Horizon'))))
+          
+          PGN_UI_COLLECTOR
+      - name: Run registered isolated tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R '^(social-view|social-core-adapter-protocol|mining-preparation-progress|audit-service-presentation)$'
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/bin/python -I tests/test_late_cycle_completion.py
+          .ci-python/bin/python -I tests/test_audit_reveal_batch.py
+          .ci-python/bin/python -I tests/test_shared_audit_reveals.py
+      - name: Qualify actual GUI inside the established portable Linux cohort
+        run: |
+          xvfb-run -a .ci-python/bin/python - <<'PGN_LINUX_COHORT'
+          """Exercise the new GUI inside the established Linux portable contract."""
+          from pathlib import Path
+          import hashlib,json,os,shutil,subprocess,sys,tarfile,time,urllib.request
+          
+          ROOT=Path.cwd();QA=ROOT/'linux-cohort-qa';QA.mkdir()
+          archive=QA/'baseline.tar.gz'
+          digest='699130c0c2eef92f9575de8ad816d7b81f9716f0b9c576844fab4d970ee90f23'
+          url='https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/'+digest+'.PGN-Horizon-testnet-Ubuntu-x86_64.tar.gz'
+          urllib.request.urlretrieve(url,archive)
+          sha=lambda p:hashlib.file_digest(Path(p).open('rb'),'sha256').hexdigest()
+          assert sha(archive)==digest,'Public baseline digest differs'
+          with tarfile.open(archive)as t:t.extractall(QA/'baseline',filter='data')
+          roots=list((QA/'baseline').rglob('components.json'));assert len(roots)==1
+          cohort=roots[0].parent;manifest=json.loads(roots[0].read_bytes())
+          prefix={'ui':'','core':'Core/','gpu':'EngineRuntime/','cpu':'EngineRuntime/cpu/'}
+          count=0
+          for c in manifest['components']:
+              for f in c['files']:
+                  p=cohort/(prefix[c['id']]+f['path'])
+                  assert p.stat().st_size==f['bytes']and sha(p)==f['sha256'],str(p)
+                  count+=1
+          ui=next(c for c in manifest['components']if c['id']=='ui')
+          new=ROOT/'build-ci/PGN-Horizon';exe=cohort/'PGN-Horizon'
+          shutil.copy2(new,exe);exe.chmod(0o755);ui['version']='2026.11.15.157'
+          f=next(f for f in ui['files']if f['path']=='PGN-Horizon');f.update(bytes=exe.stat().st_size,sha256=sha(exe))
+          roots[0].write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+          sys.path.insert(0,str(ROOT/'tools'))
+          from build_component_bundle import build
+          context=dict(schema='PGN_COMPONENT_STAGE_CONTEXT_V1',network='testnet',genesis_hash='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314',platform='linux-x86_64',compatibility_set='pgn.epoch3.2026.11',minimum_sequence=1,installed=[],protected_roots=[str(cohort)])
+          cp=QA/'context.json';cp.write_text(json.dumps(context))
+          bundle=build(cohort,cp,QA/'private-compatibility.zip',1000,'2026.11.15.157','pgn.epoch3.2026.11')
+          assert bundle['privacy']['PASS']
+          # The immutable cohort is never a test profile. Launch an independent copy.
+          live=QA/'application';shutil.copytree(cohort,live)
+          app=live/'PGN-Horizon';evidence=QA/'evidence';evidence.mkdir()
+          env=dict(os.environ,QT_QPA_PLATFORM='xcb');env.pop('QT_PLUGIN_PATH',None);env.pop('LD_LIBRARY_PATH',None)
+          out=evidence/'stdout.log';err=evidence/'stderr.log';start=time.monotonic()
+          with out.open('wb')as stdout,err.open('wb')as stderr:
+              p=subprocess.Popen([str(app),str(live),'--testnet','--start-minimized'],cwd=live,env=env,stdout=stdout,stderr=stderr)
+              snapshot=None;shown=[];closed=False
+              try:
+                  for _ in range(20):
+                      if p.poll()is not None:break
+                      r=subprocess.run([str(app),'--inspect-owned',str(p.pid)],env=env,capture_output=True,timeout=8)
+                      if r.returncode==0:
+                          snapshot=json.loads(r.stdout);break
+                      time.sleep(1)
+                  assert snapshot is not None,'Packaged GUI failed to initialize: '+err.read_text(errors='replace')[-1200:]
+                  (evidence/'snapshot.json').write_text(json.dumps(snapshot,indent=2)+'\n')
+                  for section in ('Wallet','Social','SocialMiners'):
+                      r=subprocess.run([str(app),'--show-owned',str(p.pid),section],env=env,capture_output=True,timeout=12)
+                      assert r.returncode==0,(section,r.stderr.decode(errors='replace')[-500:])
+                      v=json.loads(r.stdout);(evidence/(section+'.json')).write_text(json.dumps(v,indent=2)+'\n');shown.append(section)
+                  for image in (live/'evidence').glob('owned-*.png'):shutil.copy2(image,evidence/image.name)
+              finally:
+                  if p.poll()is None:
+                      r=subprocess.run([str(app),'--close-owned',str(p.pid)],env=env,capture_output=True,timeout=12)
+                      closed=r.returncode==0
+                  p.wait(timeout=30)
+          result=dict(PASS=p.returncode==0 and closed and snapshot is not None,baseline_sha256=digest,baseline_files_verified=count,
+                      new_ui_sha256=sha(app),platform='Ubuntu system Qt6',private_cohort_validation=True,privacy=bundle['privacy']['PASS'],
+                      full_GUI=True,sections=shown,exit=p.returncode,graceful_close=closed,seconds=time.monotonic()-start,
+                      scope='GUI157 within established portable baseline Core20/host83; no GPU computation, no public-user acceptance, no wallet keys',
+                      stderr=err.read_text(errors='replace')[-2000:])
+          (QA/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result));assert result['PASS']
+          PGN_LINUX_COHORT
+      - name: Preserve Linux full-window qualification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-cohort-ui157-${{ github.run_id }}
+          path: |
+            linux-cohort-qa/RESULT.json
+            linux-cohort-qa/evidence
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ubuntu-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual affected-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/bin/python - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('LINUX-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['affected_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success';v['qualification']['full_suite_pass']=False;v['qualification']['unchanged_base_full_suite_run']=43715553665
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui157-ubuntu.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui157-ubuntu-${{ github.run_id }}
+          path: ui157-ubuntu.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
