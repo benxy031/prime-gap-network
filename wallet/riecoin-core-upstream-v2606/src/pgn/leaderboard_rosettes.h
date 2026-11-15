@@ -66,15 +66,23 @@ struct LeaderboardRosettes:LeaderboardRosetteTotals {
             if(gap<=0||gap>(int64_t{1}<<32)||gap%2||*lower%2!=1||*upper!=*lower+gap||
                !local.emplace(*lower,Integer{gap}).second){if(in_window)Unavailable();return;}
         }
+        std::erase_if(local,[&](const auto& key){return !seen.insert(key).second;});
+        if(!in_window||local.empty())return;
+        // ln is monotone. These two directed endpoints decide every ordinary
+        // record in a narrow scientific range; only an interval-straddling
+        // record needs its own logarithm. This is exact, never smoothing.
+        const auto minimum=naturalLogBounds(local.begin()->first,{192,128},{1024,256,256});
+        const auto maximum=local.begin()->first==local.rbegin()->first?minimum:
+            naturalLogBounds(local.rbegin()->first,{192,128},{1024,256,256});
         for(const auto& key:local){
-            if(!seen.insert(key).second||!in_window)continue;
-            // Directed integer log bounds, once per record. No double rounding
-            // can turn a just-below-threshold observation into a medal.
-            const auto bounds=naturalLogBounds(key.first,{192,128},{1024,256,256});
+            std::optional<LogBounds> exact;
             const auto compare=[&](const Integer& n,const Integer& d){
-                const Integer value=(key.second*d)<<bounds.fractional_bits;
-                if(value>=n*bounds.upper)return MeritDecision::Meets;
-                if(value<n*bounds.lower)return MeritDecision::Below;
+                const Integer value=(key.second*d)<<minimum.fractional_bits;
+                if(value>=n*maximum.upper)return MeritDecision::Meets;
+                if(value<n*minimum.lower)return MeritDecision::Below;
+                if(!exact)exact=naturalLogBounds(key.first,{192,128},{1024,256,256});
+                if(value>=n*exact->upper)return MeritDecision::Meets;
+                if(value<n*exact->lower)return MeritDecision::Below;
                 return MeritDecision::Indeterminate;
             };
             const auto q=compare(Integer{40},Integer{1});

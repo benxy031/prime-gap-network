@@ -13,7 +13,7 @@ static std::string body(std::string prime,int64_t gap,std::string n="275",std::s
     if(!n.empty()){out.pushKV("target_numerator",n);out.pushKV("target_denominator",d);}return out.write();
 }
 int main(int argc,char** argv){try{
-    using namespace pgn::core;need(argc==2,"oracle path");
+    using namespace pgn::core;need(argc==2||argc==3,"oracle path");
     // A separate Python Decimal(100 digits) oracle supplies boundary neighbours.
     std::ifstream f(argv[1]);std::string p,n,d;int64_t gap;int tier,q;unsigned rows{};
     const std::string root(64,'a');const auto hash=[&](std::string_view){return root;};
@@ -24,6 +24,25 @@ int main(int argc,char** argv){try{
         for(size_t i=1;i<5;++i)need(value.counts[i]==(int(i)==tier?1:0),"exclusive tier oracle");
     }
     need(rows>=100,"independent coverage");
+    if(argc==3){
+        std::ifstream batches(argv[2]);int group;int active=-1;UniValue records{UniValue::VARR};
+        std::array<uint64_t,5> expected{};std::string target_n,target_d;
+        const auto finish=[&](){
+            if(active<0)return;
+            UniValue report{UniValue::VOBJ},computed{UniValue::VOBJ};computed.pushKV("best",records);
+            report.pushKV("schema","PGN_NETWORK_RANGE_REPORT_V1");report.pushKV("computed",computed);
+            report.pushKV("target_numerator",target_n);report.pushKV("target_denominator",target_d);
+            LeaderboardRosettes actual;actual.Observe(report.write(),root,true,hash);
+            for(size_t i=0;i<5;++i)need(actual.complete[i]&&actual.counts[i]==expected[i],"multi-record monotone enclosure/fallback oracle");
+        };
+        while(batches>>group>>p>>gap>>n>>d>>tier>>q){
+            if(active!=group){finish();active=group;records=UniValue{UniValue::VARR};expected={};target_n=n;target_d=d;}
+            need(n==target_n&&d==target_d,"one target per batch");
+            UniValue one{UniValue::VOBJ};one.pushKV("lower_prime",p);one.pushKV("upper_prime",(Integer{p}+gap).convert_to<std::string>());one.pushKV("gap",gap);records.push_back(one);
+            expected[0]+=q;if(tier)++expected[size_t(tier)];
+        }
+        finish();need(active>=3,"narrow, broad and exact boundary batches");
+    }
     LeaderboardRosettes replay;const auto example=body("150000000000000000001",1300);
     replay.Observe(example,root,true,hash);const auto initial=replay.Json().write();replay.Observe(example,root,true,hash);
     need(replay.Json().write()==initial,"replayed report not counted twice");
