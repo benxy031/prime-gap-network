@@ -435,24 +435,26 @@ int main(int argc,char** argv){try{
     }
     { // A derived ticket closure follows native ancestry, not a per-process
     // counter. Historical bodies here have already passed the verifier above.
-    view.Flush();final_index.nStatus=BLOCK_VALID_SCRIPTS;final_index.BuildSkip();
+    view.Flush();CBlockIndex closed_index{paid};closed_index.phashBlock=&final_hash;
+    closed_index.pprev=const_cast<CBlockIndex*>(&at);closed_index.nHeight=at.nHeight+1;
+    closed_index.nTx=paid.vtx.size();closed_index.nStatus=BLOCK_VALID_SCRIPTS;closed_index.BuildSkip();
     {CCoinsViewCache child{&view};child.SetBestBlock(final_hash);
      child.StagePgnFactHistoryStep(final_facts);child.StagePgnIssuanceHistoryStep(paid_plan->Forward());child.Flush();}
-    need(history.StoreBlock(view,final_index,final_index.nHeight,paid,replay.archive)==RequestArchiveVerdict::Stored,
+    need(history.StoreBlock(view,closed_index,closed_index.nHeight,paid,replay.archive)==RequestArchiveVerdict::Stored,
          "Verified closed-ticket body was not retained");
-    const auto closed=ReadNativeTicketClosures(view,final_index,history,body_budget);
+    const auto closed=ReadNativeTicketClosures(view,closed_index,history,body_budget);
     need(closed&&closed->extra.tickets.size()==1&&closed->extra.tickets.contains(current.reservation->Ticket()),
          "Native history did not reconstruct the closed ticket");
     const auto& closure=closed->extra.tickets.at(current.reservation->Ticket());
     need(closure.request==lease.owner.Id()&&closure.block==final_hash&&closure.golds==6,
          "Derived ticket closure lost its actual block or Gold count");
     const auto closed_money=view.GetPgnIssuanceState();const auto closed_head=view.GetPgnFactHead();
-    const auto second=VerifyNativeTicketGoldGroup(view,final_index,history,proofs,body_budget);
+    const auto second=VerifyNativeTicketGoldGroup(view,closed_index,history,proofs,body_budget);
     need(!second.group&&second.verdict==TicketGoldGroupVerdict::TicketAlreadyClosed&&
          view.GetPgnIssuanceState()==closed_money&&view.GetPgnFactHead()==closed_head,
          "Closed ticket was admitted twice or the refusal mutated native state");
     auto caller_copy=*closed;caller_copy.extra.tickets.clear();
-    const auto warm=ReadNativeTicketClosures(view,final_index,history,body_budget);
+    const auto warm=ReadNativeTicketClosures(view,closed_index,history,body_budget);
     need(warm&&warm->extra.tickets==closed->extra.tickets,"Caller changed cached closure authority");
     DataStream closure_wire;native_audit_replay_detail::ExtraCodec<NativeTicketClosures>::Write(closure_wire,closed->extra,nullptr);
     need(native_audit_replay_detail::ExtraCodec<NativeTicketClosures>::Read(closure_wire).tickets==closed->extra.tickets&&closure_wire.empty(),
@@ -462,7 +464,7 @@ int main(int argc,char** argv){try{
     bool duplicate_closed=false;try{native_audit_replay_detail::ExtraCodec<NativeTicketClosures>::Read(duplicate_closure);}catch(const std::exception&){duplicate_closed=true;}
     need(duplicate_closed,"Duplicate closure checkpoint was accepted");
     NativeRequestHistoryArchive missing_history{path/"missing-closure-history",1<<20};
-    need(!ReadNativeTicketClosures(view,final_index,missing_history,body_budget),"Warm closure cache bypassed unavailable history");
+    need(!ReadNativeTicketClosures(view,closed_index,missing_history,body_budget),"Warm closure cache bypassed unavailable history");
     {CCoinsViewCache undo{&view};undo.SetBestBlock(at.GetBlockHash());
      undo.StagePgnIssuanceHistoryStep({IssuanceDirection::Rewind,paid_plan->Forward().forward});
      undo.StagePgnFactHistoryStep({FactDirection::Rewind,final_facts.forward});undo.Flush();}
