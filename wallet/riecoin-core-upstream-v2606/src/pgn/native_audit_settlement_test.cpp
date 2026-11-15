@@ -126,6 +126,12 @@ void Publish(CCoinsViewDB& db,const IssuanceSnapshot& before,const IssuanceSnaps
 }
 }
 int main(int argc,char** argv){
+    const auto configured_chain=*uint256::FromHex("710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314");
+    assert(!AuditGroupingScheduled(configured_chain,4095));
+    assert(AuditGroupingScheduled(configured_chain,4096));
+    assert(AuditGroupingScheduled(configured_chain,4097));
+    assert(!AuditGroupingScheduled(uint256{},4096));
+
     assert(argc==2);ECC_Context ecc;SelectParams(ChainType::TESTNET);LOCK(cs_main);
     PublicAdmissionExercise();
     constexpr CAmount coin=PGN_ATOMIC_UNITS_PER_COIN;
