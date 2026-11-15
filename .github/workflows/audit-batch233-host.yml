@@ -2,7 +2,7 @@ name: Private audit batch host84 qualification
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/horizon-ui156-host84-20261115]
+    branches: [qualification/host84-guard243]
     paths:
       - src/engine/runtime_host/**
       - tests/native_audit_batch_rpc.py
