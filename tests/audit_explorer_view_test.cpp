@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
         View colored(View::PageReader{[sample](int,View::Result reply){reply(sample,{});}});colored.resize(800,500);colored.show();app.processEvents();
         auto* grid=colored.findChild<QTableWidget*>("pgn-audit-report-table");auto expected=pgn::ui::auditStatusPresentation(state);
         require(grid->item(0,2)->text()==expected.text&&grid->item(0,2)->foreground().color()==expected.color,"Audit status color/text missing");
-        if(state=="failed"||state=="future-state")require(grid->item(0,4)->text()!="Both audits passed","Unverified or failed status promoted to passed");
+        if(state=="failed"||state=="future-state")require(grid->item(0,4)->text()!="Assigned audits passed","Unverified or failed status promoted to passed");
         require(colored.findChild<QLabel*>("pgn-audit-status-legend")!=nullptr,"Missing audit legend");
     }
     View::Result detached;

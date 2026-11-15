@@ -13,7 +13,7 @@ namespace pgn::ui {
 struct AuditStatusPresentation {QString text,tooltip;QColor color;};
 
 inline AuditStatusPresentation auditStatusPresentation(const QString& state){
-    if(state.isEmpty()||state=="awaiting")return {"Awaiting auditor","This audit remains pending until an eligible independent auditor is assigned.",QColor("#e6bd64")};
+    if(state.isEmpty()||state=="awaiting")return {"Awaiting auditor","This audit remains pending until an eligible auditor is assigned.",QColor("#e6bd64")};
     if(state=="assigned")return {"Assigned","An auditor holds this assignment. Assignment alone does not prove that computation is running.",QColor("#ba9aee")};
     if(state=="committed")return {"Answer committed","The auditor committed its answer; reveal and comparison are still required.",QColor("#ba9aee")};
     if(state=="passed")return {"Counts match","The revealed sampling counts match. Exact gap proof and monetary acceptance remain separate checks.",QColor("#63dfb3")};
@@ -28,7 +28,7 @@ inline AuditStatusPresentation ticketStagePresentation(const QString& state){
     auto result=auditStatusPresentation(state=="pending_audits"?"awaiting":state=="audits_assigned"?"assigned":state=="audits_passed"?"passed":state=="audit_failed"?"failed":"unknown");
     if(state=="pending_audits")result.text="Awaiting audits";
     if(state=="audits_assigned")result.text="Audits assigned / committed";
-    if(state=="audits_passed")result.text="Both audits passed";
+    if(state=="audits_passed")result.text="Assigned audits passed";
     if(state=="audit_failed")result.text="Audit failed";
     return result;
 }
@@ -51,10 +51,10 @@ inline AuditStatusPresentation auditReportPresentation(const QJsonObject& report
         unknown|=state!="assigned"&&state!="committed"&&state!="passed";
     }
     if(unknown)return auditStatusPresentation("unknown");
-    if(report.value("audited")==true){auto result=auditStatusPresentation("passed");result.text="Both audits passed";return result;}
+    if(report.value("audited")==true){auto result=auditStatusPresentation("passed");result.text="Assigned audits passed";return result;}
     if(committed)return auditStatusPresentation("committed");
     if(assigned){auto result=auditStatusPresentation("assigned");result.text="Audits assigned";return result;}
-    auto result=auditStatusPresentation("awaiting");result.text="Awaiting independent audits";return result;
+    auto result=auditStatusPresentation("awaiting");result.text="Awaiting audits";return result;
 }
 
 inline QIcon auditStatusIcon(const QColor& color){

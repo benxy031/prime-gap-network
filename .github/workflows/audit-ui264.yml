@@ -1,0 +1,52 @@
+name: Audit UI individual slots and compact evidence qualification
+on:
+  push:
+    branches: [qualification/audit-ui264]
+permissions:
+  contents: read
+jobs:
+  widget_tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      GSETTINGS_BACKEND: memory
+      PGN_AUDIT_UI_CAPTURE: evidence264
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Verify exact proposed UI delta
+        run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          expected={'src/ui/audit_slot_presentation.h': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532', 'src/ui/audit_status_presentation.h': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5', 'src/ui/network_work_view.h': '385afd2c2b19c1cbaee0be1eb024c7736cd99fe8ffcf228e9346b811370466d1', 'tests/audit_explorer_view_test.cpp': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20', 'tests/network_work_view_test.cpp': '71d6e91d17e41416155dae4f83886e5147ea0c3fe3ee7e5514fe29641e37d7f5', 'tests/ticket_atlas_view_test.cpp': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}
+          for name,sha in expected.items():assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==sha,name
+          Path('evidence264').mkdir()
+          Path('evidence264/INPUTS.json').write_text(json.dumps(expected,indent=2))
+          PY
+      - name: Configure and build existing widget regressions
+        run: |
+          cmake -S . -B build-ui264 -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+          cmake --build build-ui264 --target pgn-network-work-view-test pgn-audit-explorer-view-test pgn-ticket-atlas-view-test pgn-ticket-atlas-mass-view-test --parallel 2
+      - name: Real widget behavior and existing atlas regressions
+        run: |
+          ctest --test-dir build-ui264 --output-on-failure -V --timeout 120 -R '^(network-work-view|audit-explorer-view)$'
+          build-ui264/pgn-ticket-atlas-view-test
+          build-ui264/pgn-ticket-atlas-mass-view-test
+      - name: Preserve exact themed captures and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: audit-ui264-${{ github.run_id }}
+          path: |
+            evidence264
+            build-ui264/Testing/Temporary/LastTest.log
+          if-no-files-found: error
