@@ -14,6 +14,7 @@ from horizon_preseal_queue import PresealQueue
 from horizon_ticket_prefetch import TicketPrefetch
 from horizon_work_cycle import WorkCycleJournal
 from horizon_core_rpc import CoreRpcError
+from horizon_service_presentation import preparation_view
 from horizon_ticket_archive import SCHEMA as COMPLETED_TICKET_SCHEMA
 from horizon_audit_progress import presentation as audit_presentation
 from pgn_native_contract import fields, encode_target_q16
@@ -854,6 +855,13 @@ class MiningFlow:
                 audits=[dict(state=(task or {}).get('stage', 'pending'),
                     positions=str(totals[(cycle, i)]) if (cycle, i) in totals else None)
                     for i, task in enumerate(state['audits'])])
+        if not cycle and context.get('role') == 'audit':
+            prefetch = getattr(self, 'prefetch', None)
+            observe = getattr(prefetch, 'service_observation', None)
+            status = observe() if callable(observe) else getattr(prefetch, 'native_service_status', None)
+            preparation = preparation_view(context, status)
+            if preparation is not None:
+                value['preparation'] = preparation
         value["measurement_notice"] = None
         if getattr(self, 'report_poller', None) is not None:
             value['publication_maintenance'] = self.report_poller.snapshot()

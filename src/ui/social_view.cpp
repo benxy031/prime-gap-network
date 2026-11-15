@@ -5,6 +5,7 @@
 #include "ui/social_light_style.h"
 #include "ui/social_entry_delegate.h"
 #include "ui/quadrigantium_rosette.h"
+#include "ui/social_leaderboard_table.h"
 #include <QStyleOptionHeader>
 #include "ui/social_access_dialog.h"
 #include "ui/social_controls.h"
@@ -76,29 +77,7 @@ void document(QTextBrowser* browser,const social::Entry& entry,bool local=false)
         cursor.insertText("\n"+reply.author+" · "+stamp(reply.createdUtc)+"\n",author);cursor.insertText(reply.body+"\n",replyFormat);}
     browser->verticalScrollBar()->setValue(scroll);
 }
-class SortHeader final:public QHeaderView{
-    int section_{1};
-public:
-    std::function<void(int)> onSort;
-    explicit SortHeader(QWidget* parent):QHeaderView(Qt::Horizontal,parent){
-        setFocusPolicy(Qt::StrongFocus);setSectionsClickable(true);setSortIndicatorShown(true);
-        setAccessibleName("Sort miners. Left and Right choose a column. Enter or Space changes its order.");
-        setObjectName("pgn-social-miner-sort-header");
-        connect(this,&QHeaderView::sectionClicked,this,[this](int section){section_=section;if(onSort)onSort(section);});
-    }
-protected:
-    void keyPressEvent(QKeyEvent* event)override{
-        if(event->key()==Qt::Key_Left||event->key()==Qt::Key_Right){section_=qBound(0,section_+(event->key()==Qt::Key_Right?1:-1),count()-1);viewport()->update();event->accept();return;}
-        if(event->key()==Qt::Key_Home||event->key()==Qt::Key_End){section_=event->key()==Qt::Key_Home?0:count()-1;viewport()->update();event->accept();return;}
-        if(event->key()==Qt::Key_Enter||event->key()==Qt::Key_Return||event->key()==Qt::Key_Space){if(onSort)onSort(section_);event->accept();return;}
-        QHeaderView::keyPressEvent(event);
-    }
-    void paintSection(QPainter* painter,const QRect& rect,int logical)const override{
-        if(logical<6)QHeaderView::paintSection(painter,rect,logical);
-        else{QStyleOptionHeader option;initStyleOption(&option);option.rect=rect;option.section=logical;option.text.clear();option.icon={};style()->drawControl(QStyle::CE_Header,&option,painter,this);const auto icon=qvariant_cast<QIcon>(model()->headerData(logical,orientation(),Qt::DecorationRole));icon.paint(painter,QRect(rect.center().x()-12,rect.center().y()-14,24,28),Qt::AlignCenter);}
-        if(hasFocus()&&logical==section_){QStyleOptionFocusRect option;option.initFrom(this);option.rect=rect.adjusted(3,3,-3,-3);style()->drawPrimitive(QStyle::PE_FrameFocusRect,&option,painter,this);}
-    }
-};
+
 }
 SocialView::SocialView(QString path,social::Services services,QWidget* parent)
     :QWidget(parent),services_(std::move(services)),store_(std::move(path)){
@@ -106,17 +85,19 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
     setStyleSheet(SocialLightStyle()+SocialChatContrastStyle()+SocialReadableStyle());
     auto* box=vertical(this);box->setSpacing(0);tabs_=new QTabWidget;tabs_->setProperty("socialSurface",true);tabs_->setObjectName("pgn-social-sections");
     for(int i=0;i<4;++i){
-        auto& p=pages_[i];auto* page=new QWidget;if(i==0)page->setObjectName("pgn-social-chat-surface");auto* layout=vertical(page,14);
+        auto& p=pages_[i];auto* page=new QWidget;if(i==0)page->setObjectName("pgn-social-chat-surface");if(i==3)page->setObjectName("pgn-social-leaderboard-surface");auto* layout=vertical(page,14);
         auto* tools=new QHBoxLayout;tools->setSpacing(8);
         if(i==0){channelTitle_=text("Conversation");channelTitle_->setProperty("heading",true);channelTitle_->setObjectName("pgn-social-global-channel");tools->addWidget(channelTitle_);
             channelDescription_=text({});channelDescription_->setProperty("caption",true);channelDescription_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);tools->addWidget(channelDescription_,1);}
         if(i==3){
-            tools->addWidget(text("Window"));
-            p.filter=new SocialComboBox;p.filter->setObjectName("pgn-social-miner-window");
-            p.filter->setAccessibleName("Miner observation window");
-             p.filter->addItem("All recorded activity");p.filter->addItem(social::windowLabel(social::Window::Day));p.filter->setToolTip("Confirmed activity on the current chain. Today uses canonical block-header timestamps in a fixed UTC day, not physical execution time. Hardware count and mining time are not reported by this source.");
-            tools->addWidget(p.filter);
-             p.windowInfo=text({});p.windowInfo->setObjectName("pgn-social-miner-interval");p.windowInfo->setProperty("caption",true);tools->addWidget(p.windowInfo);
+            p.filter=new SocialComboBox;p.filter->setObjectName("pgn-social-miner-window");p.filter->setAccessibleName("Miner observation window");
+            p.filter->addItem("Total");p.filter->addItem("Today (UTC)");p.filter->hide();
+            p.filter->setToolTip("Confirmed activity on the current chain. Today uses a fixed UTC interval and canonical block-header timestamps; no physical mining time inferred.");
+            auto* periods=new QWidget;periods->setObjectName("pgn-social-periods");p.filter->setParent(periods);p.filter->hide();auto* periodBox=new QHBoxLayout(periods);periodBox->setContentsMargins(3,3,3,3);periodBox->setSpacing(2);
+            auto* group=new QButtonGroup(periods);group->setExclusive(true);
+            for(int n=0;n<2;++n){auto* button=new QPushButton(n?"Today (UTC)":"Total");button->setObjectName(n?"pgn-social-period-today":"pgn-social-period-total");button->setAccessibleName(button->text()+" leaderboard period");button->setCheckable(true);button->setChecked(!n);button->setMinimumHeight(32);group->addButton(button,n);periodBox->addWidget(button);connect(button,&QPushButton::clicked,this,[this,n]{pages_[3].filter->setCurrentIndex(n);});}
+            connect(p.filter,&QComboBox::currentIndexChanged,group,[group](int n){if(group->button(n))group->button(n)->setChecked(true);});tools->addWidget(periods);
+            p.windowInfo=text({});p.windowInfo->setObjectName("pgn-social-miner-interval");p.windowInfo->setProperty("caption",true);
         }
         p.search=new QLineEdit;p.search->setMaxLength(160);p.search->setPlaceholderText(i==0?"Find in loaded messages":"Filter loaded "+QString(nouns[i]));
         p.search->setAccessibleName(QString("Filter loaded %1").arg(nouns[i]));p.search->setObjectName(QString("pgn-social-search-%1").arg(i));tools->addWidget(p.search,i==0?0:1);
@@ -125,20 +106,28 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             connect(members,&QPushButton::toggled,this,[this](bool shown){membersPane_->setVisible(shown);});}
         p.refresh=new QPushButton("Refresh");p.refresh->setObjectName(QString("pgn-social-refresh-%1").arg(i));tools->addWidget(p.refresh);
         connect(p.refresh,&QPushButton::clicked,this,[this,i]{read(i);});connect(p.search,&QLineEdit::textChanged,this,[this,i]{filter(i);});
-        auto* browse=new QWidget;auto* browseBox=vertical(browse);browseBox->addLayout(tools);
-        p.dataSlot=new QStackedWidget;p.dataSlot->setObjectName(QString("pgn-social-data-slot-%1").arg(i));
+        auto* browse=new QWidget;auto* browseBox=vertical(browse);
+        if(i==3){browse->setObjectName("pgn-social-ranking-content");browseBox->setSpacing(14);
+            auto* title=text("Leaderboard");title->setObjectName("pgn-social-ranking-title");auto* titleRow=new QHBoxLayout;titleRow->addWidget(title);titleRow->addStretch();titleRow->addWidget(p.windowInfo);browseBox->addLayout(titleRow);
+            p.search->setPlaceholderText("Search loaded miners");p.search->setMaximumWidth(330);p.search->setMinimumWidth(230);tools->setStretchFactor(p.search,0);tools->insertStretch(1,1);p.refresh->setMinimumHeight(32);
+        }
+        browseBox->addLayout(tools);
+        p.dataSlot=i==3?new LeaderboardStack:new QStackedWidget;p.dataSlot->setObjectName(QString("pgn-social-data-slot-%1").arg(i));
         if(i==3){
-            p.ranking=new QTableWidget(0,11);p.ranking->setObjectName("pgn-social-miners");
-            auto* header=new SortHeader(p.ranking);p.ranking->setHorizontalHeader(header);
+            p.ranking=new LeaderboardTable;p.ranking->setObjectName("pgn-social-miners");
+            auto* header=new LeaderboardHeader(p.ranking);p.ranking->setHorizontalHeader(header);
             p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block","Quadrigantium","Gold","Silver","Bronze","Rust"});
-            header->setSectionResizeMode(0,QHeaderView::Stretch);for(int col=1;col<6;++col)header->setSectionResizeMode(col,QHeaderView::ResizeToContents);
+            header->setSectionResizeMode(0,QHeaderView::Stretch);const int widths[]{0,158,116,116,112,152};for(int col=1;col<6;++col){header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,widths[col]);}
+            p.ranking->setAccessibleName("Leaderboard of authenticated network activity. Rank among loaded rows for the selected sort.");
+            p.ranking->setStyleSheet("QTableWidget#pgn-social-miners{background:#e9f0f0;color:#203c43;border:0;border-radius:12px;padding:0;outline:0;}QTableWidget#pgn-social-miners::item{padding:0;border:0;}QTableWidget#pgn-social-miners QWidget{background:#e9f0f0;}QHeaderView{background:#dce8e9;border:0;padding:0;}QScrollBar:vertical{background:#e1eaeb;width:8px;}QScrollBar::handle:vertical{background:#8ba6ab;min-height:24px;border-radius:4px;}");
             // Presentation only: the current authenticated snapshot supplies no
             // exhaustive per-operator tier totals. Never infer zero/medals.
             const MeritTier tiers[]{MeritTier::Gold,MeritTier::Silver,MeritTier::Bronze,MeritTier::NearMiss};
-            for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium · merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Verified per-miner total unavailable; no zero inferred.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,48);item->setSizeHint(QSize(48,36));}
+            for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium · merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Verified per-miner total unavailable; no zero inferred.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,44);item->setSizeHint(QSize(44,58));}
+            for(int n=0;n<5;++n)header->moveSection(header->visualIndex(6+n),1+n);
             header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){if(col>=6)return;sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
             p.ranking->verticalHeader()->hide();p.ranking->setEditTriggers(QAbstractItemView::NoEditTriggers);p.ranking->setSelectionBehavior(QAbstractItemView::SelectRows);
-            p.ranking->setSelectionMode(QAbstractItemView::SingleSelection);p.ranking->setWordWrap(false);p.ranking->verticalHeader()->setDefaultSectionSize(32);
+            p.ranking->setSelectionMode(QAbstractItemView::SingleSelection);p.ranking->setWordWrap(false);p.ranking->verticalHeader()->setMinimumSectionSize(36);p.ranking->verticalHeader()->setMaximumSectionSize(36);p.ranking->verticalHeader()->setDefaultSectionSize(36);
             p.dataSlot->addWidget(p.ranking);
              connect(p.filter,&QComboBox::currentIndexChanged,this,[this]{auto& q=pages_[3];++q.generation;q.busy=q.loaded=false;q.nextCursor.clear();q.miners.clear();q.leaderboardPeriod.reset();q.windowInfo->setText(q.filter->currentIndex()==1?"UTC interval loading…":QString{});renderMiners();updateAccess();read(3);});
         }else{
@@ -152,7 +141,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         p.empty->setObjectName(QString("pgn-social-empty-%1").arg(i));emptyBox->addWidget(p.empty);emptyBox->addStretch();p.dataSlot->addWidget(emptyPane);
         p.dataSlot->setCurrentIndex(1);
         if(i==2){auto* headers=new QHBoxLayout;headers->setContentsMargins(24,4,12,4);headers->setSpacing(0);headers->addWidget(text("Topic"),1);for(const auto& spec:QList<QPair<QString,int>>{{"Participants",140},{"Replies",88},{"Activity",140},{"State",100}}){auto* label=text(spec.first);label->setFixedWidth(spec.second);headers->addWidget(label);}browseBox->addLayout(headers);}
-        browseBox->addWidget(p.dataSlot,1);
+        browseBox->addWidget(p.dataSlot,i==3?0:1);
         auto* pager=new QHBoxLayout;p.count=text({});p.count->setObjectName(QString("pgn-social-loaded-%1").arg(i));pager->addWidget(p.count,1);
         if(i==0){auto* chat=static_cast<SocialChatList*>(p.list);auto* latest=new QPushButton("New messages · Jump to latest");latest->setObjectName("pgn-social-new-messages");latest->setAccessibleName("New messages. Jump to latest message");latest->hide();pager->addWidget(latest);chat->unseenChanged=[latest](bool unseen){latest->setVisible(unseen);};connect(latest,&QPushButton::clicked,chat,[this,chat]{chat->jumpToLatest();read(0);});}
         p.more=new QPushButton(i==0?"Older messages":i==1?"Older publications":i==2?"More topics":"Load more");p.more->setObjectName(QString("pgn-social-more-%1").arg(i));pager->addWidget(p.more);browseBox->addLayout(pager);
@@ -172,7 +161,9 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             members_->setContextMenuPolicy(Qt::CustomContextMenu);connect(members_,&QListWidget::customContextMenuRequested,this,[this](QPoint pos){auto* item=members_->itemAt(pos);if(!item)item=members_->currentItem();if(!item||item->data(Qt::UserRole).toString().isEmpty())return;const auto id=item->data(Qt::UserRole).toString();auto* menu=new QMenu(this);menu->setProperty("socialSurface",true);auto* copy=menu->addAction("Copy full identity");connect(copy,&QAction::triggered,this,[id]{QApplication::clipboard()->setText(id);});auto* manage=menu->addAction("Roles & member actions…");connect(manage,&QAction::triggered,this,[this,id]{openAccess(id);});connect(menu,&QMenu::aboutToHide,menu,&QObject::deleteLater);menu->popup(members_->viewport()->mapToGlobal(pos.x()<0?QPoint(20,20):pos));});
             columns->addWidget(side);layout->addLayout(columns,1);
         }
-        else if(i==3)layout->addWidget(browse,1);
+        else if(i==3){layout->setContentsMargins(24,20,24,20);layout->addWidget(browse,1);browseBox->addStretch(1);
+            page->setStyleSheet("QWidget#pgn-social-leaderboard-surface{background:#041319;}QWidget#pgn-social-ranking-content{background:transparent;}QLabel#pgn-social-ranking-title{font:600 24px 'Segoe UI';color:#e3f1ef;background:transparent;}QWidget#pgn-social-periods{background:#0b2c34;border:1px solid #244a53;border-radius:10px;}QWidget#pgn-social-periods QPushButton{font:600 12px 'Segoe UI';border:0;border-radius:7px;padding:0 20px;min-height:32px;color:#afc8ca;background:transparent;}QWidget#pgn-social-periods QPushButton:hover{background:#16434c;color:#eff8f7;}QWidget#pgn-social-periods QPushButton:checked{background:#dceae6;color:#214b44;}QWidget#pgn-social-periods QPushButton:pressed{background:#b9d8cd;color:#173e37;}QWidget#pgn-social-periods QPushButton:focus{border:2px solid #71aaa0;padding:0 18px;}QLineEdit#pgn-social-search-3{background:#12343c;border:1px solid #355e67;border-radius:8px;color:#e0eeed;min-height:24px;padding:5px 12px;}QLineEdit#pgn-social-search-3:focus{border:2px solid #74aaa2;padding:4px 11px;}QPushButton#pgn-social-refresh-3{background:#245e55;border:1px solid #3b7c70;border-radius:8px;color:#eff8f5;padding:0 20px;min-height:34px;font:600 12px 'Segoe UI';}QPushButton#pgn-social-refresh-3:hover{background:#2e7365;border-color:#609d8f;}QPushButton#pgn-social-refresh-3:pressed{background:#19493f;}QPushButton#pgn-social-refresh-3:focus{border:2px solid #97c5b8;padding:0 19px;}QPushButton#pgn-social-refresh-3:disabled{background:#17362f;color:#8ea9a3;border-color:#2a5149;}QLabel#pgn-social-loaded-3{font:12px 'Segoe UI';color:#8eabb2;}QLabel#pgn-social-miner-interval{font:12px 'Segoe UI';color:#a3bfc1;}");
+        }
         else{
             auto* create=new QPushButton(i==1?"New publication":"New topic");create->setObjectName(QString("pgn-social-new-%1").arg(i));tools->addWidget(create);
             connect(create,&QPushButton::clicked,this,[this,i]{openComposer(i);});
@@ -402,7 +393,7 @@ void SocialView::renderList(int i){
 }
 void SocialView::filter(int i){
     auto& p=pages_[i];const auto query=p.search->text();int visible=0;
-    if(i==3){for(int row=0;row<p.ranking->rowCount();++row){bool match=false;for(int col=0;col<4;++col)match|=p.ranking->item(row,col)->text().contains(query,Qt::CaseInsensitive);p.ranking->setRowHidden(row,!match);if(match)++visible;}}
+    if(i==3){for(int row=0;row<p.ranking->rowCount();++row){bool match=false;for(int col=0;col<4;++col)match|=p.ranking->item(row,col)->text().contains(query,Qt::CaseInsensitive);p.ranking->setRowHidden(row,!match);if(match)++visible;}p.ranking->updateGeometry();p.dataSlot->updateGeometry();}
     else for(int row=0;row<p.entries.size();++row){const auto& e=p.entries[row];const bool match=(i!=2||e.category==forumCategories_->currentItem()->text())&&(e.title+" "+e.author+" "+e.body+" "+e.reference).contains(query,Qt::CaseInsensitive);p.list->item(row)->setHidden(!match);if(match)++visible;}
     const int total=i==3?p.miners.size():p.entries.size();
     p.dataSlot->setCurrentIndex(visible?0:1);
@@ -477,14 +468,14 @@ void SocialView::renderMiners(){
     p.ranking->horizontalHeader()->setSortIndicator(sortColumn_,sortDescending_?Qt::DescendingOrder:Qt::AscendingOrder);
     p.ranking->setRowCount(values.size());
     for(int row=0;row<values.size();++row){const auto& m=values[row];
-        for(int col=0;col<6;++col){const auto raw=col?counter(m,col).value.value_or("Unavailable"):m.name;auto* item=new QTableWidgetItem(col?social::leaderboardNumber(raw):raw);if(!col){item->setData(Qt::UserRole,m.id);item->setData(AuthorIdRole,m.socialMemberId);}if(col)item->setTextAlignment(Qt::AlignRight|Qt::AlignVCenter);
+        for(int col=0;col<6;++col){const auto raw=col?counter(m,col).value.value_or(QString::fromUtf8("—")):m.name;auto* item=new QTableWidgetItem(col?social::leaderboardNumber(raw):raw);if(!col){item->setData(Qt::UserRole,m.id);item->setData(AuthorIdRole,m.socialMemberId);}if(col)item->setTextAlignment(Qt::AlignRight|Qt::AlignVCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);item->setData(LeaderboardRankRole,row+1);
             QString info;if(!col)info="Miner identity: "+m.id+"\nGenesis: "+identity_.genesis;
             else{const auto& source=counter(m,col).provenance;
                 const bool present=bool(counter(m,col).value);
                 info=present?"Exact value: "+raw+"\n"+source.source+"\nObserved: "+stamp(source.observedUtc)+"\nGenesis: "+source.genesis:"Unavailable: no authenticated value supplied. No zero inferred.";}
             item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}
-        for(int col=6;col<11;++col){auto* item=new QTableWidgetItem(QString::fromUtf8("—"));item->setTextAlignment(Qt::AlignCenter);item->setToolTip("Unavailable: current authenticated projection has no exhaustive per-miner "+p.ranking->horizontalHeaderItem(col)->text()+" total. No zero or award inferred.");item->setData(Qt::AccessibleDescriptionRole,item->toolTip());p.ranking->setItem(row,col,item);}}
-    filter(3);
+        for(int col=6;col<11;++col){auto* item=new QTableWidgetItem(QString::fromUtf8("—"));item->setTextAlignment(Qt::AlignCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);item->setToolTip("Unavailable: current authenticated projection has no exhaustive per-miner "+p.ranking->horizontalHeaderItem(col)->text()+" total. No zero or award inferred.");item->setData(Qt::AccessibleDescriptionRole,item->toolTip());p.ranking->setItem(row,col,item);}}
+    filter(3);p.ranking->updateGeometry();p.dataSlot->updateGeometry();
 }
 void SocialView::formatChat(QString tag){formatDraft(0,std::move(tag));}
 void SocialView::formatDraft(int i,QString tag){
