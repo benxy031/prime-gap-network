@@ -1,0 +1,138 @@
+name: UI157 Linux cohort recovery using the exact qualified binary
+on:
+  push:
+    branches: [qualification/ui157-linux-cohort-20261115]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  linux_cohort:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: c724d01665dc264aa63ae522530645e9f12f76d3
+      - name: Install the existing runtime contract
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y qt6-base-dev libqt6sql6-sqlite libgmp10 libsqlite3-0 zlib1g xvfb xauth
+      - name: Recover exact GUI artifact without recompilation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PGN_FETCH'
+          from pathlib import Path
+          import hashlib,json,os,shutil,tarfile,urllib.request,urllib.error,zipfile
+          expected='3f198c581b584198e50f8cb52c7771e368bfe5e896b3b695422deadf0d51ccaa'
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+           def redirect_request(self,req,fp,code,msg,headers,newurl):return None
+          url='https://api.github.com/repos/wizz13150/prime-gap-network/actions/artifacts/14164271966/zip'
+          req=urllib.request.Request(url,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+          try:urllib.request.build_opener(NoRedirect()).open(req,timeout=30);raise RuntimeError('Expected signed storage redirect')
+          except urllib.error.HTTPError as e:
+           assert e.code==302;url=e.headers['Location'];assert url.startswith('https://')
+          target=Path('qualified-gui.zip')
+          with urllib.request.urlopen(url,timeout=45)as src,target.open('xb')as dst:shutil.copyfileobj(src,dst)
+          with target.open('rb')as f:assert hashlib.file_digest(f,'sha256').hexdigest()==expected
+          with zipfile.ZipFile(target)as z:
+           assert z.namelist()==['ui157-ubuntu.tar.gz']
+           with z.open(z.namelist()[0])as src,tarfile.open(fileobj=src,mode='r|gz')as t:
+            for e in t:
+             if not e.isfile():continue
+             assert e.name in('ui/PGN-Horizon','LINUX-UI-BUILD.json'),e.name
+             p=Path('build-ci/PGN-Horizon')if e.name.startswith('ui/')else Path(e.name);p.parent.mkdir(exist_ok=True)
+             with t.extractfile(e)as f,p.open('xb')as out:shutil.copyfileobj(f,out)
+          m=json.loads(Path('LINUX-UI-BUILD.json').read_bytes())
+          assert m['source']=='c724d01665dc264aa63ae522530645e9f12f76d3'and m['qualification']['affected_suite_pass']is True
+          assert m['qualification']['run']==43719958688 and m['qualification']['workflow_commit']=='8483c23171420726761e5006d6ed31d524a9f13b'
+          assert m['files'][0]['sha256']=='b3ff2eb112f7228d0fe22e54328cd8b2cc52245a9d8c97c5bd0e2328b869e9f0'
+          with Path('build-ci/PGN-Horizon').open('rb')as f:assert hashlib.file_digest(f,'sha256').hexdigest()==m['files'][0]['sha256']
+          Path('build-ci/PGN-Horizon').chmod(0o755)
+          print(json.dumps(dict(PASS=True,original_run=43719958688,original_affected_tests=4,artifact_sha256=expected,UI_sha256=m['files'][0]['sha256'],recompiled=False)))
+          PGN_FETCH
+      - name: Exercise the complete portable GUI and normal close
+        run: |
+          xvfb-run -a python3 - <<'PGN_COHORT'
+          """Exercise the new GUI inside the established Linux portable contract."""
+          from pathlib import Path
+          import hashlib,json,os,shutil,subprocess,sys,tarfile,time,urllib.request
+          
+          ROOT=Path.cwd();QA=ROOT/'linux-cohort-qa';QA.mkdir()
+          archive=QA/'baseline.tar.gz'
+          digest='699130c0c2eef92f9575de8ad816d7b81f9716f0b9c576844fab4d970ee90f23'
+          url='https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/'+digest+'.PGN-Horizon-testnet-Ubuntu-x86_64.tar.gz'
+          urllib.request.urlretrieve(url,archive)
+          sha=lambda p:hashlib.file_digest(Path(p).open('rb'),'sha256').hexdigest()
+          assert sha(archive)==digest,'Public baseline digest differs'
+          with tarfile.open(archive)as t:t.extractall(QA/'baseline',filter='data')
+          roots=list((QA/'baseline').rglob('components.json'));assert len(roots)==1
+          cohort=roots[0].parent;manifest=json.loads(roots[0].read_bytes())
+          prefix={'ui':'','core':'Core/','gpu':'EngineRuntime/','cpu':'EngineRuntime/cpu/'}
+          count=0
+          for c in manifest['components']:
+              for f in c['files']:
+                  p=cohort/(prefix[c['id']]+f['path'])
+                  assert p.stat().st_size==f['bytes']and sha(p)==f['sha256'],str(p)
+                  count+=1
+          ui=next(c for c in manifest['components']if c['id']=='ui')
+          new=ROOT/'build-ci/PGN-Horizon';exe=cohort/'PGN-Horizon'
+          shutil.copy2(new,exe);exe.chmod(0o755);ui['version']='2026.11.15.157'
+          f=next(f for f in ui['files']if f['path']=='PGN-Horizon');f.update(bytes=exe.stat().st_size,sha256=sha(exe))
+          roots[0].write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+          # The public tar deliberately records mtime=0. ZIP's DOS timestamps begin
+          # in 1980; normalize only the disposable fixture metadata, not payload bytes.
+          for item in cohort.rglob('*'):
+              if item.is_file()and item.stat().st_mtime<315532800:os.utime(item,(315532800,315532800))
+          sys.path.insert(0,str(ROOT/'tools'))
+          from build_component_bundle import build
+          context=dict(schema='PGN_COMPONENT_STAGE_CONTEXT_V1',network='testnet',genesis_hash='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314',platform='linux-x86_64',compatibility_set='pgn.epoch3.2026.11',minimum_sequence=1,installed=[],protected_roots=[str(cohort)])
+          cp=QA/'context.json';cp.write_text(json.dumps(context))
+          bundle=build(cohort,cp,QA/'private-compatibility.zip',1000,'2026.11.15.157','pgn.epoch3.2026.11')
+          assert bundle['privacy']['PASS']
+          # The immutable cohort is never a test profile. Launch an independent copy.
+          live=QA/'application';shutil.copytree(cohort,live)
+          app=live/'PGN-Horizon';evidence=QA/'evidence';evidence.mkdir()
+          env=dict(os.environ,QT_QPA_PLATFORM='xcb');env.pop('QT_PLUGIN_PATH',None);env.pop('LD_LIBRARY_PATH',None)
+          out=evidence/'stdout.log';err=evidence/'stderr.log';start=time.monotonic()
+          with out.open('wb')as stdout,err.open('wb')as stderr:
+              p=subprocess.Popen([str(app),str(live),'--testnet','--start-minimized'],cwd=live,env=env,stdout=stdout,stderr=stderr)
+              snapshot=None;shown=[];closed=False
+              try:
+                  for _ in range(20):
+                      if p.poll()is not None:break
+                      r=subprocess.run([str(app),'--inspect-owned',str(p.pid)],env=env,capture_output=True,timeout=8)
+                      if r.returncode==0:
+                          snapshot=json.loads(r.stdout);break
+                      time.sleep(1)
+                  assert snapshot is not None,'Packaged GUI failed to initialize: '+err.read_text(errors='replace')[-1200:]
+                  (evidence/'snapshot.json').write_text(json.dumps(snapshot,indent=2)+'\n')
+                  for section in ('Wallet','Social','SocialMiners'):
+                      r=subprocess.run([str(app),'--show-owned',str(p.pid),section],env=env,capture_output=True,timeout=12)
+                      assert r.returncode==0,(section,r.stderr.decode(errors='replace')[-500:])
+                      v=json.loads(r.stdout);(evidence/(section+'.json')).write_text(json.dumps(v,indent=2)+'\n');shown.append(section)
+                  for image in (live/'evidence').glob('owned-*.png'):shutil.copy2(image,evidence/image.name)
+              finally:
+                  if p.poll()is None:
+                      r=subprocess.run([str(app),'--close-owned',str(p.pid)],env=env,capture_output=True,timeout=12)
+                      closed=r.returncode==0
+                  p.wait(timeout=30)
+          result=dict(PASS=p.returncode==0 and closed and snapshot is not None,baseline_sha256=digest,baseline_files_verified=count,
+                      new_ui_sha256=sha(app),platform='Ubuntu system Qt6',private_cohort_validation=True,privacy=bundle['privacy']['PASS'],
+                      full_GUI=True,sections=shown,exit=p.returncode,graceful_close=closed,seconds=time.monotonic()-start,
+                      scope='GUI157 within established portable baseline Core20/host83; no GPU computation, no public-user acceptance, no wallet keys',
+                      stderr=err.read_text(errors='replace')[-2000:])
+          (QA/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result));assert result['PASS']
+          PGN_COHORT
+      - name: Preserve actual cohort evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui157-linux-cohort-recovery-${{ github.run_id }}
+          path: |
+            linux-cohort-qa/RESULT.json
+            linux-cohort-qa/evidence
+            LINUX-UI-BUILD.json
+          if-no-files-found: error
+          retention-days: 7
