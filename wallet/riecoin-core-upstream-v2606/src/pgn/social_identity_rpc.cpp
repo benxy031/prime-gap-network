@@ -181,7 +181,7 @@ namespace pgn::social::identity {
 void StartNativeAssociations(ChainstateManager& manager,const ArgsManager& args){
  if(!pgn::social::Enabled())return;
  try{service.store(std::make_shared<NativeIdentityService>(manager,args.GetDataDirNet()/"social",manager.GetConsensus().hashGenesisBlock));}
- catch(const std::exception& error){LogPrintf("Social association storage unavailable: %s\n",error.what());}
+ catch(const std::exception& error){LogWarning("Social association storage unavailable: %s",error.what());}
 }
 void StopNativeAssociations(){auto current=service.exchange({});if(current)current->Stop();}
 bool NativeAssociationsAvailable(){return bool(service.load());}
