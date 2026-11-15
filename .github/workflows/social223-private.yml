@@ -75,6 +75,7 @@ jobs:
           path: private-social223-delivery
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
       - name: Verify actual production-default absence with complete native profile
         if: steps.export_public.outcome == 'success'
         shell: pwsh
@@ -108,6 +109,7 @@ jobs:
           path: private-social223-delivery
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
       - name: Two real closed-network peers, BIP322, native CDB and ACL
         id: test
         if: steps.build_private.outcome == 'success'
@@ -133,3 +135,4 @@ jobs:
           path: private-social223-delivery
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true

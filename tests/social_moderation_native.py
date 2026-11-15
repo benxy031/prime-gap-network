@@ -2,7 +2,7 @@
 No UI or public governance claim. No user identity/credential is an input.
 """
 from pathlib import Path
-import argparse,base64,hashlib,json,secrets,socket,subprocess,time,urllib.request,urllib.error
+import argparse,base64,hashlib,json,os,secrets,socket,subprocess,time,urllib.request,urllib.error
 p=argparse.ArgumentParser();p.add_argument('--core',required=True);p.add_argument('--out',required=True);args=p.parse_args()
 core=Path(args.core).resolve();root=Path(args.out).resolve();root.mkdir(parents=True,exist_ok=False)
 nodes=[];checks=[];ports=set();g='';base_time=int(time.time()*1000)
@@ -28,7 +28,9 @@ class Node:
         self.name=name;self.path=root/name;self.path.mkdir();self.rpcport=port();self.peerport=port();self.process=None;self.cookie=None;self.wallet='private-'+name;self.log=(self.path/'process.log').open('ab');nodes.append(self);self.start();self.rpc('createwallet',[self.wallet]);self.address=self.rpc('getnewaddress',['','bech32'],True);self.script=self.rpc('getaddressinfo',[self.address],True)['scriptPubKey']
     def start(self,reload=False):
         cmd=[str(core),'-testnet','-datadir='+str(self.path),'-server=1','-listen=1','-bind=127.0.0.1','-port='+str(self.peerport),'-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-listenonion=0','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(self.rpcport),'-par=1','-dbcache=32','-maxconnections=8','-keypool=2','-printtoconsole=0']
+        cmd=[x.replace('-maxconnections=8','-maxconnections=16')for x in cmd]+['-natpmp=0']
         if reload:cmd+=['-wallet='+self.wallet]
+        if os.environ.get('PGN_SOCIAL_TEST_NET_TRACE')=='1':cmd+=['-debug=net']
         self.process=subprocess.Popen(cmd,cwd=self.path,stdout=self.log,stderr=subprocess.STDOUT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         def ready():
             if self.process.poll() is not None:
