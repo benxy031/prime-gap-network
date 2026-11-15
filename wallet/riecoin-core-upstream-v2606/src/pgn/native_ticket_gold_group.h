@@ -39,6 +39,7 @@ public:
     // Closure i belongs to Gold i. Rosettes belong to closure zero only.
     // This is ordering metadata, never a payment authorization.
     const std::vector<Integer>& LowerPrimes()const{return m_lower_primes;}
+    const std::vector<VerifiedNativeProfiledScience>& Golds()const{return m_golds;}
 };
 struct TicketGoldGroupCheck {
     TicketGoldGroupVerdict verdict;
@@ -82,7 +83,7 @@ inline TicketGoldGroupCheck VerifyNativeTicketGoldGroup(const CCoinsView& view,
     if(const auto error=CheckTicketGoldGroupEncoding(proofs,budget))return {*error,{}};
     const auto& first=proofs.front();
     const auto ranges=ReadChainRangePolicy(view,parent,history,budget.schedule.archive,budget.policy);
-    const auto policy=ReadChainSciencePolicy(view,parent,history,budget.schedule.archive,budget.policy);
+    const auto policy=ReadChainSciencePolicy(view,parent,history,budget.schedule.archive,budget.policy,&budget.schedule,&budget.signature);
     if(!ranges.policy||!policy.policy)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};
     const auto reserved=DeriveNativeCandidateReservation(view,parent,*ranges.policy,history,budget.schedule,first.request);
     if(!reserved.reservation)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};

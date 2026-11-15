@@ -74,6 +74,16 @@ jobs:
           $info = (Get-Item -LiteralPath 'build-native/bin/riecoind.exe').VersionInfo
           if ($info.FileDescription -notlike 'PGN Core*' -or $info.ProductName -ne 'PGN Core' -or $info.InternalName -ne 'pgn-core' -or $info.OriginalFilename -ne 'pgn-core.exe') { throw 'Native Windows project identity mismatch' }
           if ($info.LegalCopyright -notmatch 'Riecoin') { throw 'Upstream copyright was lost' }
+      - name: Preserve exact native link inputs for isolated follow-up tests
+        if: always()
+        run: python tools/collect_native_sdk.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-sdk-${{ matrix.os }}-${{ github.run_id }}
+          path: native-sdk
+          if-no-files-found: error
+          retention-days: 7
       - name: Collect the native program and its actual DLL closure
         if: always()
         run: |
@@ -141,6 +151,16 @@ jobs:
         run: |
           build-native/bin/pgn-native-project-identity-test
           build-native/bin/riecoind --version | grep '^PGN Core daemon version '
+      - name: Preserve exact native link inputs for isolated follow-up tests
+        if: always()
+        run: python tools/collect_native_sdk.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-sdk-${{ matrix.os }}-${{ github.run_id }}
+          path: native-sdk
+          if-no-files-found: error
+          retention-days: 7
       - name: Collect the native program and dependency description
         if: always()
         run: |

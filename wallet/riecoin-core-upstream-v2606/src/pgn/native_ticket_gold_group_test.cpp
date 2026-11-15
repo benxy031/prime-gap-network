@@ -1,7 +1,7 @@
 // Synthetic authenticated history and six REAL exact gap certificates.
 // This exercises the group verifier, not native block acceptance, full-range
 // completeness, fresh work/fork choice, currency issuance or network activation.
-#include "native_ticket_gold_group.h"
+#include "native_ticket_gold_money.h"
 #include "ticket_gold_witnesses_test.h"
 #include <pgn/native_report_commitment.h>
 #include <pgn/chain_monetary_policy.h>
@@ -108,7 +108,8 @@ int main(int argc,char** argv){try{
     CCoinsViewDB coins{{.path=path/"coins",.cache_bytes=1<<20,.memory_only=true,.wipe_data=false},{}};
     CCoinsViewCache view{&coins}; view.SetBestBlock(hashes.back()); view.StagePgnFactCommit({{},FactHead{chain,hashes.back()},{}});
     NativeRequestHistoryArchive history{path/"history",1<<20};
-    const ConfirmedRequestScanBudget scan{16,4,16384,1,request_budget};
+    // Actual node uses 4,000,000 total script bytes; the old fixture was limited to16KiB.
+    const ConfirmedRequestScanBudget scan{16,4,4000000,1,request_budget};
     const RequestReplayBudget replay{32,16,{16384,4096},scan};
     for (size_t height=0;height<blocks.size();++height)
         need(history.StoreBlock(view,parent,height,blocks[height],replay.archive)==RequestArchiveVerdict::Stored,"Whole native history was not stored");
@@ -222,12 +223,84 @@ int main(int argc,char** argv){try{
     const auto lower_of=[&](const auto& proof){return decodeCertifiedGap(proof.evidence.scientific_bytes,
         {context->proof_encoding,context->policy.scientific}).lower;};
     std::sort(proofs.begin(),proofs.end(),[&](const auto& a,const auto& b){return lower_of(a)<lower_of(b);});
+    const auto make_block=[&](const auto& supplied){
+        CMutableTransaction tx;tx.vin.resize(1);tx.vin[0].prevout.SetNull();
+        tx.vin[0].scriptSig=CScript{}<<int64_t(at.nHeight+1)<<OP_0;
+        for(const auto& proof:supplied){
+            const auto envelope=BuildCandidateBlockScienceEnvelope(proof,body_budget);
+            need(envelope.has_value(),"Fixture Gold envelope failed");tx.vout.push_back(CTxOut{0,*envelope});
+        }
+        CBlock block;block.hashPrevBlock=at.GetBlockHash();block.nTime=at.nTime+1;
+        block.vtx={MakeTransactionRef(tx)};block.hashMerkleRoot=BlockMerkleRoot(block);return block;
+    };
+    const auto actual=make_block(proofs);
+    const auto whole=VerifyNativeTicketGoldBlock(view,at,history,actual,body_budget);
+    if(one||failed)need(!whole.block&&whole.group_verdict==TicketGoldGroupVerdict::AuditsIncomplete,"Whole block bypassed audits");
     const auto checked=VerifyNativeTicketGoldGroup(view,at,history,proofs,body_budget);
     if(one||failed){
         need(!checked.group&&checked.verdict==TicketGoldGroupVerdict::AuditsIncomplete,"Missing or failed audits accepted");
         std::cout<<"{\"PASS\":true,\"missing_or_failed_audits_refused\":true,\"production_changed\":false}\n";return 0;
     }
     need(checked.group&&checked.group->GoldCount()==6,"Six exact Golds did not verify under one ticket");
+    if(!whole.block)std::cerr<<"Whole-body verdict="<<int(whole.verdict)<<" group="<<(whole.group_verdict?int(*whole.group_verdict):-1)<<'\n';
+    need(whole.block&&whole.block->Block()==actual.GetHash()&&whole.block->Group().GoldCount()==6,"Actual six-Gold block did not verify");
+    auto old_scan=body_budget;old_scan.schedule.scan.maximum_script_bytes=16384;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,actual,old_scan).block,"Original undersized scan fixture should be rejected");
+    CBlock invalid=actual;invalid.hashMerkleRoot.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,invalid,body_budget).block,"Wrong native Merkle root accepted");
+    invalid=actual;invalid.hashPrevBlock.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,invalid,body_budget).block,"Wrong parent accepted");
+    auto duplicate=proofs;duplicate[1]=duplicate[0];
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(duplicate),body_budget).block,"Whole block duplicated Gold");
+    auto reversed=proofs;std::swap(reversed[0],reversed[1]);
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(reversed),body_budget).block,"Whole block changed canonical order");
+    auto mixed=proofs;mixed.back().request.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(mixed),body_budget).block,"Whole block mixed tickets");
+    auto tiny=body_budget;tiny.maximum_payload_bytes=100;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,actual,tiny).block,"Whole block exceeded aggregate payload budget");
+    const auto actual_hash=actual.GetHash();CBlockIndex native_index;
+    native_index.phashBlock=&actual_hash;native_index.pprev=const_cast<CBlockIndex*>(&at);
+    native_index.nHeight=at.nHeight+1;native_index.nTx=actual.vtx.size();
+    const auto native_forward=PrepareNativeTicketGoldBlockForward(view,at,native_index,*whole.block);
+    need(native_forward.forward.Valid()&&native_forward.forward.changes.size()==6,"Actual body lost atomic Gold changes");
+    CBlockIndex changed_index;uint256 changed_hash=actual_hash;changed_hash.begin()[0]^=1;changed_index.phashBlock=&changed_hash;
+    changed_index.pprev=native_index.pprev;changed_index.nHeight=native_index.nHeight;changed_index.nTx=native_index.nTx;
+    bool changed_rejected=false;try{PrepareNativeTicketGoldBlockForward(view,at,changed_index,*whole.block);}catch(const std::logic_error&){changed_rejected=true;}
+    need(changed_rejected,"Prepared forward accepted changed actual block");
+    IssuanceSnapshot initial{at.GetBlockHash(),PGN_MAX_SUPPLY_ATOMIC,0,0,
+        IssuanceBudgetPartition{money.policy->Id(),money.policy->Definition().ordinary_cap,0,0,0,0},OrdinaryRewardPools{0,0}};
+    need(initial.Valid(),"Fixture initial monetary snapshot invalid");view.StagePgnIssuanceCommit({{},initial});
+    const auto money_plan=PrepareNativeTicketGoldMonetaryPlan(view,at,actual,*whole.block,*money.policy);
+    need(money_plan&&money_plan->GoldCount()==6&&money_plan->Gross()>0,"Six-Gold monetary quote missing");
+    need(!VerifyNativeTicketGoldCoinbase(*money_plan,actual,0),"Missing six-Gold payout was accepted");
+    CBlock paid=actual;CMutableTransaction paid_cb{*actual.vtx.front()};
+    paid_cb.vout.insert(paid_cb.vout.begin(),CTxOut{money_plan->WinnerSubsidy(),money_plan->Recipient()});
+    paid.vtx.front()=MakeTransactionRef(paid_cb);paid.hashMerkleRoot=BlockMerkleRoot(paid);
+    const auto paid_whole=VerifyNativeTicketGoldBlock(view,at,history,paid,body_budget);
+    need(paid_whole.block.has_value(),"Paid whole body lost exact Gold verification");
+    const auto paid_plan=PrepareNativeTicketGoldMonetaryPlan(view,at,paid,*paid_whole.block,*money.policy);
+    need(paid_plan&&VerifyNativeTicketGoldCoinbase(*paid_plan,paid,0),"Exact six-Gold payout rejected");
+    need(paid_plan->Gross()==money_plan->Gross()&&paid_plan->WinnerSubsidy()==money_plan->WinnerSubsidy(),"Payout changed grant quote");
+    CBlock overpaid=paid;CMutableTransaction bad_cb{*paid.vtx.front()};++bad_cb.vout.front().nValue;
+    overpaid.vtx.front()=MakeTransactionRef(bad_cb);overpaid.hashMerkleRoot=BlockMerkleRoot(overpaid);
+    const auto bad_whole=VerifyNativeTicketGoldBlock(view,at,history,overpaid,body_budget);
+    need(bad_whole.block.has_value(),"Payout fixture should retain valid science only");
+    const auto bad_plan=PrepareNativeTicketGoldMonetaryPlan(view,at,overpaid,*bad_whole.block,*money.policy);
+    need(bad_plan&&!VerifyNativeTicketGoldCoinbase(*bad_plan,overpaid,0),"One atomic unit overpaid was accepted");
+    const auto final_hash=paid.GetHash();CBlockIndex final_index;
+    final_index.phashBlock=&final_hash;final_index.pprev=const_cast<CBlockIndex*>(&at);
+    final_index.nHeight=at.nHeight+1;final_index.nTx=paid.vtx.size();
+    const auto final_facts=PrepareNativeTicketGoldBlockForward(view,at,final_index,*paid_whole.block);
+    const auto before_money=view.GetPgnIssuanceState();const auto before_head=view.GetPgnFactHead();
+    {CCoinsViewCache child{&view};child.SetBestBlock(final_hash);
+     child.StagePgnFactHistoryStep(final_facts);child.StagePgnIssuanceHistoryStep(paid_plan->Forward());child.Flush();}
+    need(view.GetPgnIssuanceState()==std::optional{paid_plan->Forward().forward.after}&&view.GetPgnFactHead()==std::optional{final_facts.forward.after},"Grouped native state mismatch");
+    for(const auto& change:final_facts.forward.changes)need(view.GetPgnFact(change.fact)==change.after,"Grouped fact was lost");
+    {CCoinsViewCache undo{&view};undo.SetBestBlock(at.GetBlockHash());
+     undo.StagePgnIssuanceHistoryStep({IssuanceDirection::Rewind,paid_plan->Forward().forward});
+     undo.StagePgnFactHistoryStep({FactDirection::Rewind,final_facts.forward});undo.Flush();}
+    need(view.GetPgnIssuanceState()==before_money&&view.GetPgnFactHead()==before_head,"Grouped monetary/fact undo differs");
+    for(const auto& change:final_facts.forward.changes)need(!view.GetPgnFact(change.fact),"Grouped fact survived undo");
     auto wrong=proofs;wrong[1]=wrong[0];
     need(VerifyNativeTicketGoldGroup(view,at,history,wrong,body_budget).verdict==TicketGoldGroupVerdict::DuplicateGold,"Duplicate accepted");
     wrong=proofs;std::swap(wrong[0],wrong[1]);
@@ -242,7 +315,7 @@ int main(int argc,char** argv){try{
     const auto forward=PrepareNativeTicketGoldGroupForward(view,at,proposed,*checked.group);
     need(forward.forward.Valid()&&forward.forward.changes.size()==6,"One atomic forward lost a Gold");
     for(const auto& change:forward.forward.changes)need(!view.GetPgnFact(change.fact),"Preparation mutated current state");
-    std::cout<<"{\"PASS\":true,\"exact_golds_in_one_ticket\":6,\"atomic_fact_changes\":6,"
+    std::cout<<"{\"PASS\":true,\"exact_golds_in_one_ticket\":6,\"atomic_fact_changes\":6,\"actual_whole_body_checked\":true,"
                "\"duplicates_order_bad_proof_bad_signature_refused\":true,\"production_changed\":false}\n";
     return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
