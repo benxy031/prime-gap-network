@@ -416,8 +416,11 @@ class MiningFlow:
                 audit['physical_cycle'] = recovered
         if physical is not None and not audit.get('physical_cycle'):
             ident = hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_VIEW_V1',request=audit['request_id'],slot=audit['slot'],attempt=audit['attempt']))).hexdigest()
-            owner = self.cycles.extra_audit_cycle(ident)
-            if owner:physical.completed_extra(owner, ident, block)
+            with self.cycles.lock:
+                owner = self.cycles.extra_audit_cycle(ident)
+                if owner:
+                    hot = {c['work']['request_id'] for c in self.cycles.value['cycles']}
+                    physical.reconcile_extra_completion(owner, ident, block, hot)
         if audit.get('physical_cycle'):
             self.physical_audits.committed(audit['physical_cycle'], position, audit, block) if self.physical_audits.snapshot(audit['physical_cycle']) is not None else None
             self.gpu.wake()

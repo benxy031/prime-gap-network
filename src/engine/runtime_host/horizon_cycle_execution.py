@@ -58,6 +58,25 @@ class CycleExecution:
         with self.lock:
             candidate=copy.deepcopy(self.extras);candidate.setdefault(cycle,{})[audit]=block;self.save_extras(candidate)
 
+    def reconcile_extra_completion(self, cycle, audit, block, hot):
+        """Refresh this derived live view; authoritative receipts stay archived.
+
+        The caller holds WorkCycleJournal.lock while taking hot and calling us.
+        This prevents a late callback from reinstating a retired cycle, and
+        serializes retirement with completion rather than increasing a limit.
+        """
+        hot = set(hot)
+        if len(hot) > 4 or any(not identity(key) for key in hot):
+            raise ValueError('Invalid authoritative live cycle set')
+        if not all(identity(value) for value in (cycle, audit, block)):
+            raise ValueError('Extra completion requires exact cycle/audit/block identities')
+        with self.lock:
+            candidate = {key: copy.deepcopy(value) for key, value in self.extras.items() if key in hot}
+            if cycle in hot:
+                candidate.setdefault(cycle, {})[audit] = block
+            self.save_extras(candidate)
+            return cycle in hot
+
     def completed_extras(self, cycle):
         with self.lock:return list(self.extras.get(cycle,{}))
 
