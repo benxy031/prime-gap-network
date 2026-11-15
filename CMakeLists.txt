@@ -1883,3 +1883,10 @@ if(Python3_Interpreter_FOUND)
  add_test(NAME audit-service-presentation COMMAND "${Python3_EXECUTABLE}" -B -I -X utf8 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_service_presentation.py")
  set_tests_properties(audit-service-presentation PROPERTIES TIMEOUT 20 LABELS "presentation;no-gpu")
 endif()
+
+# Exact scientific coverage is optional presentation, never a mining gate.
+target_sources(pgn-mining-ui PRIVATE src/ui/scientific_coverage_presentation.cpp)
+add_executable(pgn-scientific-coverage-presentation-test tests/scientific_coverage_presentation_test.cpp src/ui/scientific_coverage_presentation.cpp)
+target_include_directories(pgn-scientific-coverage-presentation-test PRIVATE src/ui)
+target_link_libraries(pgn-scientific-coverage-presentation-test PRIVATE Qt6::Core)
+add_test(NAME scientific-coverage-presentation COMMAND pgn-scientific-coverage-presentation-test)

@@ -1,0 +1,69 @@
+name: Scientific coverage UI and optional Core compatibility
+on:
+  push:
+    branches: [qualification/ui-coverage259]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-boost
+      - name: Pinned Python dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          .ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Python dependency installation failed" }
+      - name: Build actual UI and wallet translation units
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-coverage259 -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+          cmake --build build-coverage259 --target pgn-network-work-view-test pgn-scientific-coverage-presentation-test pgn-wallet-runtime --parallel 2
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-coverage259 --output-on-failure -V --timeout 120 -R '^(network-work-view|scientific-coverage-presentation)$'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui-coverage259-windows
+          path: build-coverage259/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+  ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Build actual UI and wallet translation units
+        run: |
+          cmake -S . -B build-coverage259 -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+          cmake --build build-coverage259 --target pgn-network-work-view-test pgn-scientific-coverage-presentation-test pgn-wallet-runtime --parallel 2
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-coverage259 --output-on-failure -V --timeout 120 -R '^(network-work-view|scientific-coverage-presentation)$'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui-coverage259-ubuntu
+          path: build-coverage259/Testing/Temporary/LastTest.log
+          if-no-files-found: warn

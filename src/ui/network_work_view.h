@@ -4,6 +4,7 @@
 #include "ui/audit_slot_presentation.h"
 #include "ui/compute_lease_presentation.h"
 #include "ui/public_report_name.h"
+#include "ui/scientific_coverage_presentation.h"
 #include "ui/ticket_atlas_view.h"
 #include <QWidget>
 #include <QTableWidget>
@@ -44,7 +45,7 @@ public:
 private:
     PageReader pageReader_;DetailReader detailReader_;QTableWidget* table_;QTreeWidget* details_;QLabel *status_,*summary_;QStackedWidget* statusSlot_{};QLineEdit* search_;QComboBox* filter_;QPushButton *previous_,*next_,*openBlock_,*copy_;QTimer timer_;QJsonObject snapshot_,selected_;QString selectedId_,block_;int offset_{},renderedOffset_{-1};bool busy_{};QHash<QString,QJsonObject> detailCache_;
     QStringList prefetch_;bool prefetchBusy_{};quint64 prefetchGeneration_{};QString seekRequest_;bool revealRequested_{};
-    TicketAtlasView* atlas_{};
+    TicketAtlasView* atlas_{};QLabel* coverage_{};
     QSplitter *content_{},*workspace_{};
     bool rowLayoutPending_{};
     void compactRows(){
@@ -140,7 +141,7 @@ private:
     }
     void refresh(){if(busy_)return;busy_=true;const int page=offset_;const QPointer<NetworkWorkView> guard(this);pageReader_(page,[guard,page](QJsonObject state,QString error){
         if(!guard)return;guard->busy_=false;if(page!=guard->offset_){guard->refresh();return;}if(!error.isEmpty()){if(guard->snapshot_.isEmpty())guard->timer_.setInterval(500);guard->presentStatus(error,true);return;}
-        guard->timer_.setInterval(5000);const bool changed=guard->snapshot_.value("bestblockhash")!=state.value("bestblockhash")||guard->renderedOffset_!=page;guard->snapshot_=state;guard->renderedOffset_=page;
+        guard->timer_.setInterval(5000);const bool changed=guard->snapshot_.value("bestblockhash")!=state.value("bestblockhash")||guard->renderedOffset_!=page;guard->snapshot_=state;guard->renderedOffset_=page;const auto coverage=scientificCoveragePresentation(state);guard->coverage_->setText(coverage.text);guard->coverage_->setToolTip(coverage.tooltip);
         if(changed)guard->render();guard->previous_->setEnabled(page>0);guard->next_->setEnabled(state.value("leases").toArray().size()==100);
         if(guard->selectedId_.isEmpty()&&guard->table_->rowCount()){guard->table_->selectRow(0);}else if(changed&&!guard->selectedId_.isEmpty())guard->inspect(guard->selectedId_);
         guard->prefetchVisible();
@@ -167,7 +168,7 @@ public:
 #endif
     }
     NetworkWorkView(PageReader pageReader,DetailReader details,QWidget* parent=nullptr,TicketAtlasView::Reader atlas={}):QWidget(parent),pageReader_(std::move(pageReader)),detailReader_(std::move(details)){
-        setObjectName("pgn-network-work-explorer");auto* box=new QVBoxLayout(this);box->setContentsMargins(18,14,18,14);auto* top=new QHBoxLayout;search_=new QLineEdit;search_->setPlaceholderText("Search this page by ticket, interval or owner script");filter_=new QComboBox;filter_->setObjectName("pgn-network-ticket-filter");filter_->addItems({"All work","Assigned","Report submitted","Audits passed"});auto* refreshButton=new QPushButton("Refresh work");top->addWidget(search_,1);top->addWidget(filter_);top->addWidget(refreshButton);status_=new QLabel("Connecting to verified network work…");summary_=new QLabel;summary_->setWordWrap(true);status_->hide();status_->setStyleSheet("color:#edc17c;font:12px 'Segoe UI';");summary_->setStyleSheet("font:12px 'Segoe UI';");summary_->setWordWrap(false);
+        setObjectName("pgn-network-work-explorer");auto* box=new QVBoxLayout(this);box->setContentsMargins(18,14,18,14);coverage_=new QLabel("Scientific coverage unavailable");coverage_->setObjectName("pgn-scientific-coverage");coverage_->setStyleSheet("font:11px 'Segoe UI';color:#bce3e7;");coverage_->setWordWrap(true);box->addWidget(coverage_);auto* top=new QHBoxLayout;search_=new QLineEdit;search_->setPlaceholderText("Search this page by ticket, interval or owner script");filter_=new QComboBox;filter_->setObjectName("pgn-network-ticket-filter");filter_->addItems({"All work","Assigned","Report submitted","Audits passed"});auto* refreshButton=new QPushButton("Refresh work");top->addWidget(search_,1);top->addWidget(filter_);top->addWidget(refreshButton);status_=new QLabel("Connecting to verified network work…");summary_=new QLabel;summary_->setWordWrap(true);status_->hide();status_->setStyleSheet("color:#edc17c;font:12px 'Segoe UI';");summary_->setStyleSheet("font:12px 'Segoe UI';");summary_->setWordWrap(false);
         workspace_=new QSplitter(Qt::Vertical);workspace_->setObjectName("pgn-network-map-split");workspace_->setChildrenCollapsible(false);workspace_->setHandleWidth(6);
         if(atlas){atlas_=new TicketAtlasView(std::move(atlas));atlas_->inspect=[this](const QString& id){revealRequested_=true;inspect(id);};atlas_->onViewportChanged=[this]{if(onAtlasProjectionChanged)onAtlasProjectionChanged();};workspace_->addWidget(atlas_);}
         content_=new QSplitter(Qt::Horizontal);content_->setObjectName("pgn-network-evidence-split");content_->setChildrenCollapsible(false);content_->setHandleWidth(6);workspace_->addWidget(content_);box->addWidget(workspace_,1);

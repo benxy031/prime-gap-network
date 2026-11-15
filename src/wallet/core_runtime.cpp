@@ -823,8 +823,27 @@ void CoreRuntime::readTicketAtlas(const QString& start,const QString& end,int bi
   verifyConfirmedSnapshotAnchor(view,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[view,consume=std::move(consume)](QString error){consume(error.isEmpty()?view:QJsonObject{},error);});
  });
 }
-void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QString)> consume){
+void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QString)> deliver){
  const auto owner=epoch();
+ // Optional read-only statistics must never prevent an otherwise valid work
+ // page from loading on an older Core. Every displayed summary is anchored
+ // to the exact same active branch as the page, never joined by height alone.
+ std::function<void(QJsonObject,QString)> consume=[this,owner,deliver=std::move(deliver)](QJsonObject state,QString error)mutable{
+  if(!error.isEmpty()){deliver({},error);return;}
+  rpc("getpgncoverage",{},[this,owner,state=std::move(state),deliver=std::move(deliver)](QJsonValue value,QString error)mutable{
+   if(!owner.matches(epoch())||!connected_||!processAlive()){
+    deliver({},"Core coverage connection changed");return;
+   }
+   const auto coverage=value.toObject();
+   if(error.isEmpty()&&coverage.value("genesis")==state.value("genesis")&&
+      coverage.value("bestblockhash")==state.value("bestblockhash")&&
+      coverage.value("height")==state.value("height"))state.insert("scientific_coverage",coverage);
+   else state.insert("scientific_coverage_error",error.isEmpty()?QString("Coverage and page have different branch anchors; retrying"):error);
+   verifyConfirmedSnapshotAnchor(state,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},
+    [this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},
+    [state,deliver=std::move(deliver)](QString error)mutable{deliver(error.isEmpty()?state:QJsonObject{},error);});
+  });
+ };
  readWorkView("tickets",offset,100,{},[this,owner,consume=std::move(consume)](QJsonObject view,QString error){
   if(!error.isEmpty()){consume({},error);return;}
   auto state=view.value("state").toObject();state.insert("reports",view.value("reports"));state.insert("audits",view.value("audits"));

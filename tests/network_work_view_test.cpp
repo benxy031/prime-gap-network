@@ -109,5 +109,23 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
   QDir().mkpath(captures);captureView.setStyleSheet("QMainWindow,QWidget{background:#010b10;color:#c9eee7;}"+HorizonWorkspaceControlStyle());
   for(int width:{1366,1920}){captureView.resize(width,900);for(int n=0;n<8;++n)app.processEvents();need(captureView.grab().save(QDir(captures).filePath(QString("network-work-%1.png").arg(width))),"real themed widget capture");}
  }
+
+ // A real widget displays global scientific coverage independently of this page.
+ QJsonObject covFrame=page;covFrame.insert("genesis",QString(64,'1'));covFrame.insert("bestblockhash",QString(64,'a'));covFrame.insert("height",200);
+ QJsonObject cov{{"genesis",QString(64,'1')},{"bestblockhash",QString(64,'a')},{"height",200},
+  {"origin","150000000000000000000"},{"range_width","200000000000000"},
+  {"contiguous_end","150000400000000000000"},{"first_missing_index","2"},
+  {"first_missing_end","150000600000000000000"},{"validated_ranges",3},
+  {"last_validated_end","150000800000000000000"}};
+ covFrame.insert("scientific_coverage",cov);
+ NetworkWorkView covered([&](int,NetworkWorkView::Result done){done(covFrame,{});},[](const QString&,NetworkWorkView::Result done){done({},"No additional details");});
+ covered.resize(1366,900);covered.show();app.processEvents();
+ auto* covLabel=covered.findChild<QLabel*>("pgn-scientific-coverage");need(covLabel&&covLabel->text().contains("First unvalidated range: 3"),"actual widget shows first scientific hole, not random ticket ID");
+ need(covLabel->toolTip().contains("150000400000000000000"),"exact range boundary available in tooltip");
+ QPushButton* covRefresh=nullptr;for(auto* button:covered.findChildren<QPushButton*>())if(button->text()=="Refresh work")covRefresh=button;
+ need(covRefresh,"coverage refresh action exists");covFrame.insert("bestblockhash",QString(64,'b'));covRefresh->click();app.processEvents();
+ need(covLabel->text()=="Scientific coverage unavailable","new branch never keeps stale coverage or invents zero");
+ covFrame.remove("scientific_coverage");covRefresh->click();app.processEvents();
+ need(covLabel->text()=="Scientific coverage unavailable","older Core without optional summary keeps an honest unavailable state");
  std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
  }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}
