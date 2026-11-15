@@ -25,9 +25,10 @@ class ComponentBundleTests(unittest.TestCase):
   self.assertFalse((self.root/'bundle.zip').exists())
  def test_core_update_brings_compatible_ui_without_cyclic_dependencies(self):
   core=self.code/'Core';core.mkdir();(core/'pgn-core.exe').write_bytes(pe())
+  image=pe();descriptor=dict(schema='PGN_CORE_BUNDLE_V1',deployment=dict(product='PGN Core',genesis_hash='5'*64,executable='pgn-core.exe',executable_sha256=hashlib.sha256(image).hexdigest()),files=[dict(path='pgn-core.exe',bytes=len(image),sha256=hashlib.sha256(image).hexdigest())]);(core/'core-template.json').write_text(json.dumps(descriptor))
   value=component.build(dict(release_version='2.0',network='testnet',published=False,components=[
    dict(id='ui',version='2.0',root=str(self.code),files=['PGN-Horizon.exe',self.marker]),
-   dict(id='core',version='2.0',root=str(core),files=['pgn-core.exe'])]))
+   dict(id='core',version='2.0',root=str(core),files=['pgn-core.exe','core-template.json'])]))
   (self.code/'components.json').write_text(json.dumps(value))
   archive=self.root/'bundle.zip';builder.build(self.code,self.context,archive,2,'2.0','qa.1')
   context,_=stage.context_from_bytes(self.context.read_bytes())

@@ -60,6 +60,49 @@ def validate_network_bootstrap(root, declared_paths, context):
                   'Network bootstrap belongs to a different network')
 
 
+
+def validate_core_deployment(root, declared_paths, context):
+    """Bind the startup Core descriptor to the very bytes being published."""
+    primary = primary_programs(context['platform'])['core']
+    descriptor = 'Core/core-template.json'
+    if primary not in declared_paths and descriptor not in declared_paths:
+        return
+    stage.require(descriptor in declared_paths, 'Core requires its core-template.json')
+    bundle = stage._json(stage._read_plain(root/descriptor, 32768))
+    deployment = bundle.get('deployment', {})
+    stage.require(bundle.get('schema') == 'PGN_CORE_BUNDLE_V1'
+                  and deployment.get('product') == 'PGN Core'
+                  and deployment.get('genesis_hash') == context['genesis_hash']
+                  and deployment.get('executable') == Path(primary).name,
+                  'Core template executable or network differs from the cohort')
+    stage.require(not any(k in deployment for k in (
+        'wallet','data_directory','approved_data_directory','create_wallet','rpc_user','rpc_password')),
+        'Core portable descriptor contains user settings')
+    records = bundle.get('files')
+    stage.require(type(records) is list and 1 <= len(records) <= 64, 'Core bounded file manifest required')
+    seen = set()
+    for entry in records:
+        name = entry.get('path', '')
+        stage.require(type(name) is str and name not in ('', '.', '..', 'core-template.json')
+                      and Path(name).name == name and '/' not in name and chr(92) not in name
+                      and ':' not in name and name.casefold() not in seen,
+                      'Core descriptor file name is invalid or repeated')
+        seen.add(name.casefold())
+        path = stage._plain_chain(root/'Core'/name)
+        size = entry.get('bytes')
+        stage.require('Core/'+name in declared_paths and type(size) is int
+                      and 0 < size <= 134217728 and path.stat().st_size == size,
+                      'Core descriptor file size differs')
+        with path.open('rb') as stream:
+            actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+        stage.require(actual == entry.get('sha256'), 'Core descriptor fingerprint differs')
+        if name == deployment['executable']:
+            stage.require(actual == deployment.get('executable_sha256'),
+                          'Core startup fingerprint differs from its executable')
+    expected = {p[5:].casefold() for p in declared_paths if p.startswith('Core/') and p != descriptor}
+    stage.require(seen == expected, 'Core descriptor does not cover the complete Core component')
+
+
 def build(cohort, context_path, output, sequence, release_version, abi):
     root = stage._plain_chain(cohort)
     context, context_hash = stage.read_context(context_path)
@@ -114,6 +157,7 @@ def build(cohort, context_path, output, sequence, release_version, abi):
     actual_files = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}
     stage.require(actual_files == {str(p.relative_to(root)).replace('\\','/') for p in sources.values()} | set(omitted) | {'components.json'},
                   'Cohort contains undeclared files')
+    validate_core_deployment(root, actual_files, context)
     validate_update_deployment(root, actual_files, context, abi)
     validate_network_bootstrap(root, actual_files, context)
     manifest = dict(schema='PGN_COMPONENT_STAGE_BUNDLE_V1',bundle_id='pgn.'+str(sequence),
