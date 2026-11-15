@@ -162,6 +162,17 @@ inline std::optional<AuditSettlementPage> ApplyAuditSettlementPage(
     return ApplyAuditSettlementPageLazy([&]{return &ledger;},definition,maximum_outputs,
                                       cutoff_golds,cutoff_height,cutoff,after);
 }
+// A physical block can contain multiple Golds. Authenticate the retained
+// crossing transition, rather than assuming a block exists at every ordinal.
+// This predicate gives no mint authority and preserves the exact cutoff ordinal.
+inline bool NativeAuditCutoffCrossed(const IssuanceCommit& step,
+    const CBlockIndex& index,uint64_t cutoff_golds){
+    return cutoff_golds&&index.phashBlock&&index.pprev&&step.Valid()&&step.before&&
+        step.before->epochs&&step.after.epochs&&
+        step.before->tip==index.pprev->GetBlockHash()&&step.after.tip==index.GetBlockHash()&&
+        step.before->epochs->golds<cutoff_golds&&cutoff_golds<=step.after.epochs->golds&&
+        step.after.epochs->last_gold_height==index.nHeight;
+}
 inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
     const CCoinsView& view,const CBlockIndex& parent,const ChainMonetaryPolicy& policy,
     const NativeAuditSettlementContext* context,IssuanceSnapshot& after){
@@ -180,7 +191,7 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
         const auto* anchor=parent.GetAncestor(active->height);
         if(!anchor||anchor->GetBlockHash()!=active->cutoff)return {};
         const auto retained=view.GetPgnIssuanceForward(active->cutoff);
-        if(!retained||!retained->Valid()||!retained->after.epochs||retained->after.epochs->golds!=active->golds)return {};
+        if(!retained||!NativeAuditCutoffCrossed(*retained,*anchor,active->golds))return {};
     }
     uint64_t cutoff_golds=before->epochs->golds/policy.Epochs()->audit_period*policy.Epochs()->audit_period;
     int32_t cutoff_height{};uint256 cutoff;
@@ -189,7 +200,7 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
             const auto step=view.GetPgnIssuanceForward(index->GetBlockHash());
             if(!step||!step->Valid()||!step->before||!step->after.epochs||!step->before->epochs||
                step->after.tip!=index->GetBlockHash()||step->before->tip!=index->pprev->GetBlockHash())return {};
-            if(step->after.epochs->golds==cutoff_golds&&step->before->epochs->golds<cutoff_golds){cutoff_height=index->nHeight;cutoff=index->GetBlockHash();break;}
+            if(NativeAuditCutoffCrossed(*step,*index,cutoff_golds)){cutoff_height=index->nHeight;cutoff=index->GetBlockHash();break;}
         }
         if(!cutoff_height)return {};
     }

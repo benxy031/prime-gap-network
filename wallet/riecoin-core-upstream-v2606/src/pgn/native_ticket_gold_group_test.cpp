@@ -304,6 +304,57 @@ int main(int argc,char** argv){try{
      undo.StagePgnFactHistoryStep({FactDirection::Rewind,final_facts.forward});undo.Flush();}
     need(view.GetPgnIssuanceState()==before_money&&view.GetPgnFactHead()==before_head,"Grouped monetary/fact undo differs");
     for(const auto& change:final_facts.forward.changes)need(!view.GetPgnFact(change.fact),"Grouped fact survived undo");
+    { // Boundary authentication only: these snapshots isolate ordinal crossing;
+    // the separate financial test below supplies its exact accrued audit reserve.
+    auto boundary_before=initial;boundary_before.epochs=GoldEpochBalances{1007,at.nHeight-1,0,0,0,0};
+    auto boundary_after=boundary_before;boundary_after.tip=final_hash;
+    boundary_after.epochs->golds=1013;boundary_after.epochs->last_gold_height=final_index.nHeight;
+    IssuanceCommit crossing{boundary_before,boundary_after};
+    need(crossing.Valid()&&NativeAuditCutoffCrossed(crossing,final_index,1008),"Multi-Gold cutoff crossing was lost");
+    need(!NativeAuditCutoffCrossed(crossing,final_index,1007)&&!NativeAuditCutoffCrossed(crossing,final_index,1014),"Uncrossed cutoff accepted");
+    auto corrupt_crossing=crossing;corrupt_crossing.after.tip.begin()[0]^=1;
+    need(!NativeAuditCutoffCrossed(corrupt_crossing,final_index,1008),"Wrong cutoff block accepted");
+    corrupt_crossing=crossing;corrupt_crossing.before->tip.begin()[0]^=1;
+    need(!NativeAuditCutoffCrossed(corrupt_crossing,final_index,1008),"Wrong cutoff parent accepted");
+    corrupt_crossing=crossing;corrupt_crossing.after.epochs->last_gold_height--;
+    need(!NativeAuditCutoffCrossed(corrupt_crossing,final_index,1008),"Non-Gold cutoff anchor accepted");
+    auto exact_crossing=crossing;exact_crossing.after.epochs->golds=1008;
+    need(NativeAuditCutoffCrossed(exact_crossing,final_index,1008),"Legacy single-Gold crossing changed");
+    corrupt_crossing=crossing;corrupt_crossing.before->epochs->golds=1013;
+    need(!NativeAuditCutoffCrossed(corrupt_crossing,final_index,1008),"Cutoff reused by a later block");
+    const auto audited=ReadNativeAuditLedger(view,at,history,policy_budget,schedule,{128,4096});
+    need(audited.has_value(),"Authenticated audit ledger missing for settlement test");
+    const GoldEpochDefinition epochs{1008000,1008,10*unit,3*unit,2*unit,unit,12600*unit,unit,32U*65536U};
+    const auto accrued=QuoteCumulativeAuditAccrual(epochs,1013),reserved=QuoteCumulativeAuditAccrual(epochs,1008);
+    need(accrued&&reserved&&*accrued>*reserved,"Crossing reserve fixture invalid");
+    auto settled=initial;settled.promised=*accrued;settled.partition->ordinary_promised=*accrued;
+    settled.pools->audit=*accrued;settled.epochs=GoldEpochBalances{1013,at.nHeight,0,0,0,0};
+    settled.audit_settlement=AuditSettlementBalances{};need(settled.Valid(),"Settlement fixture invalid");
+    const auto unsettled=settled;
+    const auto page=ApplyAuditSettlementPage(*audited,epochs,128,1008,at.nHeight,at.GetBlockHash(),settled);
+    need(page&&page->count==2&&page->paid==*reserved&&settled.minted==*reserved&&
+         settled.promised==*accrued-*reserved&&settled.pools->audit==*accrued-*reserved&&
+         settled.audit_settlement->completed_golds==1008&&!settled.audit_settlement->active,
+         "Crossing settlement changed pot, lost tasks or paid unreserved Golds");
+    const auto once=settled;const auto repeat=ApplyAuditSettlementPage(*audited,epochs,128,1008,at.nHeight,at.GetBlockHash(),settled);
+    need(repeat&&repeat->paid==0&&repeat->count==0&&settled==once,"Audit pot paid twice after multi-Gold crossing");
+    auto partial=unsettled;const auto first_page=ApplyAuditSettlementPage(*audited,epochs,1,1008,at.nHeight,at.GetBlockHash(),partial);
+    need(first_page&&first_page->count==1&&partial.audit_settlement->active,"Partial payout fixture missing");
+    auto altered=*audited;bool changed_task=false;
+    for(auto& [id,r]:altered){for(auto& job:r.jobs)if(job&&job->stage==NativeAuditJob::Passed){job->passed_height=0;changed_task=true;break;}if(changed_task)break;}
+    need(changed_task,"No authenticated passed audit for changed-root negative test");
+    const auto partial_before=partial;
+    need(!ApplyAuditSettlementPage(altered,epochs,1,1008,at.nHeight,at.GetBlockHash(),partial)&&partial==partial_before,
+         "Changed payout task set caused a partial mutation");
+    CBlock fee_block=paid;CMutableTransaction fee_cb{*paid.vtx.front()};const CAmount native_fees=1530;
+    fee_cb.vout.front().nValue+=native_fees;fee_block.vtx.front()=MakeTransactionRef(fee_cb);fee_block.hashMerkleRoot=BlockMerkleRoot(fee_block);
+    const auto fee_science=VerifyNativeTicketGoldBlock(view,at,history,fee_block,body_budget);
+    need(fee_science.block.has_value(),"Fee block lost verified science");
+    const auto fee_plan=PrepareNativeTicketGoldMonetaryPlan(view,at,fee_block,*fee_science.block,*money.policy);
+    need(fee_plan&&VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,native_fees)&&
+         !VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,native_fees-1)&&
+         !VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,-1),"Fees were multiplied per Gold or overpayment accepted");
+    }
     auto wrong=proofs;wrong[1]=wrong[0];
     need(VerifyNativeTicketGoldGroup(view,at,history,wrong,body_budget).verdict==TicketGoldGroupVerdict::DuplicateGold,"Duplicate accepted");
     wrong=proofs;std::swap(wrong[0],wrong[1]);

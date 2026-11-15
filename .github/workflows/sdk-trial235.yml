@@ -1,0 +1,28 @@
+name: Exact native SDK fixture trial
+on:
+  push:
+    branches: [qualification/ticket-settlement235]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native-fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install matching native development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
+      - name: Link changed fixture against verified exact native libraries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/sdk_trial235.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-sdk-trial235
+          path: SDK-TRIAL.json
+          if-no-files-found: warn
+          retention-days: 7
