@@ -8,6 +8,10 @@ jobs:
   actual_grouped:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    # GitHub restricts downloading a draft release asset to content writers.
+    # The token is exposed only to the bounded fixture-download step below.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -52,3 +56,4 @@ jobs:
             evidence249
             build-native/bin/pgn-core-qualified249
           if-no-files-found: warn
+
