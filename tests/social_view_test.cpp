@@ -179,7 +179,7 @@ int main(int argc,char** argv){
     {const ui::MeritTier tiers[]{ui::MeritTier::Gold,ui::MeritTier::Silver,ui::MeritTier::Bronze,ui::MeritTier::NearMiss};
      for(int col=6;col<11;++col){const auto* h=table->horizontalHeaderItem(col);check(!h->icon().isNull()&&!h->data(Qt::AccessibleTextRole).toString().isEmpty()&&!h->toolTip().isEmpty(),"Tier glyph lacks icon/accessibility");for(int row=0;row<table->rowCount();++row)check(table->item(row,col)->text()==QString::fromUtf8("—"),"Tier counter fabricated from absent data");}
      for(int col=7;col<11;++col)check(table->horizontalHeaderItem(col)->icon().pixmap(24,28).toImage()==ui::gapRosetteIcon(tiers[col-7],false).pixmap(24,28).toImage(),"Existing Mining artwork changed");
-     check(table->horizontalHeaderItem(6)->toolTip()==QString::fromUtf8("Quadrigantium · merit 40"),"Q lost its approved meaning");}
+     check(table->horizontalHeaderItem(6)->toolTip()==QString::fromUtf8("Quadrigantium — merit 40"),"Q lost its approved meaning");}
     check(!table->showGrid(),"Leaderboard still draws a vertical grid");
     for(int row=0;row<table->rowCount();++row)check(table->rowHeight(row)==36,"Leaderboard rows exceed the36px density contract");
     for(int n=0;n<5;++n)check(table->horizontalHeader()->logicalIndex(n+1)==6+n&&table->columnWidth(6+n)==44,"Awards are not44px immediately after Miner");
