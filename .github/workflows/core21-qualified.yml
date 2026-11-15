@@ -37,6 +37,7 @@ jobs:
           build-native/bin/pgn-native-audit-settlement-test "$PWD/build-native/guard249" | tee evidence21/native-guards.jsonl
           python3 tests/native_grouped249_actual.py --core build-native/bin/pgn-core --history public-history249.blocks --legacy --receipt evidence21/actual.json
       - name: Collect exact production Core
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p core21
           cp build-native/bin/pgn-core core21/pgn-core
@@ -47,6 +48,7 @@ jobs:
           Path('evidence21/CORE-BUILD.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'],version='2026.11.15.21',activation=4096,files=[dict(path=p.name,bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest())]),indent=2)+'\n')
           PY
       - name: Preserve production candidate and test receipts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: core21-ubuntu-${{ github.run_id }}
@@ -103,6 +105,7 @@ jobs:
           build-native/bin/pgn-native-audit-settlement-test.exe "$PWD/build-native/guards249" | tee evidence21/guards.jsonl
           "$QUAL_PYTHON" tests/native_grouped249_actual.py --core build-native/bin/pgn-core.exe --history public-history249.blocks --legacy --receipt evidence21/windows-actual.json
       - name: Collect exact Core and imported non-system DLLs
+        if: ${{ !cancelled() }}
         run: |
           export PGN_NATIVE_SDK="$(cygpath -m "$MINGW_PREFIX")"
           "$QUAL_PYTHON" - <<'PY'
@@ -128,6 +131,7 @@ jobs:
           Path('evidence21/CORE-BUILD.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'],version='2026.11.15.21',activation=4096,files=files),indent=2)+'\n')
           PY
       - name: Preserve production candidate and test receipts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: core21-windows-${{ github.run_id }}
