@@ -126,6 +126,11 @@ class RecoveryRequired(stage.StageError):
     pass
 
 
+class MissingCohortFile(stage.StageError):
+    """A declared code file is absent; this does not identify who removed it."""
+    pass
+
+
 def _digest(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream,'sha256').hexdigest()
@@ -144,7 +149,7 @@ def _write(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def inventory(root):
+def inventory(root, *, missing=None):
     """Verify the complete code-only cohort, including unselected components."""
     root=stage._plain_chain(root)
     raw=stage._read_plain(root/'components.json',stage.MAX_MANIFEST)
@@ -159,20 +164,26 @@ def inventory(root):
         rows=component['files'];stage.require(type(rows)is list and 1<=len(rows)<=stage.MAX_ENTRIES,'Unbounded cohort inventory')
         for row in rows:
             relative=COMPONENT_PREFIX[identity]+row['path'];stage._code_path('payload/'+identity+'/'+relative,identity)
+            stage.require(type(row['bytes'])is int and 0<=row['bytes']<=stage.MAX_FILE and type(row['sha256'])is str and stage.DIGEST.fullmatch(row['sha256']),'Invalid cohort file identity')
             stage.require(relative.casefold()not in names,'Overlapping cohort path')
             path=stage._plain_chain(root/relative)
-            stage.require(path.is_relative_to(root)and path.is_file()and path.stat().st_size==row['bytes']<=stage.MAX_FILE,'Cohort file size/path differs')
-            stage.require(_digest(path)==row['sha256'],'Cohort file fingerprint differs')
+            if not path.exists():
+                message=f'Cohort code file missing: {identity}: {relative}. Launch a complete verified package to repair this installation; user data must be retained.'
+                if missing is None:raise MissingCohortFile(message)
+                missing.append(relative.casefold())
+            else:
+                stage.require(path.is_relative_to(root)and path.is_file()and path.stat().st_size==row['bytes']<=stage.MAX_FILE,f'Cohort file size/path differs: {identity}: {relative}')
+                stage.require(_digest(path)==row['sha256'],f'Cohort file fingerprint differs: {identity}: {relative}')
             names[relative.casefold()]=dict(relative=relative,file=path,component=identity,bytes=row['bytes'],sha256=row['sha256'])
             total+=row['bytes'];stage.require(total<=stage.MAX_CACHE,'Cohort byte budget exceeded')
         stage.require(primary[identity].casefold()in names,'Cohort primary is absent')
-        if value.get('platform')=='linux-x86_64':
+        if value.get('platform')=='linux-x86_64' and primary[identity].casefold()not in (missing or ()):
             stage.require(names[primary[identity].casefold()]['file'].stat().st_mode&0o100,'Linux primary is not executable')
     actual=set()
     for base,dirs,files in os.walk(root,followlinks=False):
         for name in dirs+files:stage.require(not stage._linked(Path(base)/name),'Linked cohort entry')
         for name in files:actual.add((Path(base)/name).relative_to(root).as_posix().casefold())
-    stage.require(actual==set(names)|{'components.json'},'Undeclared cohort files')
+    stage.require(actual==(set(names)-set(missing or ()))|{'components.json'},'Undeclared cohort files')
     return value,names,stage.sha(raw),total
 
 
@@ -180,6 +191,7 @@ class CohortStore:
     def __init__(self,root,context,context_sha256,*,running_base=None):
         self.root=stage._plain_chain(root);self.context=context;self.context_sha256=context_sha256
         self.running_base=stage._plain_chain(running_base)if running_base is not None else None
+        self.repairable_selected=None
         self.commit_warning=''
         self.retention=dict(removed=0,in_use=0)
         stage.require(stage._read_plain(self.root/'.owner',128)==MARKER,'Not an owned installation store')
@@ -321,6 +333,7 @@ class CohortStore:
         return result
 
     def current(self):
+        self.repairable_selected=None
         value=stage._json(stage._read_plain(self.root/'current.json',stage.MAX_MANIFEST))
         stage.require(value.get('schema')=='PGN_ACTIVE_COHORT_V1'and value.get('network')==self.context['network']and value.get('genesis_hash')==self.context['genesis_hash'],'Selector context differs')
         stage.require(type(value.get('cohort'))is str and Path(value['cohort']).is_absolute()and
@@ -337,7 +350,26 @@ class CohortStore:
             versions={c['id']:c['version']for c in actual['components']}
             stage.require(versions=={c['id']:c['version']for c in self.context['installed']},'Running base differs from installed component context')
             return value
-        _,_,digest,_=inventory(selected)
+        try:
+            _,_,digest,_=inventory(selected)
+        except MissingCohortFile:
+            # A complete independently launched package can replace missing
+            # selected code. Never use the incomplete cohort as a copy source,
+            # execute it, or forgive changed bytes/metadata. Adoption still
+            # requires native ownership and a resolved activation transaction.
+            if self.running_base is None or self.running_base==selected:raise
+            actual,_,_,_=inventory(self.running_base)
+            stage.require(actual['network']==self.context['network']and actual.get('platform','windows-x86_64')==self.context['platform'],'Running base network or platform differs')
+            versions={c['id']:c['version']for c in actual['components']}
+            stage.require(versions=={c['id']:c['version']for c in self.context['installed']},'Running base differs from installed component context')
+            missing=[];former,_,digest,_=inventory(selected,missing=missing)
+            stage.require(former['network']==self.context['network']and former.get('platform','windows-x86_64')==self.context['platform'],'Selected cohort network or platform differs')
+            for component in former['components']:
+                version=versions.get(component['id'])
+                stage.require(version is not None and not stage._older(version,component['version']),'Running base would downgrade a selected component')
+            stage.require(any(stage._older(c['version'],versions[c['id']])for c in former['components']),
+                'Missing selected code requires a complete strictly newer running package')
+            self.repairable_selected=selected
         stage.require(digest==value['inventory_sha256'],'Selected cohort changed')
         return value
 
@@ -405,7 +437,7 @@ class CohortStore:
                 stage.require(actual_versions.get(installed['id'])==installed['version'],'Installed versions changed since the update request')
             if base!=Path(before['cohort']):
                 if stage._plain_chain(Path(before['cohort'])/'components.json').exists():
-                    selected_inventory=inventory(Path(before['cohort']))[0]
+                    selected_inventory=inventory(Path(before['cohort']),missing=[] if self.repairable_selected==Path(before['cohort']) else None)[0]
                     for component in selected_inventory['components']:
                         version=actual_versions.get(component['id'])
                         stage.require(version is not None and not stage._older(version,component['version']),'Running base would downgrade a selected component')

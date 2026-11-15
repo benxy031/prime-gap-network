@@ -121,5 +121,43 @@ class RunningBaseTests(unittest.TestCase):
    (self.base/PRIMARY['core']).write_bytes(b'CORRUPT')
    with self.assertRaisesRegex(ValueError,'size/path differs|fingerprint'):install.CohortStore(self.store.root,self.context,self.context_sha,running_base=self.fresh)
   finally:(self.base/PRIMARY['core']).write_bytes(before)
+ def test_missing_selected_gpu_can_be_repaired_from_complete_owned_package(self):
+  path=self.base/PRIMARY['gpu'];raw=path.read_bytes();path.unlink()
+  try:
+   with self.assertRaisesRegex(install.MissingCohortFile,'gpu: EngineRuntime/network/'):
+    install.CohortStore(self.store.root,self.context,self.context_sha)
+   self.store=install.CohortStore(self.store.root,self.context,self.context_sha,running_base=self.fresh)
+   before=self.store.current();candidate=self.prepare();self.assert_new_core(candidate)
+   self.assertEqual(self.store.current(),before)
+   with self.assertRaisesRegex(ValueError,'requires owned installation'):
+    self.store.activate(candidate,lambda:self.fail('must not drain'),lambda p:True,lambda *a:None)
+   seen=[];candidate=self.prepare(lambda p:seen.append(p));self.assertEqual(seen,[self.fresh])
+   restores=[];self.assertFalse(self.store.activate(candidate,lambda:True,lambda p:False,lambda *a:restores.append(a)))
+   self.assertEqual(restores,[(self.fresh,Path(candidate['cohort']))]);self.assertEqual(self.store.current()['cohort'],str(self.fresh))
+  finally:path.write_bytes(raw)
+ def test_missing_file_never_hides_changed_present_code(self):
+  gpu=self.base/PRIMARY['gpu'];gpu_raw=gpu.read_bytes();gpu.unlink()
+  cpu=self.base/PRIMARY['cpu'];cpu_raw=cpu.read_bytes();cpu.write_bytes(b'CORRUPT')
+  try:
+   with self.assertRaisesRegex(ValueError,'size/path differs: cpu'):
+    install.CohortStore(self.store.root,self.context,self.context_sha,running_base=self.fresh)
+  finally:gpu.write_bytes(gpu_raw);cpu.write_bytes(cpu_raw)
+ def test_missing_selected_code_never_bypasses_interrupted_transaction(self):
+  path=self.base/PRIMARY['gpu'];raw=path.read_bytes();before=self.store.current();path.unlink()
+  try:
+   self.store=install.CohortStore(self.store.root,self.context,self.context_sha,running_base=self.fresh)
+   journal=self.store.root/'transaction.json';frame=dict(schema='PGN_COHORT_ACTIVATION_V1',state='starting_candidate',before=before)
+   install._write(journal,frame)
+   with self.assertRaises(install.RecoveryRequired):self.prepare(lambda p:self.fail('must not adopt'))
+   self.assertEqual(json.loads(journal.read_bytes()),frame)
+  finally:path.write_bytes(raw)
+ def test_missing_selected_code_requires_strictly_newer_package(self):
+  value=json.loads((self.fresh/'components.json').read_bytes());next(c for c in value['components']if c['id']=='core')['version']='1.0.0';install._write(self.fresh/'components.json',value)
+  next(c for c in self.context['installed']if c['id']=='core')['version']='1.0.0';self.refresh_context()
+  path=self.base/PRIMARY['gpu'];raw=path.read_bytes();path.unlink()
+  try:
+   with self.assertRaisesRegex(ValueError,'strictly newer'):
+    install.CohortStore(self.store.root,self.context,self.context_sha,running_base=self.fresh)
+  finally:path.write_bytes(raw)
 
 if __name__=='__main__':unittest.main()

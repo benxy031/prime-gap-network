@@ -17,7 +17,7 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.14.27'
+VERSION='2026.11.15.28'
 
 
 def maintain_installation(cache,context,context_sha,result):

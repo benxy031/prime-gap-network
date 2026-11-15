@@ -342,10 +342,12 @@ int main(int argc,char** argv) {
  pgn::app::HorizonUiLease scopeLease(pgn::app::mutableDataRoot(root)+"/.horizon-ui-"+pgn::wallet::installedCoreGenesis(root)+".lock");
  if(!scopeLease.error().isEmpty()){std::cerr<<scopeLease.error().toStdString()<<"\n";return 8;}
  if(!scopeLease.owned()){
+  if(updateSelection.preferRunning||!updateSelection.error.isEmpty())QMessageBox::information(nullptr,"Horizon is already running","A Horizon session is already running for these user data. This launch will activate that session. Close it normally, then launch this complete package again to use its components.");
   QLocalSocket existing;existing.connectToServer(scopeName);
   if(!existing.waitForConnected(1500)){std::cerr<<"The existing Horizon session could not be contacted\n";return 8;}
   existing.write(startupArguments.contains("--start-minimized")?"running\n":"activate\n");existing.flush();if(existing.bytesToWrite())existing.waitForBytesWritten(1000);return 0;
  }
+ if(!updateSelection.error.isEmpty())QMessageBox::warning(nullptr,"Selected update needs repair",updateSelection.error+"\nThe selected update was not launched. This package will continue from its own code.");
  #ifndef Q_OS_WIN
  QLocalServer::removeServer(scopeName); // Safe only after exclusive ownership.
  #endif

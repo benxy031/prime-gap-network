@@ -41,11 +41,24 @@ int main(int argc,char** argv){
  running("3.0",{});check(select().executable.isEmpty()&&select().error.isEmpty());
  running("1.0",{});check(select().executable==candidate+"/"+primary);
  running("2.0",{});check(select().executable==candidate+"/"+primary);
- manifest.insert("components",QJsonArray{component,QJsonObject{{"id","core"},{"version","2026.11.10.12"},{"files",QJsonArray{}}}});
+ QDir().mkpath(candidate+"/Core");write(candidate+"/Core/pgn-core.exe",exe);
+ const QJsonObject coreFile{{"path","pgn-core.exe"},{"bytes",exe.size()},{"sha256",sha(exe)}};
+ const QJsonObject selectedCore{{"id","core"},{"version","2026.11.10.12"},{"files",QJsonArray{coreFile}}};
+ manifest.insert("components",QJsonArray{component,selectedCore});
  raw=QJsonDocument(manifest).toJson(QJsonDocument::Compact);write(candidate+"/components.json",raw);pointer.insert("inventory_sha256",sha(raw));publish();
  running("2.0","2026.11.13.17");check(select().executable.isEmpty()&&select().error.isEmpty());
+ check(select().preferRunning);
  running("2.0","2026.11.9.9");check(select().executable==candidate+"/"+primary);
  running("1.0","2026.11.13.17");check(select().executable.isEmpty()); // Mixed matrices must not downgrade Core either.
  running("2.0","2026.11.13.17suffix");check(!select().error.isEmpty());
+ // UI integrity alone must never authorize a cohort with quarantined/missing
+ // GPU code. A newer complete package remains available for explicit repair.
+ running("1.0",{});QDir().mkpath(candidate+"/EngineRuntime/bin");
+ const QString helper="EngineRuntime/bin/pgn-gap-evidence.exe";write(candidate+"/"+helper,exe);
+ const QJsonObject gpuFile{{"path","bin/pgn-gap-evidence.exe"},{"bytes",exe.size()},{"sha256",sha(exe)}};
+ manifest.insert("components",QJsonArray{component,selectedCore,QJsonObject{{"id","gpu"},{"version","2.0"},{"files",QJsonArray{gpuFile}}}});
+ raw=QJsonDocument(manifest).toJson(QJsonDocument::Compact);write(candidate+"/components.json",raw);pointer.insert("inventory_sha256",sha(raw));publish();
+ check(!select().executable.isEmpty());QFile::remove(candidate+"/"+helper);
+ check(select().executable.isEmpty()&&select().error.contains(helper));
  std::cout<<"PASS "<<checks<<" update shortcut/selection integrity checks; inert files only\n";
 }
