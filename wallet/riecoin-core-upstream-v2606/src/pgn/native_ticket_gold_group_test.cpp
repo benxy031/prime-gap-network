@@ -1,7 +1,7 @@
 // Synthetic authenticated history and six REAL exact gap certificates.
 // This exercises the group verifier, not native block acceptance, full-range
 // completeness, fresh work/fork choice, currency issuance or network activation.
-#include "native_ticket_gold_group.h"
+#include "native_ticket_gold_block.h"
 #include "ticket_gold_witnesses_test.h"
 #include <pgn/native_report_commitment.h>
 #include <pgn/chain_monetary_policy.h>
@@ -222,12 +222,46 @@ int main(int argc,char** argv){try{
     const auto lower_of=[&](const auto& proof){return decodeCertifiedGap(proof.evidence.scientific_bytes,
         {context->proof_encoding,context->policy.scientific}).lower;};
     std::sort(proofs.begin(),proofs.end(),[&](const auto& a,const auto& b){return lower_of(a)<lower_of(b);});
+    const auto make_block=[&](const auto& supplied){
+        CMutableTransaction tx;tx.vin.resize(1);tx.vin[0].prevout.SetNull();
+        tx.vin[0].scriptSig=CScript{}<<int64_t(at.nHeight+1)<<OP_0;
+        for(const auto& proof:supplied){
+            const auto envelope=BuildCandidateBlockScienceEnvelope(proof,body_budget);
+            need(envelope.has_value(),"Fixture Gold envelope failed");tx.vout.push_back(CTxOut{0,*envelope});
+        }
+        CBlock block;block.hashPrevBlock=at.GetBlockHash();block.nTime=at.nTime+1;
+        block.vtx={MakeTransactionRef(tx)};block.hashMerkleRoot=BlockMerkleRoot(block);return block;
+    };
+    const auto actual=make_block(proofs);
+    const auto whole=VerifyNativeTicketGoldBlock(view,at,history,actual,body_budget);
+    if(one||failed)need(!whole.block&&whole.group_verdict==TicketGoldGroupVerdict::AuditsIncomplete,"Whole block bypassed audits");
     const auto checked=VerifyNativeTicketGoldGroup(view,at,history,proofs,body_budget);
     if(one||failed){
         need(!checked.group&&checked.verdict==TicketGoldGroupVerdict::AuditsIncomplete,"Missing or failed audits accepted");
         std::cout<<"{\"PASS\":true,\"missing_or_failed_audits_refused\":true,\"production_changed\":false}\n";return 0;
     }
     need(checked.group&&checked.group->GoldCount()==6,"Six exact Golds did not verify under one ticket");
+    need(whole.block&&whole.block->Block()==actual.GetHash()&&whole.block->Group().GoldCount()==6,"Actual six-Gold block did not verify");
+    CBlock invalid=actual;invalid.hashMerkleRoot.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,invalid,body_budget).block,"Wrong native Merkle root accepted");
+    invalid=actual;invalid.hashPrevBlock.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,invalid,body_budget).block,"Wrong parent accepted");
+    auto duplicate=proofs;duplicate[1]=duplicate[0];
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(duplicate),body_budget).block,"Whole block duplicated Gold");
+    auto reversed=proofs;std::swap(reversed[0],reversed[1]);
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(reversed),body_budget).block,"Whole block changed canonical order");
+    auto mixed=proofs;mixed.back().request.begin()[0]^=1;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,make_block(mixed),body_budget).block,"Whole block mixed tickets");
+    auto tiny=body_budget;tiny.maximum_payload_bytes=100;
+    need(!VerifyNativeTicketGoldBlock(view,at,history,actual,tiny).block,"Whole block exceeded aggregate payload budget");
+    const auto actual_hash=actual.GetHash();CBlockIndex native_index;
+    native_index.phashBlock=&actual_hash;native_index.pprev=const_cast<CBlockIndex*>(&at);
+    native_index.nHeight=at.nHeight+1;native_index.nTx=actual.vtx.size();
+    const auto native_forward=PrepareNativeTicketGoldBlockForward(view,at,native_index,*whole.block);
+    need(native_forward.forward.Valid()&&native_forward.forward.changes.size()==6,"Actual body lost atomic Gold changes");
+    auto changed_index=native_index;uint256 changed_hash=actual_hash;changed_hash.begin()[0]^=1;changed_index.phashBlock=&changed_hash;
+    bool changed_rejected=false;try{PrepareNativeTicketGoldBlockForward(view,at,changed_index,*whole.block);}catch(const std::logic_error&){changed_rejected=true;}
+    need(changed_rejected,"Prepared forward accepted changed actual block");
     auto wrong=proofs;wrong[1]=wrong[0];
     need(VerifyNativeTicketGoldGroup(view,at,history,wrong,body_budget).verdict==TicketGoldGroupVerdict::DuplicateGold,"Duplicate accepted");
     wrong=proofs;std::swap(wrong[0],wrong[1]);
@@ -242,7 +276,7 @@ int main(int argc,char** argv){try{
     const auto forward=PrepareNativeTicketGoldGroupForward(view,at,proposed,*checked.group);
     need(forward.forward.Valid()&&forward.forward.changes.size()==6,"One atomic forward lost a Gold");
     for(const auto& change:forward.forward.changes)need(!view.GetPgnFact(change.fact),"Preparation mutated current state");
-    std::cout<<"{\"PASS\":true,\"exact_golds_in_one_ticket\":6,\"atomic_fact_changes\":6,"
+    std::cout<<"{\"PASS\":true,\"exact_golds_in_one_ticket\":6,\"atomic_fact_changes\":6,\"actual_whole_body_checked\":true,"
                "\"duplicates_order_bad_proof_bad_signature_refused\":true,\"production_changed\":false}\n";
     return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

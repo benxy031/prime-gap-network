@@ -39,6 +39,7 @@ public:
     // Closure i belongs to Gold i. Rosettes belong to closure zero only.
     // This is ordering metadata, never a payment authorization.
     const std::vector<Integer>& LowerPrimes()const{return m_lower_primes;}
+    const std::vector<VerifiedNativeProfiledScience>& Golds()const{return m_golds;}
 };
 struct TicketGoldGroupCheck {
     TicketGoldGroupVerdict verdict;
