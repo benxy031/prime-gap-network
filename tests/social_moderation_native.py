@@ -31,7 +31,8 @@ class Node:
         if reload:cmd+=['-wallet='+self.wallet]
         self.process=subprocess.Popen(cmd,cwd=self.path,stdout=self.log,stderr=subprocess.STDOUT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         def ready():
-            if self.process.poll() is not None:raise RuntimeError('Owned private Core exited '+self.name)
+            if self.process.poll() is not None:
+                self.log.flush();tail=(self.path/'process.log').read_bytes()[-3000:].decode('utf-8','replace');raise RuntimeError('Owned private Core exited '+self.name+' code='+str(self.process.returncode)+'; startup_tail='+tail)
             files=list(self.path.glob('*/.cookie'))
             if files:
                 self.cookie=files[0]

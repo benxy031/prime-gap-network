@@ -23,6 +23,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Preflight exact base object before expensive build
+        shell: pwsh
+        run: |
+          git fetch --no-tags --depth=1 https://github.com/wizz13150/prime-gap-network.git 1ea788c04d55f0bb06810ac8ff8c5961e0f0872d
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          git cat-file -e '1ea788c04d55f0bb06810ac8ff8c5961e0f0872d^{commit}'
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
       - uses: actions/setup-python@v5
         id: python
         with:
@@ -53,12 +60,20 @@ jobs:
           "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/build-resource.json" --timeout 2300 -- "$qa_cmake" --build build-native --parallel 1 --target riecoind > build-private.log 2>&1
       - name: Collect executable and actual DLL closure before tests
         if: steps.build.outcome == 'success'
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
         run: |
-          mkdir -p private-social223/Core
-          cp build-native/bin/riecoind.exe private-social223/Core/pgn-core.exe
-          ldd build-native/bin/riecoind.exe > private-social223/dependencies.txt
-          if grep -q 'not found' private-social223/dependencies.txt; then exit 1; fi
-          awk '/=> \/ucrt64\/bin\// {print $3}' private-social223/dependencies.txt | while read -r dep; do cp "$dep" private-social223/Core/; done
+          qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
+          qa_tools="$(cygpath -w "$MINGW_PREFIX/bin")"
+          "$qa_python" -B tools/social223_export.py --tool-bin "$qa_tools"
+      - name: Rescue built Core independently of every later test/collector
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: social223-built-core-rescue-windows
+          path: private-social223-delivery
+          if-no-files-found: error
+          retention-days: 7
       - name: Two real closed-network peers, BIP322, native CDB and ACL
         id: test
         if: steps.build.outcome == 'success'
@@ -67,7 +82,7 @@ jobs:
           PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
         run: |
           $env:Path="$env:SystemRoot\System32;$env:SystemRoot"
-          & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/test-resource.json" --timeout 300 -- $env:PYTHON_EXPLICIT -B tests/social_moderation_native.py --core private-social223/Core/pgn-core.exe --out private-social223/private-native-test
+          & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/test-resource.json" --timeout 300 -- $env:PYTHON_EXPLICIT -B tests/social_moderation_native.py --core private-social223-delivery/Core/pgn-core.exe --out private-social223-test
           if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
       - name: Compact immutable source/product receipts; never upload wallets
         if: always()
