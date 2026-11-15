@@ -29,9 +29,11 @@ for command in commands:
     if args[:2]==[':','&&']:args=args[2:]
     if args[-2:]==['&&',':']:args=args[:-2]
     assert not any(x in(';','&&','||','|')for x in args)
+    build=Path('build-native');(build/'bin').mkdir(exist_ok=True)
     for part in args:
-        if part.endswith('.cpp.o'):Path(part).parent.mkdir(parents=True,exist_ok=True)
-    r=subprocess.run(args,capture_output=True,text=True,timeout=120);log.append(dict(exit=r.returncode,stdout=r.stdout[-4000:],stderr=r.stderr[-8000:]));assert r.returncode==0,log[-1]
+        if part.endswith('.cpp.o'):
+            p=Path(part);p=p if p.is_absolute()else build/p;p.parent.mkdir(parents=True,exist_ok=True)
+    r=subprocess.run(args,cwd=build,capture_output=True,text=True,timeout=120);log.append(dict(exit=r.returncode,stdout=r.stdout[-4000:],stderr=r.stderr[-8000:]));assert r.returncode==0,log[-1]
 exe=Path('build-native/bin/pgn-native-ticket-gold-group-test');rows=[]
 for name,flag in(('passed',None),('missing','--one-auditor'),('failed','--failed-auditor')):
     args=[str(exe),str(Path('trial-'+name).resolve())]+([flag]if flag else[])
