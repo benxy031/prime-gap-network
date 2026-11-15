@@ -544,3 +544,7 @@ target_link_libraries(pgn-native-leaderboard-test PRIVATE core_interface riecoin
 
 add_executable(pgn-native-epoch3-reset-test EXCLUDE_FROM_ALL pgn/epoch3_reset_test.cpp)
 target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoin_node univalue)
+
+# Read-only scientific coverage qualification; no node state is changed.
+add_executable(pgn-validated-range-coverage-test EXCLUDE_FROM_ALL pgn/validated_range_coverage_test.cpp)
+target_link_libraries(pgn-validated-range-coverage-test PRIVATE core_interface)

@@ -11,6 +11,7 @@
 #include <pgn/rpc_public_attribution.h>
 #include <pgn/native_network_metrics.h>
 #include <pgn/native_leaderboard.h>
+#include <pgn/validated_range_coverage.h>
 #include <pgn/leaderboard_snapshot_cache.h>
 #include <pgn/audit_activity_selection.h>
 #include <pgn/ticket_atlas_projection.h>
@@ -712,6 +713,54 @@ RPCMethod getpgnauditstate(){
  }};
 }
 
+RPCMethod getpgncoverage(){
+ return RPCMethod{"getpgncoverage","Read exact active-chain scientific coverage. Random ticket identifiers are not range order; no work or reward is issued.",{},
+ RPCResult{RPCResult::Type::OBJ,"","Qualified range coverage",{
+  {RPCResult::Type::STR_HEX,"genesis","Authenticated native genesis"},
+  {RPCResult::Type::STR_HEX,"bestblockhash","Exact active branch anchor"},
+  {RPCResult::Type::NUM,"height","Anchor height"},
+  {RPCResult::Type::STR,"origin","Scientific project origin"},
+  {RPCResult::Type::STR,"range_width","Fixed scientific range width"},
+  {RPCResult::Type::STR,"contiguous_end","Exclusive upper bound without a missing validated range"},
+  {RPCResult::Type::STR,"first_missing_index","Zero-based scientific range index, not ticket ID"},
+  {RPCResult::Type::STR,"first_missing_end","Exclusive end of the first missing range"},
+  {RPCResult::Type::NUM,"validated_ranges","Unique qualified ranges, including beyond the first hole"},
+  {RPCResult::Type::STR,"last_validated_end",true,"Exclusive end of the furthest qualified range; absent if none"}
+ }},RPCExamples{""},
+ [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
+  auto& manager=EnsureAnyChainman(request.context);LOCK(cs_main);RequireNative(manager);
+  auto& active=manager.ActiveChainstate();const auto& tip=Tip(manager);
+  const auto history=ReadOwnHistory(manager);
+  const auto& budget=*manager.m_options.pgn_candidate_science_budget;
+  const auto policy=ReadChainRangePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
+  if(!policy.policy)throw JSONRPCError(RPC_MISC_ERROR,"Authenticated range policy unavailable; no invented coverage");
+  const auto ledger=ReadRpcAuditLedger(manager,history,tip);
+  if(!ledger)throw JSONRPCError(RPC_MISC_ERROR,"Authenticated audit history unavailable; no zero fallback");
+  std::vector<std::pair<Integer,Integer>> qualified;
+  qualified.reserve(ledger->size());
+  for(const auto& [id,report]:*ledger){
+   if(NativeAuditReportQualified(*ledger,report))
+    qualified.emplace_back(report.range.start,report.range.start+report.range.length);
+  }
+  const auto& definition=policy.policy->Definition();
+  const auto coverage=BuildValidatedRangeCoverage(definition.origin,definition.width,qualified);
+  if(!coverage)throw JSONRPCError(RPC_MISC_ERROR,"Qualified ranges do not match the authenticated scientific grid");
+  const Integer missing_end=coverage->contiguous_end+coverage->width;
+  UniValue out{UniValue::VOBJ};
+  out.pushKV("genesis",manager.GetConsensus().hashGenesisBlock.GetHex());
+  out.pushKV("bestblockhash",tip.GetBlockHash().GetHex());out.pushKV("height",tip.nHeight);
+  out.pushKV("origin",coverage->origin.convert_to<std::string>());
+  out.pushKV("range_width",coverage->width.convert_to<std::string>());
+  out.pushKV("contiguous_end",coverage->contiguous_end.convert_to<std::string>());
+  out.pushKV("first_missing_index",coverage->first_missing_index.convert_to<std::string>());
+  out.pushKV("first_missing_end",missing_end.convert_to<std::string>());
+  out.pushKV("validated_ranges",coverage->validated_ranges);
+  if(coverage->last_validated_end)out.pushKV("last_validated_end",coverage->last_validated_end->convert_to<std::string>());
+  return out;
+ }};
+}
+
+
 RPCMethod getpgnauditactivity(){
  return RPCMethod{"getpgnauditactivity","Read a bounded global audit activity projection from the authenticated current branch. No expected answers, private keys, or inferred GPU progress.",{
   {"after_height",RPCArg::Type::NUM,RPCArg::Default{0},"Last observed accepted height; zero establishes a current snapshot"},
@@ -880,6 +929,6 @@ RPCMethod getpgnnetworkmetrics(){
 
 }
 void RegisterPgnNativeRPCCommands(CRPCTable& table){
- static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
+ static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
  for(const auto& command:commands)table.appendCommand(command.name,&command);
 }

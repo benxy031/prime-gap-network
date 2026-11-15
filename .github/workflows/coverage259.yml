@@ -1,0 +1,55 @@
+name: Exact validated range coverage
+on:
+  push:
+    branches: [qualification/coverage259]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-boost
+      - name: Check exact arithmetic, holes, duplicate ranges and branch changes
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror wallet/riecoin-core-upstream-v2606/src/pgn/validated_range_coverage_test.cpp -o coverage259.exe
+          ./coverage259.exe > COVERAGE259-WINDOWS.json
+          cat COVERAGE259-WINDOWS.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: coverage259-windows
+          path: COVERAGE259-WINDOWS.json
+          if-no-files-found: error
+  ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install exact integer headers
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends g++ libboost-dev
+      - name: Check exact arithmetic, holes, duplicate ranges and branch changes
+        run: |
+          g++ -std=c++20 -O2 -DNDEBUG -Wall -Wextra -Werror wallet/riecoin-core-upstream-v2606/src/pgn/validated_range_coverage_test.cpp -o coverage259
+          ./coverage259 > COVERAGE259-UBUNTU.json
+          cat COVERAGE259-UBUNTU.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: coverage259-ubuntu
+          path: COVERAGE259-UBUNTU.json
+          if-no-files-found: error
