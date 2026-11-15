@@ -2,15 +2,16 @@
 #pragma once
 #include <pgn/social_identity_committed.h>
 namespace pgn::social::identity::committed {
-inline void CheckConsentNativeContext(const ConsentCertificate& proof,const pgn::core::NativeLeaderboardSnapshot& native,const std::function<bool(const uint256&,int32_t)>& canonical){
+inline void CheckConsentNativeContext(const ConsentCertificate& proof,const pgn::core::NativeLeaderboardSnapshot& native,const std::function<bool(const uint256&,int32_t)>& canonical,bool require_current=true){
     if(!canonical||!canonical(native.tip,native.height))throw AssociationContextUnavailable("Current Native source is unavailable");
     const auto anchor=uint256::FromHex(proof.anchor);
-    Require(anchor&&proof.anchor_height<=native.height,"Consent source anchor is ahead of Native context");
-    if(!canonical(*anchor,proof.anchor_height))throw InvalidAssociation("Consent source anchor was reorganized; prepare again");
+    if(!anchor||proof.anchor_height>native.height)throw AssociationContextUnavailable("Consent source anchor is ahead of available Native context");
+    if(!canonical(*anchor,proof.anchor_height))throw AssociationContextReset("Consent source anchor was reorganized; keep the packet and recheck canonical context");
     if(proof.action=="bind"){
         const auto raw=ParseHex(proof.operator_script);const CScript key{raw.begin(),raw.end()};
-        for(const auto height:{proof.anchor_height,native.height})Require(pgn::core::LeaderboardOperatorAt(native.bindings,key,height).GetHex()==proof.operator_id,"Native K cannot borrow another operator");
-        Require(std::any_of(native.rows.begin(),native.rows.end(),[&](const auto& row){return row.operator_id.GetHex()==proof.operator_id;}),"Confirmed productive Native operator required");
+        if(pgn::core::LeaderboardOperatorAt(native.bindings,key,proof.anchor_height).GetHex()!=proof.operator_id)throw InvalidAssociation("Native K cannot borrow another operator at the signed source anchor");
+        if(require_current&&pgn::core::LeaderboardOperatorAt(native.bindings,key,native.height).GetHex()!=proof.operator_id)throw AssociationContextReset("Current Native key attribution changed; keep the packet");
+        if(require_current&&!std::any_of(native.rows.begin(),native.rows.end(),[&](const auto& row){return row.operator_id.GetHex()==proof.operator_id;}))throw AssociationContextUnavailable("Confirmed productive Native operator unavailable");
     }
     if(!canonical(native.tip,native.height))throw AssociationContextUnavailable("Native source changed during consent validation");
 }
@@ -38,14 +39,15 @@ struct SubmissionConsent {ConsentCertificate certificate;ConsentCoverage coverag
 struct ConsentContext {ConsentCertificate certificate;bool already_included{};};
 inline ConsentContext ValidateSubmissionContext(const std::string& source,const pgn::core::NativeLeaderboardSnapshot& native,const std::optional<State>& current,bool target_complete,const std::function<bool(const uint256&,int32_t)>& canonical){
     if(!target_complete)throw AssociationContextUnavailable("Native target history incomplete; operation preserved");
-    auto proof=DecodeConsentCertificate(source,native.genesis.GetHex());CheckConsentNativeContext(proof,native,canonical);
+    auto proof=DecodeConsentCertificate(source,native.genesis.GetHex());
     if(current&&(current->committed.height>native.height||!canonical(current->committed.block,current->committed.height)))throw AssociationContextUnavailable("Current Native lineage unavailable; operation preserved");
     Require(!current||current->social_script==proof.social_script,"Submission target differs from Native lineage");
     const bool included=current&&current->head==proof.id;
+    CheckConsentNativeContext(proof,native,canonical,!included);
     if(!included){
-        Require(proof.previous==(current?current->head:std::string(64,'0')),"Native association head changed; do not overwrite it");
-        if(proof.action=="bind")Require(!current||!current->active,"An active association must be withdrawn explicitly");
-        else Require(current&&current->active&&current->social_script==proof.social_script&&current->operator_script==proof.operator_script&&current->operator_id==proof.operator_id,"Withdrawal does not match the current Native lineage");
+        if(proof.previous!=(current?current->head:std::string(64,'0')))throw AssociationContextReset("Native association head changed; do not overwrite it");
+        if(proof.action=="bind"){if(current&&current->active)throw AssociationContextReset("An active association must be withdrawn explicitly");}
+        else if(!current||!current->active||current->social_script!=proof.social_script||current->operator_script!=proof.operator_script||current->operator_id!=proof.operator_id)throw AssociationContextReset("Withdrawal does not match the current Native lineage");
     }
     return {std::move(proof),included};
 }

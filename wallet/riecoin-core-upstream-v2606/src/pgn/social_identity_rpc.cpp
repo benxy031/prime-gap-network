@@ -51,7 +51,12 @@ class NativeIdentityService {
  struct Incoming{int64_t peer;std::string source,digest;};
  std::mutex incoming_mutex_;std::deque<Incoming> incoming_;std::map<int64_t,size_t> incoming_peers_;std::set<std::string> incoming_ids_;size_t incoming_bytes_{};
  std::mutex ready_mutex_;uint256 ready_parent_;std::vector<std::string> ready_sources_;uint64_t ready_version_{1};
- NativeView View(){if(stop_)throw AssociationContextUnavailable("Social association service stopping");return {manager_,ReadNativeSocialIdentitySnapshot(manager_)};}
+ struct Blocked{std::string digest;uint256 anchor;bool permanent;};std::map<std::string,Blocked> blocked_;unsigned wait_ms_{100};
+ NativeView View(){
+  if(stop_)throw AssociationContextUnavailable("Social association service stopping");
+  try{return {manager_,ReadNativeSocialIdentitySnapshot(manager_)};}
+  catch(const UniValue& error){const auto reason=error.isObject()&&error["message"].isStr()?error["message"].get_str().substr(0,256):std::string{"Native RPC context unavailable"};throw AssociationContextUnavailable("Native identity context unavailable: "+reason);}
+ }
  bool Sync(const NativeView& view){
   std::unique_lock lock(indexing_,std::try_to_lock);if(!lock.owns_lock())return false;const auto canonical=view.Check();
   for(unsigned n=0;n<16;++n){const auto tip=index_.Tip();if(tip.height<0||canonical(tip.hash,tip.height))break;const auto result=index_.RollbackOne();if(result.state=="uncertain"){index_.Recover();return false;}}
@@ -76,25 +81,38 @@ class NativeIdentityService {
   if(ready_parent_!=view.snapshot->tip||ready_sources_!=ready){ready_parent_=view.snapshot->tip;ready_sources_=std::move(ready);++ready_version_;}
  }
  void Cycle(){
-  uint64_t epoch;{std::lock_guard lock(wake_mutex_);epoch=wake_epoch_;}const auto view=View();if(!Sync(view))return;std::optional<Incoming> incoming;
+  wait_ms_=100;uint64_t epoch;{std::lock_guard lock(wake_mutex_);epoch=wake_epoch_;}const auto view=View();if(!Sync(view))return;std::optional<Incoming> incoming;
   {std::lock_guard lock(incoming_mutex_);if(!incoming_.empty()){incoming=std::move(incoming_.front());incoming_.pop_front();incoming_bytes_-=incoming->source.size();incoming_ids_.erase(incoming->digest);auto it=incoming_peers_.find(incoming->peer);if(!--it->second)incoming_peers_.erase(it);}}
   if(incoming){try{Submit(incoming->source);}catch(const std::exception&){/* Sender keeps exact proof and offers again. */}}
   std::vector<std::string> ready;size_t bytes=0;std::vector<PendingConsent> page;
-  try{page=pending_.FairPage(4);}catch(const std::exception&){pending_.Recover();Publish(view,{});return;}
+  try{page=pending_.FairPage(4);}catch(const std::exception&){const auto recovered=pending_.Recover();Publish(view,{});if(recovered.state!="reopened")throw AssociationContextUnavailable("Social pending queue recovery unavailable; exact packets retained");return;}
+  bool unavailable=false;
   for(const auto& item:page)try{
    if(!verification_.try_acquire())break;struct Release{std::counting_semaphore<2>& gate;~Release(){gate.release();}}release{verification_};
-   const auto outcome=pending_.Submit(item.source,[&](bool cached){return Check(item.source,view,cached,true);});
    const auto target=Target(view,item.social_script);const auto observed=pending_.Observe(item.id,*view.snapshot,target.association,target.complete,view.Check());
-   if(observed.state=="included"||outcome.state!="pending"||!target.complete)continue;
+   if(observed.state=="included"){blocked_.erase(item.id);continue;}
+   const auto digest=Hash(item.source);const auto blocked=blocked_.find(item.id);
+   if(blocked!=blocked_.end()&&blocked->second.digest==digest&&(blocked->second.permanent||blocked->second.anchor==view.snapshot->tip))continue;
+   const auto outcome=pending_.Submit(item.source,[&](bool cached){return Check(item.source,view,cached,true);});
+   if(outcome.state!="pending"||!target.complete)continue;blocked_.erase(item.id);
    const auto script=Envelope(item.source);if(bytes+script.size()+64>8192)continue;bytes+=script.size()+64;ready.push_back(item.source);
-  }catch(const std::exception&){/* No missing context or failed verification consumes a withdrawal. */}
+  }catch(const InvalidAssociation&){blocked_[item.id]={Hash(item.source),view.snapshot->tip,true};}
+   catch(const AssociationContextReset&){blocked_[item.id]={Hash(item.source),view.snapshot->tip,false};}
+   catch(const AssociationContextUnavailable&){unavailable=true;}
+   catch(const std::exception&){unavailable=true;}
   Publish(view,std::move(ready));bool empty;{std::lock_guard lock(incoming_mutex_);empty=incoming_.empty();}
   if(empty&&pending_.Count()==0){std::lock_guard lock(wake_mutex_);if(epoch==wake_epoch_)active_=false;}
+  wait_ms_=2000;if(unavailable)throw AssociationContextUnavailable("Pending Native context unavailable; raw consent remains durable");
  }
  void Loop(){
-  std::unique_lock lock(wake_mutex_);while(!stop_){wake_.wait(lock,[&]{return stop_.load()||active_.load();});if(stop_)break;lock.unlock();
-   try{Cycle();}catch(const std::exception&){/* Association unavailable only; mining state untouched. */}
-   lock.lock();wake_.wait_for(lock,std::chrono::milliseconds(100),[&]{return stop_.load();});
+  unsigned failures=0;std::unique_lock lock(wake_mutex_);while(!stop_){wake_.wait(lock,[&]{return stop_.load()||active_.load();});if(stop_)break;const auto attempt=wake_epoch_;bool failed=false;lock.unlock();
+   try{Cycle();failures=0;}
+   catch(const AssociationContextUnavailable&){failed=true;wait_ms_=std::min(2000U,100U<<std::min(++failures,5U));}
+   catch(const UniValue&){failed=true;wait_ms_=2000;} // Defensive boundary for native RPC's non-std error type.
+   catch(const std::exception&){failed=true;wait_ms_=2000;}
+   bool idle=false;{std::lock_guard input(incoming_mutex_);idle=incoming_.empty();}
+   if(failed&&idle&&pending_.Count()==0){lock.lock();if(attempt==wake_epoch_)active_=false;lock.unlock();}
+   lock.lock();wake_.wait_for(lock,std::chrono::milliseconds(wait_ms_),[&]{return stop_.load();});
   }
  }
 public:
@@ -147,7 +165,7 @@ public:
  }
  bool Append(CMutableTransaction& cb,const uint256& parent,size_t available){
   static_assert(std::is_nothrow_move_constructible_v<CTxOut>);
-  Wake();std::unique_lock lock(ready_mutex_,std::try_to_lock);if(!lock.owns_lock()||ready_parent_!=parent||ready_sources_.empty())return false;
+  std::unique_lock lock(ready_mutex_,std::try_to_lock);if(!lock.owns_lock()||ready_parent_!=parent||ready_sources_.empty())return false;
   try{std::vector<CTxOut> additions;for(const auto& source:ready_sources_){const auto script=Envelope(source);const size_t charge=script.size()+64;
    if(charge>available||cb.vout.size()+additions.size()>=256)break;if(std::any_of(cb.vout.begin(),cb.vout.end(),[&](const CTxOut& output){return output.nValue==0&&output.scriptPubKey==script;}))continue;
    additions.emplace_back(0,script);available-=charge;

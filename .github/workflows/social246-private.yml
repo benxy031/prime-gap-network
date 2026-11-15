@@ -75,6 +75,15 @@ jobs:
           qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
           qa_tools="$(cygpath -w "$MINGW_PREFIX/bin")"
           "$qa_python" -B tools/social223_export.py --tool-bin "$qa_tools"
+      - name: Preserve exact native link SDK before tests
+        id: export_sdk
+        if: always() && steps.export_public.outcome == 'success'
+        continue-on-error: true
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
+          "$qa_python" -B tools/social246_sdk_export.py
       - name: Rescue built Core independently of every later test/collector
         if: always() && steps.build.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -92,6 +101,14 @@ jobs:
         run: |
           $env:Path="$env:SystemRoot\System32;$env:SystemRoot"
           & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/public-off-resource.json" --timeout 120 -- $env:PYTHON_EXPLICIT -B tests/social_moderation_public_absence.py --core private-social223-delivery/Core/pgn-core.exe --out private-public-default-off
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+      - name: Real native context unavailable then recovered without worker termination
+        if: steps.export_public.outcome == 'success'
+        shell: pwsh
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/context-smoke-resource.json" --timeout 240 -- $env:PYTHON_EXPLICIT -B tests/social_context_smoke.py --core private-social223-delivery/Core/pgn-core.exe --protocol . --out private-social-context-smoke
           if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
       - name: Build dedicated Native association components, never global tests
         id: components

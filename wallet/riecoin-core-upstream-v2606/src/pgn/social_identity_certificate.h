@@ -11,6 +11,7 @@ inline std::string Message(const UniValue& statement,const std::string& side){au
 inline CScript Envelope(const std::string& source){return CScript{}<<OP_RETURN<<std::vector<unsigned char>(Tag.begin(),Tag.end())<<std::vector<unsigned char>(source.begin(),source.end());}
 class InvalidAssociation:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 class AssociationContextUnavailable:public std::runtime_error {public:using std::runtime_error::runtime_error;};
+class AssociationContextReset:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 struct ConsentCertificate {
     UniValue statement;
     std::string source,id,action,social_script,operator_script,operator_id,previous,anchor,authorizer;
