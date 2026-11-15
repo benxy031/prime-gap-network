@@ -40,6 +40,8 @@ jobs:
           chmod +x qualified/build-native/bin/pgn-core-qualified249
       - name: Run corrected driver against unchanged built Core
         run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libevent-dev libgmp10 libsqlite3-0
           mkdir -p evidence249
           python3 tests/native_grouped249_actual.py --core qualified/build-native/bin/pgn-core-qualified249 --history public-history249.blocks --receipt evidence249/actual.json
       - name: Preserve actual qualification receipt
@@ -49,3 +51,4 @@ jobs:
           name: grouped249-replay-${{ github.run_id }}
           path: evidence249
           if-no-files-found: error
+
