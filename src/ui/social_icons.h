@@ -7,7 +7,7 @@
 namespace pgn::ui {
 // Native vector paths, painted at the requested size/DPI. No font-glyph or
 // external/raster asset dependency. Button names/tooltips carry the semantics.
-enum class SocialGlyph { Search, Refresh, Members, More, Preview, Send, Link, Quote, Code, Info };
+enum class SocialGlyph { Search, Refresh, Members, More, Preview, Send, Link, Quote, Code, Info, Bold, Italic, Underline, Strike };
 class SocialIconEngine final:public QIconEngine {
     SocialGlyph glyph_;QColor ink_;
 public:
@@ -30,6 +30,10 @@ public:
         case SocialGlyph::Quote:p->drawPolyline(QPolygonF{{7.8,5},{3,5},{3,10},{7.8,10},{5.4,15}});p->drawPolyline(QPolygonF{{17,5},{12.2,5},{12.2,10},{17,10},{14.6,15}});break;
         case SocialGlyph::Code:p->drawPolyline(QPolygonF{{6,5},{1.8,10},{6,15}});p->drawPolyline(QPolygonF{{14,5},{18.2,10},{14,15}});p->drawLine(QPointF(11.5,3),QPointF(8.5,17));break;
         case SocialGlyph::Info:p->drawEllipse(QPointF(10,10),7.1,7.1);p->drawLine(QPointF(10,9),QPointF(10,14));p->drawPoint(QPointF(10,5.9));break;
+        case SocialGlyph::Bold:{p->setPen(QPen(color,2.1,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));QPainterPath q;q.moveTo(6,3);q.lineTo(6,17);q.lineTo(11,17);q.cubicTo(17,17,17,10,11,10);q.lineTo(6,10);q.moveTo(6,3);q.lineTo(10.5,3);q.cubicTo(16,3,16,10,10.5,10);p->drawPath(q);break;}
+        case SocialGlyph::Italic:p->drawLine(QPointF(8,3),QPointF(15,3));p->drawLine(QPointF(5,17),QPointF(12,17));p->drawLine(QPointF(12,3),QPointF(8,17));break;
+        case SocialGlyph::Underline:{QPainterPath q;q.moveTo(5,3);q.lineTo(5,10);q.cubicTo(5,17,15,17,15,10);q.lineTo(15,3);p->drawPath(q);p->drawLine(QPointF(4,18),QPointF(16,18));break;}
+        case SocialGlyph::Strike:{QPainterPath q;q.moveTo(15,5);q.cubicTo(11,0,3,3,5,8);q.cubicTo(7,11,15,9,15,14);q.cubicTo(15,19,7,19,4.5,15);p->drawPath(q);p->drawLine(QPointF(2,10),QPointF(18,10));break;}
         }
         p->restore();
     }

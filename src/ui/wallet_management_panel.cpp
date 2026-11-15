@@ -37,7 +37,7 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
  message_=new QLabel;message_->setObjectName("pgn-wallet-management-status");message_->setTextFormat(Qt::PlainText);message_->setWordWrap(true);message_->setAccessibleName("Wallet management status");box->addWidget(message_);
  connect(configure_,&QPushButton::clicked,this,[this]{setupFields_->setVisible(setupFields_->isHidden());});connect(reload_,&QPushButton::clicked,this,[this]{manager_->refresh();});
  connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Choose PGN Core data folder",directory_->text());if(!path.isEmpty())directory_->setText(path);});
- const auto apply=[this](bool existing){if(setupBusy_||pending_||!onApplySetup)return;setupBusy_=true;setupFields_->setEnabled(false);message_->setText("Checking PGN Core files…");onApplySetup({QDir::cleanPath(directory_->text().trimmed()),setupWallet_->text().trimmed(),existing});};
+ const auto apply=[this](bool existing){if(setupBusy_||pending_||!onApplySetup)return;setupBusy_=true;setupError_.clear();setupFields_->setEnabled(false);message_->setText("Checking PGN Core files…");onApplySetup({QDir::cleanPath(directory_->text().trimmed()),setupWallet_->text().trimmed(),existing});};
  connect(applySetup_,&QPushButton::clicked,this,[this,apply]{apply(configured_);});
  connect(existingSetup_,&QPushButton::clicked,this,[this,apply]{const auto path=QFileDialog::getExistingDirectory(this,"Open existing PGN Core data folder",directory_->text());if(path.isEmpty())return;directory_->setText(path);apply(true);});
  connect(cancelChange_,&QPushButton::clicked,this,[this]{if(onCancelChange)onCancelChange();});
@@ -48,14 +48,14 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
 }
 void WalletManagementPanel::present(const QString& network,const QString& directory,bool configured,bool pending,const QString& pendingDirectory){
  const bool changed=configured_!=configured;configured_=configured;pending_=pending;
- location_->setText(configured?QString("Network: %1\nCurrent Core data folder: %2\nDefault wallet folder: %3").arg(network,directory,QDir(directory).filePath(network=="test"?"testnet/wallets":"wallets")):"First choose the node data folder, not a wallet subfolder. Create a node and wallet in a new empty folder, or open an existing node. Existing wallet files are never deleted.");
+ location_->setText(configured?QString("Network: %1\nCurrent Core data folder: %2\nDefault wallet folder: %3").arg(network,directory,QDir(directory).filePath(network=="test"?"testnet/wallets":"wallets")):"To get started, click Create node and wallet. You can use the suggested folder as it is. To reuse an existing node, choose Open existing Core folder. Existing wallet files are preserved.");
  configure_->setText("Change Core folder…");configure_->setVisible(configured);configure_->setToolTip("Choose a Core data folder. Existing files are never moved or deleted.");reload_->setVisible(configured);walletControls_->setVisible(configured);
  if(!configured||changed)setupFields_->setVisible(!configured);setupFields_->setEnabled(!pending&&!setupBusy_);applySetup_->setText(configured?"Save Core folder":"Create node and wallet");existingSetup_->setVisible(!configured);
  if(configured&&!directory.isEmpty()){directory_->setText(directory);if(!manager_->serviceWallet().isEmpty())setupWallet_->setText(manager_->serviceWallet());}
  configure_->setEnabled(!pending);cancelChange_->setVisible(pending);
  if(pending)location_->setText(location_->text()+"\nScheduled Core data folder: "+pendingDirectory+"\nWaiting for the current Core to stop cleanly. Reopening Horizon while Core is still running keeps the current folder.");
 }
-void WalletManagementPanel::finishSetup(const QString& error){setupBusy_=false;setupFields_->setEnabled(!pending_);message_->setText(error);}
+void WalletManagementPanel::finishSetup(const QString& error){setupBusy_=false;setupError_=error;setupFields_->setEnabled(!pending_);message_->setText(error);}
 void WalletManagementPanel::refresh(){
  const auto rows=manager_->wallets();const auto previous=wallets_->currentData().toString();wallets_->blockSignals(true);wallets_->clear();
  for(const auto& value:rows){const auto row=value.toObject();const auto name=row.value("name").toString();const auto shown=name.isEmpty()?QString("(default wallet)"):name;wallets_->addItem(shown+(row.value("loaded").toBool()?" · Loaded":" · Available")+(row.value("service").toBool()?" · Service":"")+(row.value("displayed").toBool()?" · Displayed":""),name);}
@@ -64,6 +64,6 @@ void WalletManagementPanel::refresh(){
  const bool available=manager_->ready()&&!manager_->busy();for(auto* button:{reload_,create_})button->setEnabled(available);open_->setEnabled(available);wallets_->setEnabled(available);select_->setEnabled(available&&known&&loaded&&selected!=manager_->displayWallet());load_->setEnabled(available&&known&&!loaded);close_->setEnabled(available&&known&&loaded&&selected!=manager_->serviceWallet()&&selected!=manager_->displayWallet());
  close_->setToolTip(selected==manager_->serviceWallet()?"The mining and audit service wallet stays loaded to preserve signed work.":selected==manager_->displayWallet()?"Select another wallet before closing this wallet.":"Unload this wallet from Core; its files remain intact.");
  service_->setText(manager_->ready()?QString("Mining / audit service wallet: %1. %2").arg(manager_->serviceWallet().isEmpty()?"(default wallet)":manager_->serviceWallet(),manager_->isLoaded(manager_->serviceWallet())?"Display selection leaves this binding unchanged.":"Not loaded. Services wait for this wallet; displaying another wallet keeps the original binding."):"The service wallet is established only after Core verifies the network and genesis.");
- message_->setText(manager_->message());
+ message_->setText(setupError_.isEmpty()?manager_->message():setupError_);
 }
 }

@@ -4,6 +4,7 @@
 #include "ui/render/horizon_primary_navigation.h"
 #include "qt_offscreen_fixture.h"
 #include <QApplication>
+#include <cmath>
 #include <QComboBox>
 #include <QFile>
 #include <QFontInfo>
@@ -267,12 +268,18 @@ int main(int argc,char** argv){
         auto* indicator=new QLabel("REVISION PREVIEW · synthetic fixtures · no network");indicator->setStyleSheet("font:11px 'Segoe UI';color:#e6bd64;");bar->addWidget(indicator,1);layout->addWidget(top);
         social::Services fixtures{[](auto request,auto done){auto review=previewData(request);if(request.section==social::Section::Miners){review.miners.clear();const int requested=qEnvironmentVariableIntValue("PGN_SOCIAL_REVIEW_MINERS");const int amount=requested>=1&&requested<=18?requested:18;for(int n=0;n<amount;++n){auto m=miners()[1];m.id=QString("preview-operator-%1").arg(n,4,10,QChar('0'));m.socialMemberId="preview-canonical-"+QString::number(n);m.name=n<2?"Review homonym":QString("Review miner %1").arg(n+1,2,10,QChar('0'));m.validatedSearchPositions.value=QString::number(9007199254740993ULL-100000000000000ULL*n);m.ticketsReported.value=QString::number(1900-n*71);m.ticketsValidated.value=QString::number(1800-n*67);m.validatedAudits.value=QString::number(700-n*29);m.lastActivityHeight.value=QString::number(17000-n*4);if(n==16)m.validatedAudits.value.reset();review.miners.append(m);}}done(review,{});}};auto* socialView=new ui::SocialView(temp.path()+"/review/drafts.json",fixtures);layout->addWidget(socialView,1);
         auto identity=A();identity.subject="Review author A";socialView->setIdentity(identity);
-        for(const QSize size:{QSize(1366,900),QSize(1920,1080)}){
+        for(const QSize size:{QSize(1366,990),QSize(1920,1080)}){
             shell.resize(size);shell.show();app.processEvents();check(shell.size()==size,"Page forces oversized shell");
             for(const int i:{0,3}){
                 socialView->selectSection(static_cast<social::Section>(i));app.processEvents();
                 if(i==0){find<QPlainTextEdit>(*socialView,"pgn-social-draft-body-0")->setPlainText("I will keep the exact observation window in the draft before sharing it.");find<QPushButton>(*socialView,"pgn-social-save-0")->click();}
                 if(i==3){auto* table=find<QTableWidget>(*socialView,"pgn-social-miners");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-period-today"),"Today action clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-refresh-3"),"Refresh clipped");check(table->horizontalScrollBar()->maximum()==0,"Leaderboard essential columns require horizontal scrolling");check(table->width()>=shell.width()-60,"Leaderboard imposes empty lateral margins");}
+                if(i==3)if(auto* cap=socialView->findChild<QWidget*>("pgn-social-ranking-toolbar")){
+                    auto* title=find<QLabel>(*socialView,"pgn-social-ranking-title");
+                    auto luminance=[](QColor color){auto linear=[](double v){return v<=0.04045?v/12.92:std::pow((v+0.055)/1.055,2.4);};return 0.2126*linear(color.redF())+0.7152*linear(color.greenF())+0.0722*linear(color.blueF());};
+                    const auto fg=luminance(title->palette().color(QPalette::WindowText)),bg=luminance(cap->palette().color(QPalette::Window));
+                    check((qMax(fg,bg)+0.05)/(qMin(fg,bg)+0.05)>=4.5,"Integrated leaderboard title inherits illegible contrast");
+                }
                 if(i==0){fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-send-0"),"Chat Send clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-save-0"),"Chat Save clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-send-reason-0"),"Chat reason clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-save-status-0"),"Chat autosave status clipped");check(find<QLabel>(*socialView,"pgn-social-save-status-0")->visibleRegion().contains(find<QLabel>(*socialView,"pgn-social-save-status-0")->rect()),"Autosave status clipped by composer parent");}
                 fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-status"),"Stable status line clipped");app.processEvents();
                 if(i==0){auto* composer=find<QWidget>(*socialView,"pgn-social-composer-0");for(const auto& name:{"pgn-social-send-reason-0","pgn-social-save-status-0"}){auto* label=find<QLabel>(*socialView,name);check(composer->rect().contains(QRect(label->mapTo(composer,QPoint{}),label->size())),"Composer status overflows parent after layout");}auto* saved=find<QLabel>(*socialView,"pgn-social-save-status-0");check(saved->fontMetrics().horizontalAdvance(saved->text())<=saved->contentsRect().width(),"Saved status text clipped");}

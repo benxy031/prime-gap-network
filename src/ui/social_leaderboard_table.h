@@ -22,8 +22,8 @@ public:
     void paint(QPainter* p,const QStyleOptionViewItem& option,const QModelIndex& index)const override{
         p->save();p->setClipRect(option.rect);p->setRenderHint(QPainter::Antialiasing);
         const bool selected=option.state&QStyle::State_Selected,hover=(option.state&QStyle::State_MouseOver)||(parent()&&parent()->property("leaderboardHoverRow").toInt()==index.row()),own=index.data(LeaderboardOwnRole).toBool();
-        p->fillRect(option.rect,selected?QColor("#bdd8d4"):hover?QColor("#d4e4e4"):own?QColor("#d9e8e3"):QColor("#e9f0f0"));
-        p->setPen(QColor("#d3dfe0"));p->drawLine(option.rect.bottomLeft(),option.rect.bottomRight());
+        p->fillRect(option.rect,selected?QColor("#c3ded3"):hover?QColor("#e0ece7"):own?QColor("#e1eee7"):QColor("#eef4f1"));
+        p->setPen(QColor("#dbe5df"));p->drawLine(option.rect.bottomLeft(),option.rect.bottomRight());
         QFont body("Segoe UI");body.setPixelSize(13);p->setFont(body);p->setPen(QColor("#203c43"));
         if(index.column()==0){
             const auto id=index.data(Qt::UserRole).toString(),name=index.data().toString();
@@ -31,7 +31,7 @@ public:
             QFont small("Segoe UI");small.setPixelSize(11);p->setFont(small);p->setPen(QColor("#36575f"));p->drawText(QRect(rect.left()+8,rect.top(),26,36),Qt::AlignCenter,QString::number(rank));
             const QRect avatar(rect.left()+42,rect.top()+6,24,24);p->setPen(Qt::NoPen);p->setBrush(SocialAvatarColor(id));p->drawEllipse(avatar);
             small.setWeight(QFont::DemiBold);p->setFont(small);p->setPen(QColor("#214b50"));p->drawText(avatar,Qt::AlignCenter,SocialAvatarInitials(id,name));
-            const int x=avatar.right()+10,w=rect.right()-x-10;body.setWeight(QFont::DemiBold);p->setFont(body);p->setPen(QColor("#18383f"));
+            const int x=avatar.right()+10,w=rect.right()-x-10;body.setPixelSize(14);body.setWeight(QFont::DemiBold);p->setFont(body);p->setPen(QColor("#193d38"));
             p->drawText(QRect(x,rect.top()+2,w,17),Qt::AlignVCenter,p->fontMetrics().elidedText(name,Qt::ElideRight,w));
             small.setWeight(QFont::Normal);small.setPixelSize(11);p->setFont(small);p->setPen(QColor("#36575f"));
             p->drawText(QRect(x,rect.top()+19,w,14),Qt::AlignVCenter,p->fontMetrics().elidedText(id,Qt::ElideMiddle,w));
@@ -66,8 +66,8 @@ protected:
     void mouseMoveEvent(QMouseEvent* event)override{hovered_=logicalIndexAt(event->position().toPoint());viewport()->update();QHeaderView::mouseMoveEvent(event);}
     void leaveEvent(QEvent* event)override{hovered_=-1;viewport()->update();QHeaderView::leaveEvent(event);}
     void paintSection(QPainter* p,const QRect& r,int col)const override{
-        if(!r.isValid())return;p->save();p->fillRect(r,col==hovered_&&col<6?QColor("#d3e3e4"):QColor("#dce8e9"));
-        p->setPen(QColor("#bfced1"));p->drawLine(r.bottomLeft(),r.bottomRight());
+        if(!r.isValid())return;p->save();p->fillRect(r,col==hovered_&&col<6?QColor("#d6e6df"):QColor("#e2ece6"));
+        p->setPen(QColor("#bfd2c8"));p->drawLine(r.bottomLeft(),r.bottomRight());
         QFont font("Segoe UI");font.setPixelSize(11);font.setWeight(QFont::DemiBold);p->setFont(font);p->setPen(QColor("#46666e"));
         if(col>=6){const auto icon=qvariant_cast<QIcon>(model()->headerData(col,orientation(),Qt::DecorationRole));icon.paint(p,QRect(r.center().x()-12,r.top()+25,24,28));}
         else{
@@ -75,14 +75,14 @@ protected:
             const QStringList groups{"","VALIDATED","","","VALIDATED","BLOCK HEIGHT"};
             const QRect textRect(r.left()+(col?8:16),r.top()+27,r.width()-(col?26:30),23);
             p->setPen(QColor("#244951"));font.setPixelSize(12);p->setFont(font);p->drawText(textRect,col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,captions[col]);
-            font.setPixelSize(10);p->setFont(font);p->setPen(QColor("#46666e"));p->drawText(r.adjusted(12,4,-14,-30),col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,groups[col]);
+            font.setPixelSize(11);p->setFont(font);p->setPen(QColor("#46666e"));p->drawText(r.adjusted(12,4,-14,-30),col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,groups[col]);
             if(sortIndicatorSection()==col){p->setPen(Qt::NoPen);p->setBrush(QColor("#337c73"));const int x=r.right()-8,y=r.top()+39;QPolygon triangle;const int d=sortIndicatorOrder()==Qt::AscendingOrder?-1:1;triangle<<QPoint(x-3,y-2*d)<<QPoint(x+3,y-2*d)<<QPoint(x,y+2*d);p->drawPolygon(triangle);}
         }
         if(hasFocus()&&focused_==col){p->setBrush(Qt::NoBrush);p->setPen(QPen(QColor("#39827b"),2));p->drawRoundedRect(r.adjusted(3,3,-3,-3),5,5);}
         p->restore();
     }
     void paintEvent(QPaintEvent* event)override{
-        QHeaderView::paintEvent(event);QPainter p(viewport());QFont f("Segoe UI");f.setPixelSize(10);f.setWeight(QFont::DemiBold);p.setFont(f);p.setPen(QColor("#46666e"));
+        QHeaderView::paintEvent(event);QPainter p(viewport());QFont f("Segoe UI");f.setPixelSize(11);f.setWeight(QFont::DemiBold);p.setFont(f);p.setPen(QColor("#46666e"));
         for(const auto& group:QList<QPair<QPair<int,int>,QString>>{{{6,10},"AWARDS"},{{2,3},"TICKETS"}}){const int a=group.first.first,b=group.first.second;const QRect r(sectionViewportPosition(a),4,sectionViewportPosition(b)+sectionSize(b)-sectionViewportPosition(a),20);p.drawText(r,Qt::AlignCenter,group.second);}
     }
 };
@@ -101,7 +101,7 @@ public:
 protected:
     void mouseMoveEvent(QMouseEvent* event)override{const int row=indexAt(event->position().toPoint()).row();if(property("leaderboardHoverRow").toInt()!=row){setProperty("leaderboardHoverRow",row);viewport()->update();}QTableWidget::mouseMoveEvent(event);}
     bool viewportEvent(QEvent* event)override{if(event->type()==QEvent::Leave){setProperty("leaderboardHoverRow",-1);viewport()->update();}if(event->type()==QEvent::Resize)QTimer::singleShot(0,this,[this]{layoutColumns();});return QTableWidget::viewportEvent(event);}
-    void resizeEvent(QResizeEvent* event)override{QTableWidget::resizeEvent(event);layoutColumns();QPainterPath p;p.addRoundedRect(QRectF(rect()),12,12);setMask(QRegion(p.toFillPolygon().toPolygon()));}
+    void resizeEvent(QResizeEvent* event)override{QTableWidget::resizeEvent(event);layoutColumns();QPainterPath p;const auto b=QRectF(rect());p.moveTo(b.topLeft());p.lineTo(b.topRight());p.lineTo(b.right(),b.bottom()-12);p.quadTo(b.bottomRight(),QPointF(b.right()-12,b.bottom()));p.lineTo(b.left()+12,b.bottom());p.quadTo(b.bottomLeft(),QPointF(b.left(),b.bottom()-12));p.closeSubpath();setMask(QRegion(p.toFillPolygon().toPolygon()));}
 };
 class LeaderboardStack final:public QStackedWidget {
 public:

@@ -4,6 +4,8 @@
 #include <QLabel>
 #include <QWizard>
 #include "wallet/runtime_paths.h"
+#include "wallet/core_runtime.h"
+#include "ui/wallet_management_panel.h"
 #include "ui/render/horizon_workspace_style.h"
 #include <QApplication>
 #include <QTemporaryDir>
@@ -33,6 +35,22 @@ int main(int argc,char** argv){
  view->findChild<QLineEdit*>("pgn-wallet-data-directory")->setText(data);view->findChild<QLineEdit*>("pgn-wallet-name")->setText("invalid/name");create->click();
  QElapsedTimer wait;wait.start();while(!create->isEnabled()&&wait.elapsed()<4000){app.processEvents();QThread::msleep(5);}
  auto* message=view->findChild<QLabel*>("pgn-wallet-management-status");if(!create->isEnabled()||!message||!message->text().contains("letters")||!view->findChildren<QWizard*>().isEmpty())return 10;
+ // Backend/link refresh must preserve the actionable setup failure until retry.
+ pgn::ui::WalletManagementPanel* panel=nullptr;
+ for(auto* child:view->findChildren<QWidget*>())if(auto* candidate=dynamic_cast<pgn::ui::WalletManagementPanel*>(child))panel=candidate;
+ pgn::wallet::CoreRuntime* runtime=nullptr;
+ for(auto* child:view->children())if(auto* candidate=dynamic_cast<pgn::wallet::CoreRuntime*>(child))runtime=candidate;
+ if(!panel||!runtime||panel->setupError().isEmpty())return 11;
+ const auto expectedError=panel->setupError();
+ runtime->walletManager()->invalidate();panel->refresh();
+ if(message->text()!=expectedError)return 12;
+ runtime->onStatus("Unconfigured runtime refreshed");
+ bool visibleError=false;for(auto* label:view->findChildren<QLabel*>())if(label!=message&&label->isVisible()&&label->text()==expectedError)visibleError=true;
+ if(!visibleError)return 13;
+ // A new explicit attempt clears the old error, then reports its own result.
+ create->click();if(!panel->setupError().isEmpty())return 14;
+ wait.restart();while(!create->isEnabled()&&wait.elapsed()<4000){app.processEvents();QThread::msleep(5);}
+ if(!create->isEnabled()||panel->setupError().isEmpty())return 15;
  const bool untouched=!QFileInfo::exists(data)&&!QFileInfo::exists(root+"/data")&&!QFileInfo::exists(configuration);delete view;
  if(!untouched)return 8;std::cout<<"PASS fresh startup opens actual Manage wallets with enabled create/open, no wizard; closing and invalid setup create no wallet/config/data; inert Core never launched\n";
 }

@@ -8,7 +8,9 @@
 #include "ui/social_leaderboard_table.h"
 #include "ui/social_icons.h"
 #include "ui/social_chat_style.h"
+#include "ui/social_workspace_refinement.h"
 #include "ui/social_compose_edit.h"
+#include "ui/social_compose_frame.h"
 #include <QStyleOptionHeader>
 #include "ui/social_access_dialog.h"
 #include "ui/social_controls.h"
@@ -85,7 +87,7 @@ void document(QTextBrowser* browser,const social::Entry& entry,bool local=false)
 SocialView::SocialView(QString path,social::Services services,QWidget* parent)
     :QWidget(parent),services_(std::move(services)),store_(std::move(path)){
     setObjectName("pgn-social-workspace");
-    setStyleSheet(SocialLightStyle()+SocialChatContrastStyle()+SocialReadableStyle()+SocialConversationStyle());
+    setStyleSheet(SocialLightStyle()+SocialChatContrastStyle()+SocialReadableStyle()+SocialConversationStyle()+SocialWorkspaceRefinement());
     auto* box=vertical(this);box->setSpacing(0);tabs_=new QTabWidget;tabs_->setProperty("socialSurface",true);tabs_->setObjectName("pgn-social-sections");
     for(int i=0;i<4;++i){
         auto& p=pages_[i];auto* page=new QWidget;if(i==0)page->setObjectName("pgn-social-chat-surface");if(i==3)page->setObjectName("pgn-social-leaderboard-surface");auto* layout=vertical(page,14);
@@ -110,11 +112,13 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         p.refresh=new QPushButton("Refresh");p.refresh->setObjectName(QString("pgn-social-refresh-%1").arg(i));if(i==0){p.refresh->setIcon(SocialIcon(SocialGlyph::Refresh,QColor("#bdd5d8")));p.refresh->setIconSize({17,17});}tools->addWidget(p.refresh);
         connect(p.refresh,&QPushButton::clicked,this,[this,i]{read(i);});connect(p.search,&QLineEdit::textChanged,this,[this,i]{filter(i);});
         auto* browse=new QWidget;auto* browseBox=vertical(browse);
-        if(i==3){browse->setObjectName("pgn-social-ranking-content");browseBox->setSpacing(14);
-            auto* title=text("Leaderboard");title->setObjectName("pgn-social-ranking-title");auto* titleRow=new QHBoxLayout;titleRow->addWidget(title);titleRow->addStretch();titleRow->addWidget(p.windowInfo);browseBox->addLayout(titleRow);
+        if(i==3){browse->setObjectName("pgn-social-ranking-content");browseBox->setSpacing(0);
+            auto* toolbar=new QWidget;toolbar->setObjectName("pgn-social-ranking-toolbar");auto* cap=vertical(toolbar,16);cap->setSpacing(12);
+            auto* title=text("Leaderboard");title->setObjectName("pgn-social-ranking-title");auto* titleRow=new QHBoxLayout;titleRow->setSpacing(12);titleRow->addWidget(title);titleRow->addStretch();titleRow->addWidget(p.windowInfo);cap->addLayout(titleRow);
             p.search->setPlaceholderText("Search loaded miners");p.search->setMaximumWidth(330);p.search->setMinimumWidth(230);tools->setStretchFactor(p.search,0);tools->insertStretch(1,1);p.refresh->setMinimumHeight(32);
-        }
-        browseBox->addLayout(tools);
+            p.search->addAction(SocialIcon(SocialGlyph::Search,QColor("#536f72")),QLineEdit::LeadingPosition);p.refresh->setIcon(SocialIcon(SocialGlyph::Refresh,QColor("#f1fbf7")));p.refresh->setIconSize({17,17});
+            cap->addLayout(tools);browseBox->addWidget(toolbar);
+        }else browseBox->addLayout(tools);
         p.dataSlot=i==3?new LeaderboardStack:new QStackedWidget;p.dataSlot->setObjectName(QString("pgn-social-data-slot-%1").arg(i));
         if(i==3){
             p.ranking=new LeaderboardTable;p.ranking->setObjectName("pgn-social-miners");
@@ -122,7 +126,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block","Quadrigantium","Gold","Silver","Bronze","Rust"});
             header->setSectionResizeMode(0,QHeaderView::Stretch);const int widths[]{0,158,116,116,112,152};for(int col=1;col<6;++col){header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,widths[col]);}
             p.ranking->setAccessibleName("Leaderboard of authenticated network activity. Rank among loaded rows for the selected sort.");
-            p.ranking->setStyleSheet("QTableWidget#pgn-social-miners{background:#e9f0f0;color:#203c43;border:0;border-radius:12px;padding:0;outline:0;}QTableWidget#pgn-social-miners::item{padding:0;border:0;}QTableWidget#pgn-social-miners QWidget{background:#e9f0f0;}QHeaderView{background:#dce8e9;border:0;padding:0;}QScrollBar:vertical{background:#e1eaeb;width:8px;}QScrollBar::handle:vertical{background:#8ba6ab;min-height:24px;border-radius:4px;}");
+            p.ranking->setStyleSheet("QTableWidget#pgn-social-miners{background:#f2f6f3;color:#203c43;border:0;border-radius:12px;padding:0;outline:0;}QTableWidget#pgn-social-miners::item{padding:0;border:0;}QTableWidget#pgn-social-miners QWidget{background:#f2f6f3;}QHeaderView{background:#e0ebe5;border:0;padding:0;}QScrollBar:vertical{background:#e1eaeb;width:8px;}QScrollBar::handle:vertical{background:#8ba6ab;min-height:24px;border-radius:4px;}");
             // Presentation only: the current authenticated snapshot supplies no
             // exhaustive per-operator tier totals. Never infer zero/medals.
             const MeritTier tiers[]{MeritTier::Gold,MeritTier::Silver,MeritTier::Bronze,MeritTier::NearMiss};
@@ -166,6 +170,9 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         }
         else if(i==3){layout->setContentsMargins(24,20,24,20);layout->addWidget(browse,1);browseBox->addStretch(1);
             page->setStyleSheet("QWidget#pgn-social-leaderboard-surface{background:#041319;}QWidget#pgn-social-ranking-content{background:transparent;}QLabel#pgn-social-ranking-title{font:600 24px 'Segoe UI';color:#e3f1ef;background:transparent;}QWidget#pgn-social-periods{background:#0b2c34;border:1px solid #244a53;border-radius:10px;}QWidget#pgn-social-periods QPushButton{font:600 12px 'Segoe UI';border:0;border-radius:7px;padding:0 20px;min-height:32px;color:#afc8ca;background:transparent;}QWidget#pgn-social-periods QPushButton:hover{background:#16434c;color:#eff8f7;}QWidget#pgn-social-periods QPushButton:checked{background:#dceae6;color:#214b44;}QWidget#pgn-social-periods QPushButton:pressed{background:#b9d8cd;color:#173e37;}QWidget#pgn-social-periods QPushButton:focus{border:2px solid #71aaa0;padding:0 18px;}QLineEdit#pgn-social-search-3{background:#12343c;border:1px solid #355e67;border-radius:8px;color:#e0eeed;min-height:24px;padding:5px 12px;}QLineEdit#pgn-social-search-3:focus{border:2px solid #74aaa2;padding:4px 11px;}QPushButton#pgn-social-refresh-3{background:#245e55;border:1px solid #3b7c70;border-radius:8px;color:#eff8f5;padding:0 20px;min-height:34px;font:600 12px 'Segoe UI';}QPushButton#pgn-social-refresh-3:hover{background:#2e7365;border-color:#609d8f;}QPushButton#pgn-social-refresh-3:pressed{background:#19493f;}QPushButton#pgn-social-refresh-3:focus{border:2px solid #97c5b8;padding:0 19px;}QPushButton#pgn-social-refresh-3:disabled{background:#17362f;color:#8ea9a3;border-color:#2a5149;}QLabel#pgn-social-loaded-3{font:12px 'Segoe UI';color:#8eabb2;}QLabel#pgn-social-miner-interval{font:12px 'Segoe UI';color:#a3bfc1;}");
+            // This page has legacy local rules, so the scoped refinement must
+            // also be applied here; a parent stylesheet cannot override them.
+            page->setStyleSheet(page->styleSheet()+SocialWorkspaceRefinement());
         }
         else{
             auto* create=new QPushButton(i==1?"New publication":"New topic");create->setObjectName(QString("pgn-social-new-%1").arg(i));tools->addWidget(create);
@@ -224,7 +231,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
     updateAccess();for(int i=0;i<3;++i)loadEditor(i);
 }
 QWidget* SocialView::makeComposer(int i){
-    auto& p=pages_[i];auto* compose=new QWidget;compose->setObjectName(QString("pgn-social-composer-%1").arg(i));auto* box=vertical(compose);QHBoxLayout* chatTools=nullptr;if(i==0){box->setContentsMargins(12,10,12,8);box->setSpacing(6);}
+    auto& p=pages_[i];auto* compose=new QWidget;compose->setObjectName(QString("pgn-social-composer-%1").arg(i));auto* box=vertical(compose);QHBoxLayout* chatTools=nullptr;if(i==0){box->setContentsMargins(12,7,12,6);box->setSpacing(4);}
     if(i>0){auto* bar=new QHBoxLayout;auto* button=new QPushButton(i==1?"← Publications":"← Topic");button->setObjectName(QString("pgn-social-back-compose-%1").arg(i));bar->addWidget(button);
         p.composeContext=text(i==1?"New publication":"New topic");p.composeContext->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);bar->addWidget(p.composeContext,1);box->addLayout(bar);connect(button,&QPushButton::clicked,this,[this,i]{back(i);});
         if(i==2){p.categoryRow=new QWidget;auto* row=new QHBoxLayout(p.categoryRow);row->setContentsMargins(0,0,0,0);row->addWidget(text("Category"));p.category=new SocialComboBox;p.category->addItems(social::categories());p.category->setObjectName("pgn-social-topic-category");row->addWidget(p.category,1);box->addWidget(p.categoryRow);}
@@ -236,11 +243,11 @@ QWidget* SocialView::makeComposer(int i){
     {auto palette=p.draft->palette();palette.setColor(QPalette::PlaceholderText,QColor("#526e78"));p.draft->setPalette(palette);}
     if(i==0){
         auto* toolbar=new QHBoxLayout;chatTools=toolbar;toolbar->setSpacing(3);
-        for(const auto& tag:{"b","i","u","s"}){const QString name=tag;const QString label=name=="b"?"Bold":name=="i"?"Italic":name=="u"?"Underline":"Strikethrough";auto* button=new QPushButton(name.toUpper());button->setObjectName("pgn-social-format-"+name);button->setProperty("composeTool",true);button->setAccessibleName(label);button->setToolTip(label);button->setCheckable(true);button->setFixedWidth(30);auto font=button->font();font.setBold(name=="b");font.setItalic(name=="i");font.setUnderline(name=="u");font.setStrikeOut(name=="s");button->setFont(font);toolbar->addWidget(button);connect(button,&QPushButton::clicked,this,[this,name]{formatChat(name);});}
+        for(const auto& tag:{"b","i","u","s"}){const QString name=tag;const QString label=name=="b"?"Bold":name=="i"?"Italic":name=="u"?"Underline":"Strikethrough";auto* button=new QPushButton(name.toUpper());button->setObjectName("pgn-social-format-"+name);button->setProperty("composeTool",true);button->setAccessibleName(label);button->setToolTip(label);button->setCheckable(true);button->setFixedSize(32,30);button->setText({});button->setIcon(SocialIcon(name=="b"?SocialGlyph::Bold:name=="i"?SocialGlyph::Italic:name=="u"?SocialGlyph::Underline:SocialGlyph::Strike,QColor("#385c5b")));button->setIconSize({18,18});auto font=button->font();font.setBold(name=="b");font.setItalic(name=="i");font.setUnderline(name=="u");font.setStrikeOut(name=="s");button->setFont(font);toolbar->addWidget(button);connect(button,&QPushButton::clicked,this,[this,name]{formatChat(name);});}
         const auto sync=[this]{const auto f=pages_[0].draft->currentCharFormat();for(const auto& tag:QStringList{"b","i","u","s"}){auto* button=findChild<QPushButton*>("pgn-social-format-"+tag);if(button)button->setChecked(tag=="b"?f.fontWeight()>=QFont::DemiBold:tag=="i"?f.fontItalic():tag=="u"?f.fontUnderline():f.fontStrikeOut());}};
         static_cast<SocialComposeEdit*>(p.draft)->formatChanged=sync;connect(p.draft,&QPlainTextEdit::cursorPositionChanged,this,sync);connect(p.draft,&QPlainTextEdit::selectionChanged,this,sync);connect(p.draft,&QPlainTextEdit::textChanged,this,sync);
         toolbar->addStretch();
-        chatEditor_=new QStackedWidget;p.draft->setFixedHeight(62);chatEditor_->addWidget(p.draft);chatEditor_->setFixedHeight(62);box->addWidget(chatEditor_);
+        chatEditor_=new SocialComposeFrame(p.draft);box->addWidget(chatEditor_);
     }else{
         if(i==2){auto* toolbar=new QHBoxLayout;for(const auto& tag:{"b","i","u","s","quote","code","url"}){const QString t=tag;auto* button=new QPushButton(t=="url"?"Link":t=="quote"?"Quote":t=="code"?"Code":t.toUpper());button->setObjectName("pgn-social-forum-bbcode-"+t);button->setToolTip(social::bbcode::opening(t)+"…[/"+t+"]");toolbar->addWidget(button);connect(button,&QPushButton::clicked,this,[this,t]{formatDraft(2,t);});}toolbar->addStretch();box->addLayout(toolbar);}
         box->addWidget(p.draft,1);
@@ -252,7 +259,7 @@ QWidget* SocialView::makeComposer(int i){
     auto* clear=new QPushButton("Clear");clear->setObjectName(QString("pgn-social-clear-%1").arg(i));actions->addWidget(clear);
     if(i==1||i==2){auto* preview=new QPushButton("Preview");preview->setObjectName(i==1?"pgn-social-preview-publication":"pgn-social-preview-forum");actions->addWidget(preview);connect(preview,&QPushButton::clicked,this,[this,i]{previewPublication(i);});}
     p.send=new QPushButton(i==0?"Send":i==1?"Publish":"Post topic");p.send->setObjectName(QString("pgn-social-send-%1").arg(i));p.send->setEnabled(false);actions->addWidget(p.send);box->addLayout(actions);
-    if(i==0){p.send->setMinimumSize(96,36);p.send->setToolTip("Enter sends · Shift+Enter starts a new line");p.draft->installEventFilter(this);p.send->setIcon(SocialIcon(SocialGlyph::Send,QColor("#f3ffff")));}
+    if(i==0){p.save->setMinimumSize(84,30);clear->setMinimumSize(58,30);p.send->setMinimumSize(96,36);p.send->setToolTip("Enter sends · Shift+Enter starts a new line");p.draft->installEventFilter(this);p.send->setIcon(SocialIcon(SocialGlyph::Send,QColor("#f3ffff")));}
     p.reason=text("Sending unavailable · no authenticated send service connected.");p.reason->setObjectName(QString("pgn-social-send-reason-%1").arg(i));if(i==0){p.reason->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);p.saved->setFixedWidth(150);p.saved->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);auto* notices=new QHBoxLayout;notices->addWidget(p.reason,1);notices->addWidget(p.saved);box->addLayout(notices);}else box->addWidget(p.reason);
     if(i==0)connect(p.send,&QPushButton::clicked,this,[this]{sendChat();});
     connect(p.save,&QPushButton::clicked,this,[this]{saveDrafts();});connect(clear,&QPushButton::clicked,this,[this,i]{
