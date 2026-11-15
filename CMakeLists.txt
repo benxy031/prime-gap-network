@@ -1873,6 +1873,7 @@ add_test(NAME booking-long-path COMMAND pgn-booking-long-path-test)
 
 # Read-only rendering of confirmed service audits before search-ticket issuance.
 add_executable(pgn-mining-preparation-progress-test tests/mining_preparation_progress_test.cpp src/ui/mining_ticket_progress.cpp)
+target_compile_features(pgn-mining-preparation-progress-test PRIVATE cxx_std_20)
 target_include_directories(pgn-mining-preparation-progress-test PRIVATE src)
 target_link_libraries(pgn-mining-preparation-progress-test PRIVATE Qt6::Widgets)
 add_test(NAME mining-preparation-progress COMMAND pgn-mining-preparation-progress-test)

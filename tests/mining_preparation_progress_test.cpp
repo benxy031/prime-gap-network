@@ -21,6 +21,7 @@ QJsonObject frame(QJsonObject view){
 }
 int main(int argc,char** argv){
  QApplication app(argc,argv);
+ QPalette theme=app.palette();theme.setColor(QPalette::Window,QColor("#03151b"));theme.setColor(QPalette::WindowText,QColor("#c8f7f0"));app.setPalette(theme);
  try{
   auto first=frame(preparation(0,0));auto p=miningCycleProgress(first);
   check(p.known&&p.preparing,"First service audit has no preparation layout");
@@ -46,7 +47,7 @@ int main(int argc,char** argv){
   MiningTicketProgress rail;rail.resize(1366,120);
   const auto render=[&](const QJsonObject& input,const QString& name){
    rail.present(input);app.processEvents();QImage image(rail.size(),QImage::Format_ARGB32_Premultiplied);
-   image.fill(Qt::transparent);rail.render(&image);check(image.save(name),"Widget capture failed");
+   image.fill(QColor("#03151b"));rail.render(&image);check(image.save(name),"Widget capture failed");
   };
   QDir().mkpath("captures");
   render(first,"captures/preparation-first.png");
