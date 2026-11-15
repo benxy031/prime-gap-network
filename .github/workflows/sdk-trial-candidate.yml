@@ -1,7 +1,7 @@
 name: Exact native SDK fixture trial
 on:
   push:
-    branches: [qualification/native-body237]
+    branches: [qualification/native-closure238]
 permissions:
   contents: read
   actions: read

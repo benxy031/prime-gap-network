@@ -3,6 +3,7 @@
 #pragma once
 #include <pgn/candidate_block_science.h>
 #include <pgn/native_report_audit.h>
+#include "native_ticket_closure.h"
 #include <pgn/certified_gap_encoding.h>
 #include <kernel/cs_main.h>
 #include <set>
@@ -11,7 +12,7 @@ namespace pgn::core {
 enum class TicketGoldGroupVerdict {
     VerifiedGroup, Empty, BudgetExceeded, DifferentTicketOrReport,
     HistoryUnavailable, AuditsIncomplete, InvalidEvidence, NoncanonicalOrder,
-    DuplicateGold
+    DuplicateGold, TicketAlreadyClosed
 };
 struct TicketGoldGroupCheck;
 class VerifiedNativeTicketGoldGroup {
@@ -87,8 +88,11 @@ inline TicketGoldGroupCheck VerifyNativeTicketGoldGroup(const CCoinsView& view,
     if(!ranges.policy||!policy.policy)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};
     const auto reserved=DeriveNativeCandidateReservation(view,parent,*ranges.policy,history,budget.schedule,first.request);
     if(!reserved.reservation)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};
-    const auto audits=ReadNativeAuditLedger(view,parent,history,budget.policy,budget.schedule,budget.signature);
-    if(!audits)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};
+    const auto replay=ReadNativeTicketClosures(view,parent,history,budget);
+    if(!replay)return {TicketGoldGroupVerdict::HistoryUnavailable,{}};
+    if(replay->extra.tickets.contains(reserved.reservation->Ticket()))
+        return {TicketGoldGroupVerdict::TicketAlreadyClosed,{}};
+    const auto* audits=&replay->audits;
     const auto found=audits->find(first.request);
     if(found==audits->end()||!NativeAuditReportQualified(*audits,found->second)||
        found->second.details_root!=std::optional{first.report_root})
