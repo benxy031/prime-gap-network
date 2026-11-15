@@ -239,6 +239,11 @@ def main():
             assert [len(events) for events in actual_events] == [2,2,3]
             result.update(event_scripts_sha256=[[hashlib.sha256(bytes.fromhex(event)).hexdigest() for event in events] for events in actual_events])
             result.update(passed=True, genesis=GENESIS, core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(), heights=list(range(assignment_height,assignment_height+3)), blocks=[b['hash'] for b in blocks], events=[2,2,3], phases=['two_assign','two_commit','owner_disclosure_and_two_reveal'], final_jobs=[dict(slot=j['slot'],attempt=j['attempt'],state=j['state']) for j in state['jobs']], verifychain=True, peer_count=0, protocol_fixture_only=True, scientific_computation_claimed=False, gold_or_payment_claimed=False, live_modified=False)
+        except BaseException as error:
+            result['passed'] = False
+            result['error_type'] = type(error).__name__
+            result['error'] = str(error)[:500]
+            raise
         finally:
             if node is not None:
                 node.close()

@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import copy, json, sys, tempfile, threading, unittest
+from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src/engine/runtime_host'),str(ROOT/'src/protocol')]
 from horizon_audit_batch import apply_group,reserve_assignments,commit_ready,save
@@ -128,6 +129,20 @@ class BatchTests(unittest.TestCase):
         peer.event=old
         self.assertIs(reserve_assignments(peer),NotImplemented)
         self.assertEqual(self.f.sent,[])
+    def test_real_transport_retains_group_before_shared_journal_crash(self):
+        from horizon_network_worker import NetworkWorker
+        raw=bytearray(113);raw[4:36]=bytes.fromhex(PARENT)[::-1];raw[80]=2
+        rpc=SimpleNamespace(call=lambda method,params:dict(block=raw.hex(),parent=PARENT,numeric_target='f'*64))
+        worker=object.__new__(NetworkWorker);worker.root=self.f.root;worker.rpc=rpc;worker.args=SimpleNamespace(pilot_coordination=True)
+        retained=[]
+        def fail_shared(path,value):
+            self.assertEqual(len(retained),1)
+            self.assertEqual(retained[0],value)
+            raise OSError('power failure before shared journal write')
+        with patch('horizon_network_worker.save',side_effect=fail_shared):
+            with self.assertRaises(OSError):worker.ledger(['00'],on_intent=lambda intent:retained.append(dict(intent)))
+        self.assertEqual(len(retained),1)
+        self.assertFalse((self.f.root/'coordination-intent.json').exists())
     def test_cross_stage_or_authority_has_no_send(self):
         p,q=self.f.peers
         with self.assertRaises(ValueError):apply_group([(p,'assign',None,None,None,None),(q,'commit',REQUEST,0,0,'f'*64)])
