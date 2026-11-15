@@ -101,6 +101,10 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  }
  const auto captures=qEnvironmentVariable("PGN_AUDIT_UI_CAPTURE");
  if(!captures.isEmpty()){
+  QJsonArray captureLeases,captureReports,captureAudits;
+  const QString captureStates[6][2]{{"passed","passed"},{"passed","committed"},{"assigned",""},{"failed","passed"},{"committed","committed"},{"assigned","assigned"}};
+  for(int i=0;i<6;++i){auto lease=leases[i].toObject();lease.insert("audited",i==0);captureLeases.append(lease);captureReports.append(reports[i]);QJsonArray slots;for(int slot=0;slot<2;++slot)if(!captureStates[i][slot].isEmpty())slots.append(QJsonObject{{"slot",slot},{"attempt",0},{"state",captureStates[i][slot]}});captureAudits.append(QJsonObject{{"request_id",lease.value("request")},{"audited",i==0},{"jobs",slots}});}
+  page.insert("leases",captureLeases);page.insert("reports",captureReports);page.insert("audits",captureAudits);page.insert("bestblockhash",QString(64,'7'));page.insert("active_lease_count",6);refresh->click();app.processEvents();table->setCurrentCell(0,0);table->selectRow(0);table->scrollToItem(table->item(0,0));need(table->rowCount()==6&&table->item(0,4)->text()=="Assigned audits passed","capture contains genuine complete passed row");
   QDir().mkpath(captures);view.setStyleSheet("QMainWindow,QWidget{background:#010b10;color:#c9eee7;}"+HorizonWorkspaceControlStyle());
   for(int width:{1366,1920}){view.resize(width,900);view.show();for(int n=0;n<8;++n)app.processEvents();need(view.grab().save(QDir(captures).filePath(QString("network-work-%1.png").arg(width))),"real themed widget capture");}
  }
