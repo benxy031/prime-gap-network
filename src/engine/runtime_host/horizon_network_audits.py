@@ -65,16 +65,16 @@ class NetworkAudits:
                 raise RetainedAuditPublicationError('Retained audit signer key is unavailable in this wallet; private answer retained')
         return address
 
-    def event(self, action, request=None, slot=None, attempt=None, body=None):
+    def event(self, action, request=None, slot=None, attempt=None, body=None, *, preceding_events=None):
         owner = self.worker.address()
-        if action == 'reveal':
+        if action == 'reveal' or (action == 'commit' and preceding_events is not None):
             # The miner identity can change after an immutable answer was
             # committed. Recover its canonical signer, never rebind the result
             # or sign on behalf of an address whose key is not in this wallet.
             state = self.state(request)
             job = next((j for j in state.get('jobs', [])
                         if j.get('slot') == slot and j.get('attempt') == attempt), None)
-            if not job or job.get('commitment') != hashlib.sha256(bytes.fromhex(body)).hexdigest():
+            if not job or (action == 'reveal' and job.get('commitment') != hashlib.sha256(bytes.fromhex(body)).hexdigest()):
                 raise RetainedAuditPublicationError('Retained audit no longer matches its canonical commitment; private answer retained')
             script = job.get('actor')
             if script is not None:
@@ -90,11 +90,11 @@ class NetworkAudits:
                 raise RetainedAuditPublicationError('Retained owner report no longer matches its canonical commitment; private report retained')
             owner = self.retained_signer(reports[0].get('miner_script'), owner)
         args = [action, owner, request, slot, attempt, body]
-        proposal = self.worker.rpc.call("getpgnauditevent", args)
+        proposal = self.worker.rpc.call("getpgnauditevent", args if preceding_events is None else args + [None, preceding_events])
         if not proposal.get("available"):
             return proposal
         signature = self.worker.rpc.call("signmessage", [owner, proposal["challenge"]], wallet=True)
-        return self.worker.rpc.call("getpgnauditevent", args + [signature])
+        return self.worker.rpc.call("getpgnauditevent", args + [signature] + ([] if preceding_events is None else [preceding_events]))
 
     def apply(self, action, request=None, slot=None, attempt=None, body=None, *, on_intent=None):
         # Identity/body is immutable; physical candidates are parent-bound.
@@ -185,8 +185,12 @@ class NetworkAudits:
             if (publisher.worker.rpc is not self.worker.rpc or
                     publisher.worker.network_lock is not self.worker.network_lock):
                 raise ValueError('Reveal group crosses authority or publication lane')
+        disclosure_errors = []
+        if any(audit.get('_ready_owner_disclosure') for _, _, audit in queued):
+            from horizon_audit_batch import disclose_local_ready
+            queued, disclosure_errors = disclose_local_ready(self, queued)
         for retry in range(2):
-            errors = []
+            errors = list(disclosure_errors)
             envelopes = []
             seen = set()
             byte_count = 0
@@ -393,6 +397,9 @@ class NetworkAudits:
                 self.answers.acknowledge(name)
                 continue
             if job["state"] != "committed" or not state.get("details_root"):
+                if (publication_batch is not None and job["state"] == "committed" and len(jobs) == 2
+                        and all(j["state"] == "committed" for j in jobs)):
+                    publication_batch.append((self, name, dict(audit, _ready_owner_disclosure=True)))
                 keep.append(name)
                 continue
             if publication_batch is not None:
@@ -572,9 +579,17 @@ class NetworkAudits:
             if restored != audit:
                 save(journal, restored)
             audit = restored
-            anchor = self.worker.rpc.call('getbestblockhash') if self.on_retired is not None else None
+            anchor = self.worker.rpc.call('getbestblockhash')
             current = self.state(audit["request_id"])
             job = next((j for j in current.get("jobs", []) if j["slot"] == audit["slot"] and j["attempt"] == audit["attempt"]), None)
+            if job and job['state'] == 'assigned' and (job.get('expired') is True
+                    or ('actor' in audit and job.get('actor') != audit['actor'])):
+                from horizon_audit_recovery import retain_changed_assignment
+                if anchor is None:
+                    raise RuntimeError('Stable audit anchor required before retiring an inactive reservation')
+                retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc,
+                    self.on_retired or (lambda value, block: None))
+                return 'retired'
             if not job or job["state"] != "assigned":
                 if self.on_committed is not None:
                     if (job and job["state"] in ("committed", "passed", "failed")
@@ -597,28 +612,38 @@ class NetworkAudits:
         else:
             audit = None
         if audit is None:
-            proposal = self.apply("assign")
-            if not proposal.get("available"):
-                self.last_unavailable = proposal
-                recover = getattr(self.worker, 'recover_assigned_audit', None)
-                if proposal.get('unavailable_reason') == 'no_eligible_independent_work' and callable(recover):
-                    audit, complete = recover(self.folder)
-                    if audit is None and not complete:
-                        self.last_unavailable = dict(proposal, unavailable_reason='assignment_recovery_pending',
-                            reason='Recovering existing assigned audits from the verified chain')
-                if audit is None:
-                    return "none"
-            else:
-                reports = self.worker.rpc.call("getpgnreports", [0, 1, proposal["request_id"]])
-                if len(reports) != 1:
-                    raise ValueError("Assigned audit has no immutable report")
-                report = reports[0]
-                audit = dict(schema="PGN_HORIZON_ASSIGNED_AUDIT_V1", request_id=proposal["request_id"], ticket=report["ticket"], report_root=report["report_root"], slot=proposal["slot"], attempt=proposal["attempt"], ranges=proposal["ranges"], counts=[])
-            # The Core attribution is already confirmed. Retain its identity
-            # before the catalogue can return BUSY/ENOSPC: a retry must resume
-            # this assignment, not ask for another and waive its service slot.
-            # Seal recovery still precedes any computation or nonce creation.
-            save(journal, audit)
+            with self.worker.network_lock:
+                if getattr(self.worker, 'audit_group_journal', None) is not None:
+                    from horizon_audit_batch import reserve_assignments
+                    audit = reserve_assignments(self)
+                    if audit is NotImplemented:
+                        audit = None
+                        proposal = self.apply('assign')
+                    else:
+                        proposal = dict(available=True) if audit is not None else (self.last_unavailable or dict(available=False))
+                else:
+                    proposal = self.apply("assign")
+                if not proposal.get("available"):
+                    self.last_unavailable = proposal
+                    recover = getattr(self.worker, 'recover_assigned_audit', None)
+                    if proposal.get('unavailable_reason') == 'no_eligible_independent_work' and callable(recover):
+                        audit, complete = recover(self.folder)
+                        if audit is None and not complete:
+                            self.last_unavailable = dict(proposal, unavailable_reason='assignment_recovery_pending',
+                                reason='Recovering existing assigned audits from the verified chain')
+                    if audit is None:
+                        return "none"
+                elif audit is None:
+                    reports = self.worker.rpc.call("getpgnreports", [0, 1, proposal["request_id"]])
+                    if len(reports) != 1:
+                        raise ValueError("Assigned audit has no immutable report")
+                    report = reports[0]
+                    audit = dict(schema="PGN_HORIZON_ASSIGNED_AUDIT_V1", request_id=proposal["request_id"], ticket=report["ticket"], report_root=report["report_root"], slot=proposal["slot"], attempt=proposal["attempt"], ranges=proposal["ranges"], counts=[])
+                # The Core attribution is already confirmed. Retain its identity
+                # before the catalogue can return BUSY/ENOSPC: a retry must resume
+                # this assignment, not ask for another and waive its service slot.
+                # Seal recovery still precedes any computation or nonce creation.
+                save(journal, audit)
             audit = self.restore_reassigned_answer(audit)
             save(journal, audit)
         elif audit.get('publication_intent') and self.reassignment_needed is not None and self.reassignment_needed(audit):
@@ -696,8 +721,14 @@ class NetworkAudits:
                 raise BufferError("Audit publication journal exceeds its budget")
             save(journal, audit)
             save(self.folder / (name + ".json"), audit)
-        receipt = self.apply("commit", audit["request_id"], audit["slot"], audit["attempt"], answer["commitment"],
-                             on_intent=retain_publication if self.on_committed is not None else None)
+        if getattr(self.worker, 'audit_prefix_supported', False):
+            from horizon_audit_batch import commit_ready
+            audit['commit_ready'] = True
+            save(journal, audit)
+            receipt = commit_ready(self, audit, retain_publication)
+        else:
+            receipt = self.apply("commit", audit["request_id"], audit["slot"], audit["attempt"], answer["commitment"],
+                                 on_intent=retain_publication if self.on_committed is not None else None)
         if not receipt.get("available"):
             raise RuntimeError("Audit commitment unavailable; private answer retained")
         if self.on_committed is not None:
