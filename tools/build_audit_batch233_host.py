@@ -13,7 +13,7 @@ shutil.copytree(out/'build/dist/horizon-engine-host',stage)
 binary=stage/('horizon-engine-host.exe'if os.name=='nt'else'horizon-engine-host')
 version=subprocess.check_output([str(binary),'--version'],text=True,timeout=20);assert versions['gpu']in version
 raw=subprocess.check_output([str(binary),'--audit-batch-self-test'],text=True,timeout=60)
-selftest=json.loads(raw);assert selftest['passed']and selftest['checks']>=16 and selftest['no_network']and selftest['no_child_processes']and not selftest['cpu_activated']and not selftest['scientific_qualification']
+selftest=json.loads(raw);assert selftest['passed']and selftest['checks']==17 and selftest['no_network']and selftest['no_child_processes']and not selftest['cpu_activated']and not selftest['scientific_qualification']
 (out/'HOST-SELFTEST.json').write_text(json.dumps(selftest,indent=2)+'\n',encoding='utf-8')
 shutil.copyfile(out/'build/ENGINE-HOST-SOURCE.json',out/'ENGINE-HOST-SOURCE.json')
 files={p.relative_to(out/'runtime').as_posix():dict(bytes=p.stat().st_size,sha256=hashlib.sha256(p.read_bytes()).hexdigest())for p in sorted((out/'runtime').rglob('*'))if p.is_file()}

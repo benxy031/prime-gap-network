@@ -216,6 +216,17 @@ class BatchTests(unittest.TestCase):
         kept=list((publisher.folder/'retained-assignments').glob('*.json'))
         self.assertEqual(len(kept),1);self.assertEqual(kept[0].read_bytes(),raw)
         self.assertEqual(retired,[(audit,PARENT)])
+    def test_watchonly_signer_cannot_reenter_legacy_assignment_recovery(self):
+        from horizon_network_audits import NetworkAudits
+        root=self.f.root/'watchonly-caller';root.mkdir();recovered=[];self.f.watchonly=True
+        def recover(folder):recovered.append(folder);return None,True
+        worker=SimpleNamespace(root=root,rpc=self.f,network_lock=self.f.lock,args=SimpleNamespace(),
+            source=SimpleNamespace(),audit_prefix_supported=True,recover_assigned_audit=recover)
+        publisher=NetworkAudits(worker)
+        publisher.apply=lambda *args:dict(available=False,unavailable_reason='no_eligible_independent_work',actor='0014'+'1'*40)
+        self.assertEqual(publisher.process_one(),'none')
+        self.assertEqual(recovered,[])
+        self.assertEqual(publisher.last_unavailable['unavailable_reason'],'signing_key_unavailable')
 
 def run():
     import io, socket, subprocess

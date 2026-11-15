@@ -627,6 +627,12 @@ class NetworkAudits:
                     self.last_unavailable = proposal
                     recover = getattr(self.worker, 'recover_assigned_audit', None)
                     if proposal.get('unavailable_reason') == 'no_eligible_independent_work' and callable(recover):
+                        if getattr(self.worker, 'audit_prefix_supported', False):
+                            from horizon_audit_batch import signable_actor
+                            if not signable_actor(self.worker, proposal['actor']):
+                                self.last_unavailable = dict(proposal, unavailable_reason='signing_key_unavailable',
+                                    reason='Wallet signing key unavailable; retained audit work preserved')
+                                return 'none'
                         audit, complete = recover(self.folder)
                         if audit is None and not complete:
                             self.last_unavailable = dict(proposal, unavailable_reason='assignment_recovery_pending',
