@@ -1,5 +1,6 @@
 // MIT. Chain-authenticated candidate monetary metadata, NOT adopted issuance.
 #pragma once
+#include <pgn/audit_grouping_activation.h>
 #include <pgn/chain_range_policy.h>
 #include <pgn/issued_supply_curve.h>
 #include <pgn/gold_epoch_policy.h>
@@ -117,6 +118,14 @@ inline ChainMonetaryPolicyCheck ReadChainMonetaryPolicy(const CCoinsView& view,c
             }
             audits=AuditSettlementDefinition{configured->page_outputs};
         }
+    }
+    // Finish a legacy page before changing representation. The first later
+    // block without a legacy active page performs an exact zero-value mode
+    // transition; historical policy identity and already-paid totals survive.
+    if(audits&&!audits->grouped&&AuditGroupingScheduled(p.genesis->Chain(),int64_t(parent.nHeight)+1)){
+        const auto state=view.GetPgnIssuanceState();
+        if(!state||!state->audit_settlement)return {ChainRangePolicyVerdict::InvalidConfiguration,{}};
+        audits->grouped=state->audit_settlement->grouped||!state->audit_settlement->active;
     }
     // Existing monetary policy identity is preserved; the activation contract
     // has its own digest and mandatory activation-block commitment.

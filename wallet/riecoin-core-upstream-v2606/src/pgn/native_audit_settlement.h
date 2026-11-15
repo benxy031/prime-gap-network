@@ -250,7 +250,13 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
         // only after its exact no-value migration has committed atomically.
         AuditSettlementPage page;page.activation=AuditSettlementActivationReceipt(*policy.Activation());return page;
     }
-    if(!before->epochs||!after.audit_settlement||policy.Audits()->grouped!=after.audit_settlement->grouped)return {};
+    if(!before->epochs||!after.audit_settlement)return {};
+    auto pending=after;
+    if(policy.Audits()->grouped!=pending.audit_settlement->grouped){
+        if(!policy.Audits()->grouped||pending.audit_settlement->grouped||before->audit_settlement->active||
+           !AuditGroupingScheduled(policy.Chain(),int64_t(parent.nHeight)+1))return {};
+        pending.audit_settlement->grouped=true;
+    }
     if(const auto& active=before->audit_settlement->active;active){
         const auto* anchor=parent.GetAncestor(active->height);
         if(!anchor||anchor->GetBlockHash()!=active->cutoff)return {};
@@ -268,9 +274,10 @@ inline std::optional<AuditSettlementPage> PrepareNativeAuditSettlement(
         }
         if(!cutoff_height)return {};
     }
-    return ApplyAuditSettlementPageLazy([&]{return ReadNativeAuditLedger(view,parent,
+    const auto page=ApplyAuditSettlementPageLazy([&]{return ReadNativeAuditLedger(view,parent,
         context->history,context->policy,context->schedule,context->signature);},
-        *policy.Epochs(),policy.Audits()->page_outputs,cutoff_golds,cutoff_height,cutoff,after);
+        *policy.Epochs(),policy.Audits()->page_outputs,cutoff_golds,cutoff_height,cutoff,pending);
+    if(page)after=std::move(pending);return page;
 }
 struct NativeAuditCoordinationPlan {IssuanceHistoryStep forward;AuditSettlementPage page;};
 // Settlement consumes already-promised audit reserves. It grants neither a Gold
