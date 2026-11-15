@@ -9,6 +9,11 @@ import argparse,base64,contextlib,hashlib,http.client,json,os,socket,struct,subp
 GENESIS='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314'
 PAYOUT='00140b8cb565270a3ede7f09ae1ecdd7e0eaa7430e8d'
 def sh(b):return hashlib.sha256(hashlib.sha256(b).digest()).digest()
+def file_sha(path):
+    h=hashlib.sha256()
+    with path.open('rb')as f:
+        for chunk in iter(lambda:f.read(1048576),b''):h.update(chunk)
+    return h.hexdigest()
 def port():
     with socket.socket()as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 def vi(b,p):
@@ -19,7 +24,7 @@ class Node:
     def __init__(self,core,data):self.core=core;self.data=data;self.process=None;self.log=None;self.p2p=port();self.start()
     def start(self):
         self.data.mkdir(parents=True,exist_ok=True);self.rpcport=port();self.log=(self.data/'owned.log').open('ab')
-        self.process=subprocess.Popen([str(self.core),'-testnet','-server=1','-listen=1','-bind=127.0.0.1','-port='+str(self.p2p),'-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-listenonion=0','-par=1','-dbcache=32','-keypool=2','-rpcthreads=2','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(self.rpcport),'-datadir='+str(self.data)],stdin=subprocess.DEVNULL,stdout=self.log,stderr=subprocess.STDOUT,creationflags=0x08000000 if os.name=='nt' else 0)
+        self.process=subprocess.Popen([str(self.core),'-testnet','-server=1','-listen=1','-bind=127.0.0.1','-port='+str(self.p2p),'-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-listenonion=0','-par=1','-dbcache=32','-keypool=2','-rpcthreads=2','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(self.rpcport),'-datadir='+str(self.data)],stdin=subprocess.DEVNULL,stdout=self.log,stderr=subprocess.STDOUT,creationflags=0x08004000 if os.name=='nt' else 0)
         deadline=time.monotonic()+45
         while self.process.poll()is None and time.monotonic()<deadline:
             try:
@@ -69,8 +74,9 @@ def mine(raw,target,clock=None):
     raise RuntimeError('Owned coordination work search exhausted')
 def append(node,salt=0):
     work=node.rpc('getpgnbootstraptemplate',[[]]);assert work['nonce_offset']==82 and work['nonce_bytes']==8
-    raw,identity=mine(bytes.fromhex(work['block']),int(work['numeric_target'],16),int(time.time())+salt)
-    assert node.rpc('submitblock',[raw.hex()])is None
+    proposed=bytes.fromhex(work['block']);clock=max(struct.unpack_from('<q',proposed,68)[0],int(time.time())+salt)
+    raw,identity=mine(proposed,int(work['numeric_target'],16),clock)
+    reply=node.rpc('submitblock',[raw.hex()]);assert reply is None,(work['height'],reply,clock)
     assert node.rpc('getbestblockhash')==identity
     return identity,raw
 def tamper_first_payment(raw,target):
@@ -86,8 +92,9 @@ def tamper_first_payment(raw,target):
     b[36:68]=sh(b[start:])
     return mine(b,target)[0]
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--core',type=Path,required=True);parser.add_argument('--history',type=Path,required=True);parser.add_argument('--receipt',type=Path,required=True);args=parser.parse_args()
-    with args.history.open('rb')as f:assert hashlib.file_digest(f,'sha256').hexdigest()=='09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4'
+    parser=argparse.ArgumentParser();parser.add_argument('--core',type=Path,required=True);parser.add_argument('--history',type=Path,required=True);parser.add_argument('--receipt',type=Path,required=True);parser.add_argument('--legacy',action='store_true');args=parser.parse_args()
+    output_count=38 if args.legacy else 1;format_version=5 if args.legacy else 6
+    assert file_sha(args.history)=='09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4'
     nodes=[];result=dict(PASS=False,live_changed=False,public_activation=False,qualification_activation_height=322)
     started=time.monotonic()
     try:
@@ -106,6 +113,7 @@ def main():
             for node in nodes:
                 s=node.rpc('getpgnstate',[0,1]);assert s['height']==321 and s['gold_blocks']==10 and s['audit_paid_atomic']=='0'and s['audit_pool_atomic']=='1250000000000'and s['issuance_snapshot_version']==5
                 node.watch();assert node.coins()==0
+            result['phase']='public_prefix_and_watch_wallets_passed'
             b.rpc('addnode',['127.0.0.1:'+str(a.p2p),'onetry'])
             work=a.rpc('getpgnbootstraptemplate',[[]]);assert work['height']==322
             raw,identity=mine(bytes.fromhex(work['block']),int(work['numeric_target'],16))
@@ -113,10 +121,11 @@ def main():
             assert a.rpc('getblockcount')==321 and a.rpc('getpgnstate',[0,1])['audit_paid_atomic']=='0'
             assert a.rpc('submitblock',[raw.hex()])is None;await_tip(b,identity)
             block=a.rpc('getblock',[identity,2]);positive=[o for o in block['tx'][0]['vout']if o['value']]
-            assert len(positive)==1 and Decimal(str(positive[0]['value']))==125
+            assert len(positive)==output_count and sum(Decimal(str(o['value']))for o in positive)==125
             for node in nodes:
-                s=node.rpc('getpgnstate',[0,1]);assert s['gold_blocks']==10 and s['audit_paid_atomic']=='1250000000000'and s['audit_pool_atomic']=='0'and s['issuance_snapshot_version']==6
+                s=node.rpc('getpgnstate',[0,1]);assert s['gold_blocks']==10 and s['audit_paid_atomic']=='1250000000000'and s['audit_pool_atomic']=='0'and s['issuance_snapshot_version']==format_version
                 assert node.coins()==125
+            result['phase']='actual_payment_and_peer_relay_passed'
             next_hash,_=append(a);await_tip(b,next_hash)
             assert not any(o['value']for o in a.rpc('getblock',[next_hash,2])['tx'][0]['vout'])
             a.close();a.start();a.ensure_wallet();assert a.coins()==125
@@ -127,14 +136,15 @@ def main():
             b.rpc('addnode',['127.0.0.1:'+str(a.p2p),'onetry']);await_tip(b,fork_hash)
             assert b.rpc('getblock',[identity])['confirmations']==-1
             for node in nodes:assert node.coins()==125 and node.rpc('getpgnstate',[0,1])['audit_paid_atomic']=='1250000000000'
+            result['phase']='cold_restart_and_actual_two_node_reorg_passed'
             for _ in range(101):last,_=append(a)
             await_tip(b,last)
             for node in nodes:
                 unspent=node.rpc('listunspent',[1,9999999,[],True],True)
-                assert len(unspent)==1 and Decimal(str(unspent[0]['amount']))==125 and unspent[0]['scriptPubKey']==PAYOUT
+                assert len(unspent)==output_count and sum(Decimal(str(o['amount']))for o in unspent)==125 and all(o['scriptPubKey']==PAYOUT for o in unspent)
                 assert node.rpc('verifychain',[4,0])is True
                 node.close();node.start();node.ensure_wallet();assert node.coins()==125 and node.rpc('getbestblockhash')==last
-            result.update(PASS=True,public_prefix_blocks=322,actual_original_audit_outputs=38,actual_grouped_audit_outputs=1,exact_paid_PGN='125',two_Core_relay=True,full_ConnectBlock=True,watch_only_wallets=True,malformed_amount_rejected=reject,duplicate_payment_refused=True,cold_restart=True,reorg_undo_and_reapply=True,one_mature_UTXO_per_beneficiary=True,verifychain_level4=True,core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(),seconds=round(time.monotonic()-started,3))
+            result.update(PASS=True,public_prefix_blocks=322,actual_original_audit_outputs=38,actual_payment_outputs=output_count,legacy_reference=args.legacy,exact_paid_PGN='125',two_Core_relay=True,full_ConnectBlock=True,watch_only_wallets=True,malformed_amount_rejected=reject,duplicate_payment_refused=True,cold_restart=True,reorg_undo_and_reapply=True,mature_UTXOs=output_count,verifychain_level4=True,core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(),seconds=round(time.monotonic()-started,3))
     except Exception as error:
         result['error']=str(error)[:2000]
         raise

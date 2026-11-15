@@ -1,0 +1,51 @@
+name: Grouped249 downstream qualification of exact built Core
+on:
+  push:
+    branches: [qualification/grouped249-replay]
+permissions:
+  contents: read
+jobs:
+  replay_exact_core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      # GitHub draft fixture download requires writer access; token exposed
+      # only in the bounded authenticated download step, never in product code.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Retrieve exact compiled artifact and public fixture
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/wizz13150/prime-gap-network/actions/artifacts/14169998425/zip > qualified249.zip
+          echo '2dfdd10c2f0117c2d3bb4c10467af351490d754d0bd02873b3b9cab249e141f2  qualified249.zip' | sha256sum -c -
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history249.blocks
+          echo '09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4  public-history249.blocks' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import stat, zipfile
+          root=Path('qualified').resolve()
+          with zipfile.ZipFile('qualified249.zip') as archive:
+              assert sum(e.file_size for e in archive.infolist())<100000000
+              for entry in archive.infolist():
+                  p=PurePosixPath(entry.filename)
+                  assert not p.is_absolute() and '..' not in p.parts
+                  assert not stat.S_ISLNK(entry.external_attr>>16)
+              archive.extractall(root)
+          PY
+          chmod +x qualified/build-native/bin/pgn-core-qualified249
+      - name: Run corrected driver against unchanged built Core
+        run: |
+          mkdir -p evidence249
+          python3 tests/native_grouped249_actual.py --core qualified/build-native/bin/pgn-core-qualified249 --history public-history249.blocks --receipt evidence249/actual.json
+      - name: Preserve actual qualification receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: grouped249-replay-${{ github.run_id }}
+          path: evidence249
+          if-no-files-found: error
