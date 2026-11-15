@@ -153,6 +153,24 @@ def main():
             forged = old[0]['envelope'][:-2]+('00' if old[0]['envelope'][-2:] != '00' else '01')
             result['forged_signature_rejected'] = rejects(lambda: peers[1].event('assign', preceding_events=[forged]))
             result['explicit_slot_rejected'] = rejects(lambda: node.call('getpgnauditevent', ['assign', roles[1], work['request_id'], 1]))
+            proper_a = peers[0].event('assign', preceding_events=[])
+            proper_b = peers[1].event('assign', preceding_events=[proper_a['envelope']])
+            assert [proper_a['slot'], proper_b['slot']] == [0,1]
+            before_negative = node.call('getbestblockhash')
+            result['incomplete_prefix_rejected'] = rejects(lambda: peers[1].event('assign', preceding_events=[proper_b['envelope']]))
+            result['duplicated_prefix_rejected'] = rejects(lambda: peers[1].event('assign', preceding_events=[proper_a['envelope'], proper_a['envelope']]))
+            result['reversed_order_rejected'] = rejects(lambda: node.call('getpgnbootstraptemplate', [[proper_b['envelope'], proper_a['envelope']]]))
+            result['invalid_tail_has_no_partial_effect'] = rejects(lambda: node.call('getpgnbootstraptemplate', [[proper_a['envelope'], proper_b['envelope'], forged]]))
+            assert node.call('getbestblockhash') == before_negative
+            # Real local reorganization, not just a competing extension. The
+            # exact original branch is reconsidered after the rejection probe.
+            node.call('invalidateblock', [before_negative])
+            reorg_tip = node.call('getbestblockhash')
+            assert reorg_tip != before_negative
+            result['reorganized_parent_rejected'] = rejects(lambda: peers[1].event('assign', preceding_events=[proper_a['envelope']]))
+            assert node.call('getbestblockhash') == reorg_tip
+            node.call('reconsiderblock', [before_negative])
+            assert node.call('getbestblockhash') == before_negative
             # One genuine competing block invalidates the first group's
             # signatures; the complete group must be freshly proposed/signed.
             original = peers[0].worker.ledger
@@ -163,7 +181,21 @@ def main():
                 return original(envelopes, **kwargs)
             peers[0].worker.ledger = competing_ledger
             base = node.call('getblockcount')+1  # Includes the deliberate competing block.
-            reserve_assignments(peers[0])
+            gate = threading.Barrier(2)
+            failures = []
+            def reserve(peer):
+                try:
+                    gate.wait(timeout=5)
+                    reserve_assignments(peer)
+                except BaseException as error:
+                    failures.append(error)
+            producers = [threading.Thread(target=reserve, args=(peer,)) for peer in peers]
+            for producer in producers: producer.start()
+            for producer in producers:
+                producer.join(timeout=20)
+                assert not producer.is_alive()
+            if failures: raise failures[0]
+            result['two_concurrent_producers_one_assignment_block'] = True
             peers[0].worker.ledger = original
             assignment_height = node.call('getblockcount')
             assert assignment_height == base+1
@@ -192,14 +224,20 @@ def main():
             assert [j['state'] for j in state['jobs']] == ['committed','committed']
             # Early reveal without the owner's disclosure remains rejected.
             result['early_reveal_rejected'] = rejects(lambda: peers[0].event('reveal', *tuple(audits[0][k] for k in ('request_id','slot','attempt')), canonical_bytes(audits[0]['answer']['body']).hex()))
-            third = apply_group([(owner,'reveal_report',work['request_id'],0,0,canonical_bytes(sealed['body']).hex())]+[(peer,'reveal',audit['request_id'],audit['slot'],audit['attempt'],canonical_bytes(audit['answer']['body']).hex()) for peer,audit in zip(peers,audits)])
-            assert len({p['confirmed_block'] for p in third}) == 1
+            report_path = owner.worker.root/'tickets'/work['ticket']/'network-report.json'
+            report_path.parent.mkdir(parents=True)
+            save(report_path,sealed)
+            errors = owner.apply_reveal_group([(peer,str(i),dict(audit,_ready_owner_disclosure=True)) for i,(peer,audit) in enumerate(zip(peers,audits))])
+            assert errors == []
             state = peers[0].state(work['request_id'])
             assert [j['state'] for j in state['jobs']] == ['passed','passed']
             assert node.call('getblockcount') == assignment_height+2
             assert node.call('verifychain', [4, 0]) is True
             assert node.call('getpeerinfo') == []
             blocks = [node.call('getblock', [node.call('getblockhash',[h]),2]) for h in range(assignment_height,assignment_height+3)]
+            actual_events = [[output['scriptPubKey']['hex'] for tx in block['tx'] for output in tx['vout'] if b'PGNAUDIT-EVENT-1'.hex() in output['scriptPubKey'].get('hex','')] for block in blocks]
+            assert [len(events) for events in actual_events] == [2,2,3]
+            result.update(event_scripts_sha256=[[hashlib.sha256(bytes.fromhex(event)).hexdigest() for event in events] for events in actual_events])
             result.update(passed=True, genesis=GENESIS, core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(), heights=list(range(assignment_height,assignment_height+3)), blocks=[b['hash'] for b in blocks], events=[2,2,3], phases=['two_assign','two_commit','owner_disclosure_and_two_reveal'], final_jobs=[dict(slot=j['slot'],attempt=j['attempt'],state=j['state']) for j in state['jobs']], verifychain=True, peer_count=0, protocol_fixture_only=True, scientific_computation_claimed=False, gold_or_payment_claimed=False, live_modified=False)
         finally:
             if node is not None:

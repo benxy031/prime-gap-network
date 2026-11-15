@@ -5,6 +5,7 @@ on:
     branches: [qualification/audit-batch232]
 permissions:
   contents: read
+  actions: read
 jobs:
   native-audit-batches:
     runs-on: ubuntu-24.04
@@ -13,23 +14,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install existing native build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
-      - name: Configure unchanged consensus with proposal RPC extension
-        run: cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_BITCOIN_BIN=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF '-DCMAKE_BUILD_RPATH=$ORIGIN'
-      - name: Compile real daemon only
-        run: cmake --build build-native --parallel 2 --target riecoind
+      - name: Reuse the immutable Core build with identical RPC inputs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -B tools/fetch_audit_batch232_core.py
       - name: Preserve recovery and immutable answer contracts
         run: |
+          python3 -B tests/test_audit_batch.py
           python3 -B tests/test_audit_assignment_reservation.py
           python3 -B tests/test_audit_assignment_durability.py
           python3 -B tests/test_assigned_audit_recovery.py
           python3 -B tests/test_network_audit_lifecycle.py
           python3 -B tests/test_retained_audit_signer.py
+          python3 -B tests/test_mining_flow_cycle.py
       - name: Three accepted blocks with actual signatures and disposable Core
-        run: python3 -B tests/native_audit_batch_rpc.py --core build-native/bin/riecoind --receipt batch232/THREE-BLOCKS.json
+        run: python3 -B tests/native_audit_batch_rpc.py --core batch232/riecoind --receipt batch232/THREE-BLOCKS.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,4 +37,4 @@ jobs:
           retention-days: 7
           path: |
             batch232/THREE-BLOCKS.json
-            build-native/bin/riecoind
+            batch232/CORE-REUSE.json

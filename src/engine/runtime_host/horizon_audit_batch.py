@@ -111,6 +111,14 @@ def reserve_assignments(publisher):
         own = publisher.folder / 'current.json'
         if own.is_file():
             return json.loads(own.read_bytes())
+        supported = getattr(publisher.worker, 'audit_prefix_supported', None)
+        if supported is None:
+            probe = publisher.event('assign')
+            supported = probe.get('proposal_context_version') == 1
+            for peer in peers:
+                peer.worker.audit_prefix_supported = supported
+        if not supported:
+            return NotImplemented  # Existing Core keeps its original single path.
         idle = [p for p in peers if not (p.folder / 'current.json').exists()]
         if publisher not in idle:
             return None
@@ -146,16 +154,29 @@ def reserve_assignments(publisher):
 
 
 def retain_assignments(peers, group):
+    anchor = peers[0].worker.rpc.call('getbestblockhash')
+    writes = []
     for row in group['rows']:
         lane = row['lane']
         if type(lane) is not int or not 0 <= lane < len(peers):
             raise ValueError('Retained assignment has unknown physical lane')
         path = peers[lane].folder / 'current.json'
+        audit = row['audit']
+        state = peers[lane].state(audit['request_id'])
+        job = next((j for j in state.get('jobs', []) if (j['slot'], j['attempt']) == (audit['slot'], audit['attempt'])), None)
+        reports = peers[lane].worker.rpc.call('getpgnreports', [0, 1, audit['request_id']])
+        if (not job or job.get('ranges') != audit['ranges'] or len(reports) != 1
+                or reports[0]['ticket'] != audit['ticket'] or reports[0]['report_root'] != audit['report_root']):
+            raise ValueError('Retained reservation differs from confirmed audit identity/ranges')
         if path.exists():
             if identity(json.loads(path.read_bytes())) != identity(row['audit']):
                 raise ValueError('Assignment reservation conflicts with retained lane')
         else:
-            save(path, row['audit'])
+            writes.append((path, audit))
+    if peers[0].worker.rpc.call('getbestblockhash') != anchor:
+        raise CoordinationParentChanged('Assignment recovery anchor changed; journal retained')
+    for path, audit in writes:
+        save(path, audit)
 
 
 def commit_ready(publisher, audit, retain_self):
@@ -194,3 +215,47 @@ def commit_ready(publisher, audit, retain_self):
             retain_self(intent)
         outcomes = apply_group([(peer, 'commit', *identity(row), row['answer']['commitment']) for peer, row in selected], on_intent=retain)
         return outcomes[next(i for i, (peer, _) in enumerate(selected) if peer is publisher)]
+
+
+def disclose_local_ready(owner, queued):
+    """Include an already-retained local owner disclosure with ready seals.
+
+    Remote owners are never impersonated. Their rows stay in the durable
+    catalogue for the ordinary next observation. Gold handling is untouched.
+    """
+    from horizon_network_audits import RetainedAuditPublicationError
+    remaining, withheld, errors = [], {}, []
+    for publisher, name, audit in queued:
+        state = publisher.state(audit['request_id'])
+        if state.get('details_root'):
+            remaining.append((publisher, name, audit))
+        else:
+            withheld.setdefault(audit['request_id'], []).append((publisher, name, audit))
+    for request, rows in withheld.items():
+        state = owner.state(request)
+        jobs = state.get('jobs', [])
+        if len(jobs) != 2 or any(job['state'] != 'committed' for job in jobs):
+            continue
+        reports = owner.worker.rpc.call('getpgnreports', [0, 1, request])
+        if len(reports) != 1:
+            continue
+        source = owner.worker.root / 'tickets' / reports[0]['ticket'] / 'network-report.json'
+        if not source.is_file():
+            continue
+        if source.stat().st_size > 262144:
+            raise ValueError('Local owner disclosure exceeds retained report budget')
+        sealed = json.loads(source.read_bytes())
+        if sealed.get('report_root') != reports[0]['report_root'] or hashlib.sha256(canonical_bytes(sealed['body'])).hexdigest() != reports[0]['report_root']:
+            raise ValueError('Local owner disclosure differs from confirmed commitment')
+        operations = [(owner, 'reveal_report', request, 0, 0, canonical_bytes(sealed['body']).hex())]
+        seen = set()
+        for publisher, name, audit in rows:
+            key = identity(audit)
+            if key not in seen:
+                seen.add(key)
+                operations.append((publisher, 'reveal', *key, canonical_bytes(audit['answer']['body']).hex()))
+        try:
+            apply_group(operations)
+        except RetainedAuditPublicationError as error:
+            errors.extend((publisher, name, error) for publisher, name, _ in rows)
+    return remaining, errors

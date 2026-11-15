@@ -67,7 +67,7 @@ class NetworkAudits:
 
     def event(self, action, request=None, slot=None, attempt=None, body=None, *, preceding_events=None):
         owner = self.worker.address()
-        if action in ('commit', 'reveal'):
+        if action == 'reveal' or (action == 'commit' and preceding_events is not None):
             # The miner identity can change after an immutable answer was
             # committed. Recover its canonical signer, never rebind the result
             # or sign on behalf of an address whose key is not in this wallet.
@@ -185,8 +185,12 @@ class NetworkAudits:
             if (publisher.worker.rpc is not self.worker.rpc or
                     publisher.worker.network_lock is not self.worker.network_lock):
                 raise ValueError('Reveal group crosses authority or publication lane')
+        disclosure_errors = []
+        if any(audit.get('_ready_owner_disclosure') for _, _, audit in queued):
+            from horizon_audit_batch import disclose_local_ready
+            queued, disclosure_errors = disclose_local_ready(self, queued)
         for retry in range(2):
-            errors = []
+            errors = list(disclosure_errors)
             envelopes = []
             seen = set()
             byte_count = 0
@@ -393,6 +397,9 @@ class NetworkAudits:
                 self.answers.acknowledge(name)
                 continue
             if job["state"] != "committed" or not state.get("details_root"):
+                if (publication_batch is not None and job["state"] == "committed" and len(jobs) == 2
+                        and all(j["state"] == "committed" for j in jobs)):
+                    publication_batch.append((self, name, dict(audit, _ready_owner_disclosure=True)))
                 keep.append(name)
                 continue
             if publication_batch is not None:
@@ -605,7 +612,11 @@ class NetworkAudits:
                 if getattr(self.worker, 'audit_group_journal', None) is not None:
                     from horizon_audit_batch import reserve_assignments
                     audit = reserve_assignments(self)
-                    proposal = dict(available=True) if audit is not None else (self.last_unavailable or dict(available=False))
+                    if audit is NotImplemented:
+                        audit = None
+                        proposal = self.apply('assign')
+                    else:
+                        proposal = dict(available=True) if audit is not None else (self.last_unavailable or dict(available=False))
                 else:
                     proposal = self.apply("assign")
                 if not proposal.get("available"):
@@ -706,7 +717,7 @@ class NetworkAudits:
                 raise BufferError("Audit publication journal exceeds its budget")
             save(journal, audit)
             save(self.folder / (name + ".json"), audit)
-        if getattr(self.worker, 'audit_publishers', None):
+        if getattr(self.worker, 'audit_prefix_supported', False):
             from horizon_audit_batch import commit_ready
             audit['commit_ready'] = True
             save(journal, audit)
