@@ -114,6 +114,11 @@ int main(int argc,char** argv){try{
     auto& parent=*indices.back();
     CCoinsViewDB coins{{.path=path/"coins",.cache_bytes=1<<20,.memory_only=true,.wipe_data=false},{}};
     CCoinsViewCache view{&coins}; view.SetBestBlock(hashes.back()); view.StagePgnFactCommit({{},FactHead{chain,hashes.back()},{}});
+    // Seed the disposable funding coin during fixture initialization, BEFORE
+    // any tracked issuance transition. Never flush an unrelated dirty child
+    // through a parent with an uncommitted monetary history.
+    {uint256 funding=chain;funding.begin()[1]=81;
+     view.AddCoin(COutPoint{Txid::FromUint256(funding),0},Coin{CTxOut{unit,miner},0,false},false);}
     NativeRequestHistoryArchive history{path/"history",1<<20};
     // Actual node uses 4,000,000 total script bytes; the old fixture was limited to16KiB.
     const ConfirmedRequestScanBudget scan{16,4,4000000,1,request_budget};
@@ -357,7 +362,7 @@ int main(int argc,char** argv){try{
     // from inherited native amount/input validation, never from a sender DTO.
     CCoinsViewCache fee_inputs{&view};uint256 funding=chain;funding.begin()[1]=81;
     const COutPoint input{Txid::FromUint256(funding),0};const CAmount funding_value=unit;
-    fee_inputs.AddCoin(input,Coin{CTxOut{funding_value,miner},0,false},false);
+    need(fee_inputs.AccessCoin(input).out==CTxOut{funding_value,miner},"Disposable funding coin missing");
     CMutableTransaction transfer;transfer.vin.emplace_back(input);transfer.vout.emplace_back(funding_value-1530,alternate);
     FillableSigningProvider signer;signer.AddKey(key);SignatureData input_signature;
     need(ProduceSignature(signer,MutableTransactionSignatureCreator(transfer,0,funding_value,SignOptions{SIGHASH_ALL}),
@@ -411,7 +416,7 @@ int main(int argc,char** argv){try{
     const auto fee_hash=fee_block.GetHash();CBlockIndex fee_index;fee_index.phashBlock=&fee_hash;
     fee_index.pprev=const_cast<CBlockIndex*>(&at);fee_index.nHeight=at.nHeight+1;fee_index.nTx=fee_block.vtx.size();
     const auto fee_facts=PrepareNativeTicketGoldBlockForward(view,at,fee_index,*fee_science.block);
-    fee_inputs.SetBestBlock(at.GetBlockHash());fee_inputs.Flush();view.Flush();
+    view.Flush();
     const auto fee_before_money=view.GetPgnIssuanceState();const auto fee_before_head=view.GetPgnFactHead();
     Coin spent_input;const COutPoint created{signed_transfer.GetHash(),0};
     {CCoinsViewCache child{&view};need(child.SpendCoin(input,&spent_input),"Native input disappeared before combined commit");
