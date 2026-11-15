@@ -1,4 +1,4 @@
-name: Core22 offchain display and read-only scientific projections
+name: Core22 exact recorded rosettes and scientific coverage
 on:
   push:
     branches: [qualification/product268]
@@ -29,13 +29,14 @@ jobs:
       - name: Build actual Core and settlement guards from the same ABI
         run: |
           cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_DAEMON=ON -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF -DPGN_DAEMON_OUTPUT_NAME=pgn-core
-          cmake --build build-native --parallel 2 --target riecoind pgn-native-audit-settlement-test pgn-native-leaderboard-test pgn-leaderboard-rosettes-test
+          jobs=$(nproc); ram_jobs=$(( $(awk '/MemAvailable/{print $2}' /proc/meminfo) / 2048000 )); ((ram_jobs < 1)) && ram_jobs=1; ((jobs > ram_jobs)) && jobs=$ram_jobs
+          cmake --build build-native --parallel "$jobs" --target riecoind pgn-native-audit-settlement-test pgn-native-leaderboard-test pgn-leaderboard-rosettes-test
       - name: Qualified leaderboard and exact compact medal statistics
         run: |
           set -euo pipefail
           mkdir -p evidence22
-          build-native/bin/pgn-native-leaderboard-test | tee evidence22/leaderboard.txt
-          build-native/bin/pgn-leaderboard-rosettes-test wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt | tee evidence22/rosettes.txt
+          build-native/bin/pgn-native-leaderboard-test "$PWD/build-native/leaderboard268" | tee evidence22/leaderboard.txt
+          build-native/bin/pgn-leaderboard-rosettes-test wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt | tee evidence22/rosettes.txt
       - name: Actual ConnectBlock, relay, watch wallet, cold restart and reorg
         run: |
           set -euo pipefail

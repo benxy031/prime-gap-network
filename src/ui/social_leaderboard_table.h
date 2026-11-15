@@ -40,7 +40,9 @@ public:
             // Segoe UI's numeric text is right aligned; the exact integer stays
             // in the native model tooltip and accessible description.
             const bool award=index.column()>=6;p->setPen(award?QColor("#36575f"):QColor("#294950"));
-            p->drawText(option.rect.adjusted(10,0,-14,0),award?Qt::AlignCenter:Qt::AlignRight|Qt::AlignVCenter,index.data().toString());
+            const QRect textRect=award?option.rect.adjusted(2,0,-2,0):option.rect.adjusted(10,0,-14,0);
+            const QString text=award?p->fontMetrics().elidedText(index.data().toString(),Qt::ElideRight,textRect.width()):index.data().toString();
+            p->drawText(textRect,award?Qt::AlignCenter:Qt::AlignRight|Qt::AlignVCenter,text);
         }
         if(option.state&QStyle::State_HasFocus){p->setBrush(Qt::NoBrush);p->setPen(QPen(QColor("#397e79"),1));p->drawRoundedRect(option.rect.adjusted(2,2,-2,-3),4,4);}
         p->restore();

@@ -1894,6 +1894,10 @@ endif()
 # Exact scientific coverage is optional presentation, never a mining gate.
 target_sources(pgn-mining-ui PRIVATE src/ui/scientific_coverage_presentation.cpp)
 target_sources(pgn-network-work-view-test PRIVATE src/ui/scientific_coverage_presentation.cpp)
+target_sources(pgn-ticket-atlas-mass-view-test PRIVATE src/ui/scientific_coverage_presentation.cpp)
+target_sources(pgn-named-report-snapshot-view-test PRIVATE src/ui/scientific_coverage_presentation.cpp)
+target_sources(pgn-audit-animation-view-test PRIVATE src/ui/scientific_coverage_presentation.cpp)
+
 add_executable(pgn-scientific-coverage-presentation-test tests/scientific_coverage_presentation_test.cpp src/ui/scientific_coverage_presentation.cpp)
 target_include_directories(pgn-scientific-coverage-presentation-test PRIVATE src/ui)
 target_link_libraries(pgn-scientific-coverage-presentation-test PRIVATE Qt6::Core)
