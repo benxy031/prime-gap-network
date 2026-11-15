@@ -1,0 +1,106 @@
+name: Exact public and candidate Defender comparison
+on:
+  push:
+    branches: [qualification/defender-compare-20261115]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  defender_compare:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Recover exact public and qualified samples without executing them
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @'
+          from pathlib import Path
+          import hashlib,json,os,shutil,tarfile,urllib.request,urllib.error,zipfile
+          root=Path('samples');root.mkdir();rows=[]
+          def sha(p):
+           with p.open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          oldhash='57d70b5823f6b4c8c7ae7a2ef9b56f9972c1137ddd02646422c09e3ed2988ffa'
+          url='https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/'+oldhash+'.PGN-Horizon-testnet-Windows-x64.zip'
+          urllib.request.urlretrieve(url,'public.zip');assert sha(Path('public.zip'))==oldhash
+          with zipfile.ZipFile('public.zip')as z:
+           for member,expected in [('PGN-Horizon/PGN-Horizon.exe','616616de271595c45bc2e20ccd26183bb34f5ad6b06b05a0bf6f48666f270629'),('PGN-Horizon/EngineRuntime/bin/pgn-gap-evidence.exe','3ba06f922ff3828ba2069c8e5e4c25e3355d1a9f6ae79b8f833cb1f5a3c2fd15')]:
+            p=root/'public'/Path(member).name;p.parent.mkdir(exist_ok=True)
+            with z.open(member)as src,p.open('xb')as out:shutil.copyfileobj(src,out)
+            assert sha(p)==expected;rows.append(dict(path=str(p.resolve()),sha256=expected,origin=url,source='public UI152 package'))
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+           def redirect_request(self,req,fp,code,msg,headers,newurl):return None
+          api='https://api.github.com/repos/wizz13150/prime-gap-network/actions/runs/43719958688/artifacts'
+          headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'}
+          with urllib.request.urlopen(urllib.request.Request(api,headers=headers),timeout=30)as r:artifacts=json.load(r)['artifacts']
+          a=next(a for a in artifacts if a['name']=='ui157-windows-43719958688'and not a['expired'])
+          assert a['digest']=='sha256:86b557d15b42453729bc1ab5c08a7bd56becb2af1abfc3287780016f9a568b69'
+          api='https://api.github.com/repos/wizz13150/prime-gap-network/actions/artifacts/'+str(a['id'])+'/zip'
+          try:urllib.request.build_opener(NoRedirect()).open(urllib.request.Request(api,headers=headers),timeout=30);raise RuntimeError('Expected signed storage redirect')
+          except urllib.error.HTTPError as e:
+           assert e.code==302;storage=e.headers['Location'];assert storage.startswith('https://')
+          with urllib.request.urlopen(storage,timeout=60)as src,Path('candidate.zip').open('xb')as out:shutil.copyfileobj(src,out)
+          assert sha(Path('candidate.zip'))==a['digest'].split(':')[1]
+          with zipfile.ZipFile('candidate.zip')as z:
+           assert z.namelist()==['ui157-windows.tar.gz']
+           with z.open(z.namelist()[0])as src,tarfile.open(fileobj=src,mode='r|gz')as t:
+            for e in t:
+             if e.name!='ui/PGN-Horizon.exe':continue
+             p=root/'candidate'/'PGN-Horizon.exe';p.parent.mkdir(exist_ok=True)
+             with t.extractfile(e)as f,p.open('xb')as out:shutil.copyfileobj(f,out)
+             assert sha(p)=='21acd276f0168ced45a5ca68c0cf27cef8193803eb2f6dd7cda510e8f97b6155'
+             rows.append(dict(path=str(p.resolve()),sha256=sha(p),origin=api,source='qualified UI157 artifact'));break
+          assert len(rows)==3
+          Path('evidence').mkdir(exist_ok=True);Path('evidence/INPUTS.json').write_text(json.dumps(rows,indent=2)+'\n')
+          print(json.dumps(dict(samples=len(rows),hashes_verified=True,executed=False)))
+          '@ | python -
+      - name: Enable protections and compare only on this disposable VM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $r=[ordered]@{scope='Disposable hosted Windows VM, not Robert Windows11';samples_executed=$false;user_computers_changed=$false;exclusions_added=$false;quarantine_restored=$false;qualified=$false;samples=@()}
+          $fields='AMRunningMode','AMServiceEnabled','AntivirusEnabled','RealTimeProtectionEnabled','BehaviorMonitorEnabled','AMProductVersion','AMEngineVersion','AntivirusSignatureVersion','AntivirusSignatureLastUpdated'
+          $r.before=Get-MpComputerStatus|Select-Object $fields
+          try {
+            # Enable standard protections only inside this disposable VM. Never weaken
+            # protection, add exclusions, restore samples, or edit protected policy keys.
+            Set-MpPreference -DisableRealtimeMonitoring $false -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false -DisableIOAVProtection $false
+            $paths=@(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory|Sort-Object Name -Descending|ForEach-Object {Join-Path $_.FullName 'MpCmdRun.exe'})
+            $tool=$paths|Where-Object {Test-Path -LiteralPath $_}|Select-Object -First 1
+            if(-not $tool){throw 'Defender command-line utility unavailable'}
+            $r.update_output=(& $tool -SignatureUpdate -MMPC 2>&1|Out-String);$r.update_exit=$LASTEXITCODE
+            $r.maps_output=(& $tool -ValidateMapsConnection 2>&1|Out-String);$r.maps_exit=$LASTEXITCODE
+            $s=Get-MpComputerStatus;$pref=Get-MpPreference
+            $r.after=$s|Select-Object $fields
+            $r.cloud=$pref|Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel,DisableIOAVProtection
+            $r.qualified=($s.AMRunningMode -eq 'Normal' -and $s.AMServiceEnabled -and $s.AntivirusEnabled -and $s.RealTimeProtectionEnabled -and $pref.MAPSReporting -ne 0 -and $r.maps_exit -eq 0)
+            if($r.qualified){
+              $inputs=Get-Content -Raw -LiteralPath evidence/INPUTS.json|ConvertFrom-Json
+              foreach($sample in $inputs){
+                $v=[ordered]@{path=$sample.path;sha256=$sample.sha256;source=$sample.source;present_before=(Test-Path -LiteralPath $sample.path)}
+                if($v.present_before){
+                  Set-Content -LiteralPath $sample.path -Stream Zone.Identifier -Value ("[ZoneTransfer]`r`nZoneId=3`r`nHostUrl="+$sample.origin)
+                  # This custom-scan option reports detections and ignores exclusions;
+                  # it changes neither realtime protection nor the device policy.
+                  $v.output=(& $tool -Scan -ScanType 3 -File $sample.path -DisableRemediation 2>&1|Out-String)
+                  $v.exit=$LASTEXITCODE
+                }
+                $v.present_after=Test-Path -LiteralPath $sample.path
+                if($v.present_after){$v.sha256_after=(Get-FileHash -Algorithm SHA256 -LiteralPath $sample.path).Hash.ToLowerInvariant()}
+                $r.samples+= $v
+              }
+              $r.threats=@(Get-MpThreatDetection|Select-Object InitialDetectionTime,ThreatID,ActionSuccess,Resources)
+              $r.threat_names=@(Get-MpThreat|Select-Object ThreatID,ThreatName,IsActive,DidThreatExecute)
+            }
+          } catch {$r.error=$_.Exception.Message}
+          $r|ConvertTo-Json -Depth 9|Set-Content -LiteralPath evidence/DEFENDER-COMPARE.json -Encoding utf8
+          $r|ConvertTo-Json -Depth 9
+          exit 0
+      - name: Preserve antivirus evidence, not executables
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: defender-compare-${{ github.run_id }}
+          path: evidence
+          retention-days: 7
