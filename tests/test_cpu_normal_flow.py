@@ -64,6 +64,10 @@ class MiningFlowCycleTests(unittest.TestCase):
                                     reports=[], audits=[])
                     if method == 'signmessage': return 'fixture-signature'
                     if method == 'getpgnauditevent':
+                        if len(args)>7:
+                            from horizon_core_rpc import CoreRpcError
+                            from horizon_audit_batch import LEGACY_AUDIT_USAGE
+                            raise CoreRpcError(-1, LEGACY_AUDIT_USAGE)
                         action = args[0]
                         if not have_audits or action == 'assign' and self.assigned >= 2:
                             unavailable = reason

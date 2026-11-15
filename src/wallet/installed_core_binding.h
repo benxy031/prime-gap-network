@@ -1,0 +1,21 @@
+#pragma once
+#include "wallet/core_bundle.h"
+namespace pgn::wallet {
+struct InstalledCoreBinding {QString program,genesis;};
+// Code inventory does not require a wallet. An explicit existing profile still
+// takes precedence: never hide its failure by silently selecting another Core.
+inline InstalledCoreBinding installedCoreBinding(const QString& applicationRoot,const QString& profilePath,bool testnet){
+ QFile profile(profilePath);
+ if(profile.exists()){
+  if(!profile.open(QIODevice::ReadOnly)||profile.size()>32768)return {};
+  QJsonParseError error;const auto document=QJsonDocument::fromJson(profile.readAll(),&error);
+  if(error.error!=QJsonParseError::NoError||!document.isObject())return {};
+  const auto object=document.object();const QFileInfo program(object.value("executable").toString());
+  if(!program.isAbsolute()||!program.isFile()||!program.isExecutable())return {};
+  return {program.canonicalFilePath(),object.value("genesis_hash").toString()};
+ }
+ const auto bundle=readCoreBundle(applicationRoot,testnet?QString("test"):QString("main"));
+ if(!bundle.error.isEmpty())return {};
+ return {bundle.deployment.value("executable").toString(),bundle.deployment.value("genesis_hash").toString()};
+}
+}

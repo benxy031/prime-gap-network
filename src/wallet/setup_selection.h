@@ -9,12 +9,17 @@ struct WalletSetupSelection {
     QString dataDirectory,walletName{"PGN"};
     bool existing{};
 };
-inline QString defaultCoreDataDirectory(){
+inline QString defaultCoreDataDirectory(const QString& genesis={}){
+    QString base;
 #ifdef Q_OS_WIN
     const auto roaming=qEnvironmentVariable("APPDATA");
-    if(!roaming.isEmpty())return QDir(roaming).filePath("PGNCore");
+    if(!roaming.isEmpty())base=QDir(roaming).filePath("PGNCore");
 #endif
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("PGNCore");
+    if(base.isEmpty())base=QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("PGNCore");
+    // A fresh network gets its own suggested node folder. Existing configured
+    // profiles retain their selected folder and keys without migration.
+    static const QRegularExpression fingerprint("^[0-9a-fA-F]{64}$");
+    return fingerprint.match(genesis).hasMatch()?QDir(base).filePath("networks/"+genesis.toLower().left(16)):base;
 }
 // This validation is read-only. A dialog can be opened/cancelled without
 // installing a node, creating directories or touching an existing wallet.
@@ -44,6 +49,7 @@ inline QString validateWalletSetup(const WalletSetupSelection& choice,const QStr
     if(choice.existing){
         if(!QFileInfo(target).isDir())return "Choose the existing PGN Core data folder.";
         const QDir directory(target);
+        if(directory.exists("wallet.dat")&&!directory.exists("blocks")&&!directory.exists("chainstate")&&!directory.exists("wallets")&&!directory.exists("testnet"))return "This is a wallet folder, not a Core data folder. Select the node's data folder, or create a new node in an empty folder first. Existing wallet files are unchanged.";
         if(!directory.exists("blocks")&&!directory.exists("chainstate")&&!directory.exists("wallets")&&!directory.exists("testnet"))return "This folder does not contain an existing Core data layout.";
     }else if(QFileInfo(target).isDir()&&!QDir(target).entryList(QDir::AllEntries|QDir::NoDotAndDotDot|QDir::Hidden).isEmpty())return "Use an empty folder for a new wallet, or choose Open existing.";
     return {};

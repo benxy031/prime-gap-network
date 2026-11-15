@@ -140,6 +140,10 @@ class MiningFlowCycleTests(unittest.TestCase):
                         return 'c'*64 if args[0] == 16 else 'a'*64
                     if method == 'signmessage': return 'fixture-signature'
                     if method == 'getpgnauditevent':
+                        if len(args) > 7:
+                            from horizon_core_rpc import CoreRpcError
+                            from horizon_audit_batch import LEGACY_AUDIT_USAGE
+                            raise CoreRpcError(-1, LEGACY_AUDIT_USAGE)
                         self.audit_actors.add(args[1])
                         action = args[0]
                         if not have_audits or action == 'assign' and self.assigned >= (5 if fresh else 2):

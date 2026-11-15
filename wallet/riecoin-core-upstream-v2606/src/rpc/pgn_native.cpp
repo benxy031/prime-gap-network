@@ -506,7 +506,9 @@ RPCMethod getpgnauditevent(){
   {"slot",RPCArg::Type::NUM,RPCArg::Optional::OMITTED,"Assigned audit slot"},
   {"attempt",RPCArg::Type::NUM,RPCArg::Optional::OMITTED,"Assigned attempt"},
   {"body",RPCArg::Type::STR_HEX,RPCArg::Optional::OMITTED,"Answer commitment or canonical reveal bytes"},
-  {"signature",RPCArg::Type::STR,RPCArg::Optional::OMITTED,"Base64 BIP322 signature of returned challenge"}},
+  {"signature",RPCArg::Type::STR,RPCArg::Optional::OMITTED,"Base64 BIP322 signature of returned challenge"},
+  {"preceding_events",RPCArg::Type::ARR,RPCArg::Optional::OMITTED,"Already-signed audit envelopes preceding this proposal at the same parent; same stage only",{
+   {"envelope",RPCArg::Type::STR_HEX,RPCArg::Optional::NO,"Canonical signed audit envelope"}}}},
  RPCResult{RPCResult::Type::OBJ,"","Audit event challenge",{
   {RPCResult::Type::BOOL,"available","False if no independent work is available"},
   {RPCResult::Type::STR_HEX,"genesis","Native genesis"},{RPCResult::Type::STR_HEX,"parent","Current parent for both available and unavailable results"},{RPCResult::Type::STR_HEX,"request_id",true,"Selected report"},
@@ -514,6 +516,9 @@ RPCMethod getpgnauditevent(){
   {RPCResult::Type::STR,"challenge",true,"Message to sign"},{RPCResult::Type::STR_HEX,"envelope",true,"Owner-verified event"},
   {RPCResult::Type::ARR,"ranges",true,"Five automatically assigned ranges",{{RPCResult::Type::OBJ,"","Partition",{
    {RPCResult::Type::NUM,"index","Partition index"},{RPCResult::Type::STR,"start","Inclusive lower bound"},{RPCResult::Type::STR,"end","Exclusive lower bound"}}}}},
+  {RPCResult::Type::STR_HEX,"actor","Exact native signing script"},
+  {RPCResult::Type::NUM,"proposal_context_version","Verified signed-prefix API version"},
+  {RPCResult::Type::NUM,"preceding_event_count","Validated preceding envelopes"},
   {RPCResult::Type::BOOL,"accepted","Always false until block confirmation"}}},RPCExamples{""},
  [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
   auto& manager=EnsureAnyChainman(request.context);LOCK(cs_main);RequireNative(manager);auto& tip=Tip(manager);const auto history=ReadOwnHistory(manager);
@@ -522,8 +527,36 @@ RPCMethod getpgnauditevent(){
   const auto destination=DecodeDestination(request.params[1].get_str());if(!IsValidDestination(destination))throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,"Native signing address required");
   NativeAuditEvent event;event.parent=tip.GetBlockHash();event.actor=GetScriptForDestination(destination);const auto action=request.params[0].get_str();
   if(action=="assign")event.action=NativeAuditAction::Assign;else if(action=="commit")event.action=NativeAuditAction::Commit;else if(action=="reveal")event.action=NativeAuditAction::Reveal;else if(action=="reveal_report")event.action=NativeAuditAction::ReportReveal;else if(action=="enroll")event.action=NativeAuditAction::Enroll;else throw JSONRPCError(RPC_INVALID_PARAMETER,"Unknown audit action");
+  // Proposal-only shadow state. Every preceding envelope is authenticated
+  // by the same native transition verifier used at actual block acceptance.
+  // Do not expose an unconfirmed assignment->commit or commit->reveal path.
+  // The bound is the existing coordination-template capacity (256 scripts),
+  // with one slot reserved for the event currently being proposed.
+  size_t preceding_count=0;
+  if(!request.params[7].isNull()&&request.params[7].get_array().size()!=0){
+   const auto& preceding=request.params[7].get_array();
+   if(preceding.size()>=256)throw JSONRPCError(RPC_INVALID_PARAMETER,"Audit proposal context exceeds coordination template capacity");
+   auto proposed=*ledger;size_t remaining=MAX_BLOCK_WEIGHT/WITNESS_SCALE_FACTOR;
+   for(const auto& value:preceding.getValues()){
+    const auto text=value.get_str();
+    if(text.empty()||text.size()>2*remaining||!IsHex(text)||HexStr(ParseHex(text))!=text)
+     throw JSONRPCError(RPC_INVALID_PARAMETER,"Bounded canonical preceding audit hex required");
+    remaining-=text.size()/2;const auto bytes=ParseHex(text);const CScript script{bytes.begin(),bytes.end()};
+    const auto prior=DecodeNativeAuditEnvelope(script);
+    if(!prior)throw JSONRPCError(RPC_INVALID_PARAMETER,"Preceding event is not a valid audit envelope");
+    const bool same_stage=(event.action==NativeAuditAction::Assign&&prior->action==NativeAuditAction::Assign)||
+      (event.action==NativeAuditAction::Commit&&prior->action==NativeAuditAction::Commit)||
+      ((event.action==NativeAuditAction::Reveal||event.action==NativeAuditAction::ReportReveal)&&
+       (prior->action==NativeAuditAction::Reveal||prior->action==NativeAuditAction::ReportReveal));
+    if(!same_stage)throw JSONRPCError(RPC_INVALID_PARAMETER,"Audit proposal prefix cannot cross confirmation stages");
+    try{ApplyNativeAuditEvent(proposed,*prior,tip,manager.GetConsensus().hashGenesisBlock,b.signature);}
+    catch(const std::exception& error){throw JSONRPCError(RPC_VERIFY_ERROR,std::string{"Preceding audit event rejected: "}+error.what());}
+   }
+   preceding_count=preceding.size();ledger=std::make_shared<NativeAuditLedger>(std::move(proposed));
+  }
   UniValue out{UniValue::VOBJ};out.pushKV("accepted",false);
-  out.pushKV("genesis",manager.GetConsensus().hashGenesisBlock.GetHex());out.pushKV("parent",tip.GetBlockHash().GetHex());
+  out.pushKV("proposal_context_version",uint64_t{1});out.pushKV("preceding_event_count",uint64_t(preceding_count));
+  out.pushKV("genesis",manager.GetConsensus().hashGenesisBlock.GetHex());out.pushKV("parent",tip.GetBlockHash().GetHex());out.pushKV("actor",HexStr(event.actor));
   if(event.action==NativeAuditAction::Assign){
    for(size_t i=2;i<6;++i)if(!request.params[i].isNull())throw JSONRPCError(RPC_INVALID_PARAMETER,"Audit assignment cannot select its report, partition or attempt");
    if(!NativeAuditEligible(*ledger,event.actor)){out.pushKV("available",false);out.pushKV("unavailable_reason","audit_permission_disabled");out.pushKV("reason","Audit permission is not enabled on this network");return out;}

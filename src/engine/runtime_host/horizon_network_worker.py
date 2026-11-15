@@ -387,9 +387,10 @@ class NetworkWorker:
                       block=block.hex(), hash=raw[::-1].hex(),operation_sha256=operation)
         if len(json.dumps(intent).encode())>262144:
             raise ValueError("Coordination candidate exceeds its durable journal budget")
-        save(self.root / "coordination-intent.json", intent)
+        # Retain operation-specific recovery before exposing the shared candidate.
         if on_intent is not None:
             on_intent(intent)
+        save(self.root / "coordination-intent.json", intent)
         confirm_candidate(self.rpc,intent,rebase=True,seconds=0)
         intent["confirmed"] = True
         save(self.root / "coordination-intent.json", intent)

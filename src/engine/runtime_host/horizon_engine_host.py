@@ -35,7 +35,7 @@ from pgn_index import SessionIndexWalBudgetExceeded
 
 from horizon_engine_capabilities import NATIVE_SOURCE, IMAGES, qualified_workers
 
-ENGINE_HOST_VERSION = "2026.11.15.80"
+ENGINE_HOST_VERSION = "2026.11.15.83"
 
 GAP = re.compile(r"\bGAP merit=([0-9.eE+\-]+) gap=(\d+) lower=(\d+) upper=(\d+)")
 COUNTERS = re.compile(r"\[pgn-counters\].*?\bpositions=(\d+)\b.*?\btests=(\d+)\b")
@@ -643,6 +643,13 @@ class EngineService:
 
 
 def main():
+    if "--audit-batch-self-test" in sys.argv:
+        if not getattr(sys, 'frozen', False):
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'protocol'))
+        from horizon_audit_batch_selftest import run
+        result = run()
+        print(json.dumps(dict(result, component_version=ENGINE_HOST_VERSION), separators=(",", ":")), flush=True)
+        return 0 if result['passed'] else 1
     if "--export-results" in sys.argv:
         from horizon_result_export import main as result_main
         return result_main([value for value in sys.argv[1:] if value != "--export-results"])

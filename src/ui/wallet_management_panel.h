@@ -7,7 +7,7 @@ class QLabel;class QComboBox;class QPushButton;class QToolButton;class QLineEdit
 namespace pgn::ui {
 class WalletManagementPanel final:public QWidget {
 public:
- explicit WalletManagementPanel(pgn::wallet::WalletManager*,QWidget* parent=nullptr);
+ explicit WalletManagementPanel(pgn::wallet::WalletManager*,QWidget* parent=nullptr,const QString& genesis={});
  void present(const QString& network,const QString& dataDirectory,bool configured,bool pending=false,const QString& pendingDirectory={});
  void refresh();
  void finishSetup(const QString& error={});
