@@ -1,0 +1,302 @@
+name: UI153 complete source qualification and UI-only runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/social-ui153-20261115]
+permissions:
+  contents: read
+concurrency:
+  group: ui153-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: e66ac20782a9fea27d4f1110a25b3b8914f4540e
+
+      - name: Install the UCRT64 build dependencies
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Install pinned updater test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          if ($LASTEXITCODE -ne 0) { throw "Python test environment creation failed" }
+          & ./.ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned updater test dependencies failed" }
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+      - name: Configure a clean Release tree
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+
+      - name: Build every default source target
+        run: |
+          pgn_build_jobs="$(nproc)"
+          if [ "$pgn_build_jobs" -gt 4 ]; then pgn_build_jobs=4; fi
+          printf 'Build workers: %s\n' "$pgn_build_jobs"
+          cmake --build build-ci --parallel "$pgn_build_jobs"
+
+      - name: Run the isolated registered tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
+
+      - name: Check audit lifecycle and grouped publication regressions
+        run: |
+          .ci-python/Scripts/python.exe -I tests/test_late_cycle_completion.py
+          .ci-python/Scripts/python.exe -I tests/test_audit_reveal_batch.py
+          .ci-python/Scripts/python.exe -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Collect exact UI153 and matching runtime dependencies only
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_UI_COLLECTOR'
+          """Collect only the compiled UI, matching Qt runtime and native DLL closure."""
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          
+          ROOT=Path(__file__).resolve().parent
+          SDK=Path(os.environ['PGN_UI_SDK'])
+          BUILD=ROOT/'build-ci'
+          SOURCE=ROOT
+          STAGE=ROOT/'ui-stage'
+          sha=lambda path:hashlib.file_digest(path.open('rb'),'sha256').hexdigest()
+          
+          def main():
+              assert shutil.disk_usage(ROOT).free>2*1024**3,'Insufficient disk reserve before collection'
+              frozen={'source': 'e66ac20782a9fea27d4f1110a25b3b8914f4540e', 'tree': '97ca7da2a5c27bb37ba6e3981e7dbbcf5d069e2f', 'verified_files': [{'path': 'src/ui/social_chat_list.h', 'patched_sha256': 'ca91fcd918f6662e7e523a84b70d5370d2dec639ea9fecffb725dc0c34366fbe'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': 'd9c53ee734eb748dac0d019964b4c9f40acbc9c0d3f3d1a8e8b85f574f3d9801'}, {'path': 'src/ui/social_leaderboard_delegate.h', 'patched_sha256': 'c85d4bb6460987c2827a8f64e7b69b59447e1b167d1e334126415fa83baaaa4b'}, {'path': 'src/ui/social_light_style.h', 'patched_sha256': 'f2aad8a45f965ad5ad3e29648867c858f8a1ead112011ee4cea5cf47aba2cf6f'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '6a553bbb6c2e9e204adc1e1e39b08d97b433bf656ec3e210a1b3d90ec008c1e3'}, {'path': 'src/ui/social_view.h', 'patched_sha256': 'ee94864d4c1b929a3741043a524d6ff01028456fec202b09fdbe6f9bf92526eb'}, {'path': 'tests/social_chat_scroll_checks.h', 'patched_sha256': '34473f4d8201e7b836980a4aaa67970399caf5030c04c402e4ef4f02b05cae70'}, {'path': 'tests/social_component/CMakeLists.txt', 'patched_sha256': '6d38bd0010e88e6a5a09da58cbe09d348ae0222cf7fd461b1edef8d6d87f3b81'}, {'path': 'tests/social_native_network.py', 'patched_sha256': '817872c6010b539e103ed5fe742a8d6a93157cc6ce8e6b55f3c97734de1d0a9b'}, {'path': 'tests/social_native_witness.cpp', 'patched_sha256': 'e93806137af30ce3d290089c4eb0e39d52afe91bb6c64c9d105f16211c12fdc2'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': '4202cb77f5144dacda3427faf0f623fac87e3dd37b6fad89b7dd19c08ac6ea2b'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'fd8b6a9287b64c6aa5b75d213a4204f69bf48e7cd64fad18deebcf38c316ba50'}, {'path': 'tools/component_versions.json', 'patched_sha256': '63152de2d369a50fd4dbd5b176aee69b5150c8a464382b517543627f74af656b'}]}
+              for row in frozen['verified_files']:
+                  assert sha(SOURCE/row['path'])==row['patched_sha256'],row['path']
+              STAGE.mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'PGN-Horizon.exe',STAGE/'PGN-Horizon.exe')
+              shutil.copy2(BUILD/'WebView2Loader.dll',STAGE/'WebView2Loader.dll')
+              # This plugin is an explicit dependency of the real application target;
+              # static import scanning alone does not discover Qt's SQL driver loading.
+              (STAGE/'sqldrivers').mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'sqldrivers/qsqlite.dll',STAGE/'sqldrivers/qsqlite.dll')
+              (STAGE/'assets').mkdir(exist_ok=True)
+              resource=BUILD/'assets/audit-animation.rcc';target=STAGE/'assets/audit-animation.rcc'
+              if not target.exists():
+                  # Both aliases are immutable outputs owned by this bounded build.
+                  # Share the 79 MB resource without aliasing any SDK or user file.
+                  try:os.link(resource,target)
+                  except OSError:shutil.copy2(resource,target)
+              else:assert sha(resource)==sha(target),'Staged audit resource changed'
+              environment=dict(os.environ,PATH=str(SDK/'bin')+';'+os.environ['PATH'])
+              command=[str(SDK/'bin/windeployqt.exe'),'--release','--no-translations',
+                       '--compiler-runtime',str(STAGE/'PGN-Horizon.exe')]
+              with (ROOT/'windeployqt.log').open('w',encoding='utf-8')as output:
+                  subprocess.run(command,env=environment,stdout=output,stderr=subprocess.STDOUT,check=True)
+              sdk_names={p.name.casefold():p for p in (SDK/'bin').glob('*.dll')}
+              system=Path(os.environ['SystemRoot'])/'System32'
+              visited=set();imports={};copied={};unresolved=[]
+              while True:
+                  pending=[p for p in STAGE.rglob('*')if p.suffix.lower()in ('.exe','.dll')and p not in visited]
+                  if not pending:break
+                  for image in pending:
+                      visited.add(image)
+                      detail=subprocess.check_output([str(SDK/'bin/objdump.exe'),'-p',str(image)],env=environment,text=True,errors='replace')
+                      names=re.findall(r'^\s*DLL Name:\s*(\S+)\s*$',detail,re.M)
+                      imports[image.relative_to(STAGE).as_posix()]=names
+                      for name in names:
+                          key=name.casefold()
+                          local={p.name.casefold()for folder in (STAGE,image.parent)for p in folder.glob('*.dll')}
+                          if key in local:continue
+                          if key in sdk_names:
+                              origin=sdk_names[key];shutil.copy2(origin,STAGE/origin.name);copied[origin.name]=str(origin)
+                          elif (system/name).is_file()or key.startswith(('api-ms-win-','ext-ms-win-')):continue
+                          else:unresolved.append(dict(image=str(image.relative_to(STAGE)),dependency=name))
+              if unresolved:raise RuntimeError('Unresolved native imports: '+json.dumps(unresolved))
+              assert not(STAGE/'Core').exists()and not(STAGE/'EngineRuntime').exists(),'UI-only artifact required'
+              binaries=[]
+              for path in sorted(STAGE.rglob('*')):
+                  if not path.is_file():continue
+                  relative=path.relative_to(STAGE).as_posix();origin=None
+                  for candidate in (SDK/'bin'/path.name,SDK/'share/qt6/plugins'/relative):
+                      if candidate.is_file()and sha(candidate)==sha(path):origin=str(candidate);break
+                  binaries.append(dict(path=relative,bytes=path.stat().st_size,sha256=sha(path),sdk_origin=origin))
+              inputs=set()
+              process=subprocess.Popen([str(SDK/'bin/ninja.exe'),'-t','deps'],cwd=BUILD,
+                                       env=environment,stdout=subprocess.PIPE,text=True,errors='replace')
+              for line in process.stdout:
+                  if not line.startswith('    '):continue
+                  name=line.strip().replace('\\','/')
+                  dependency=Path(name)
+                  if not dependency.is_absolute():dependency=(BUILD/dependency).resolve()
+                  if dependency.is_relative_to(SOURCE):
+                      relative=dependency.relative_to(SOURCE).as_posix()
+                      if (SOURCE/relative).is_file():inputs.add(relative)
+              if process.wait()!=0:raise RuntimeError('Cannot read observed compilation dependencies')
+              inputs.update(['CMakeLists.txt','tools/component_versions.json','assets/pgn.qrc','assets/audit-animation.qrc'])
+              observed=[dict(path=name,bytes=(SOURCE/name).stat().st_size,sha256=sha(SOURCE/name))for name in sorted(inputs)]
+              result=dict(schema='PGN_WINDOWS_UI_BUILD_V1',source=frozen['source'],
+                          source_tree=frozen['tree'],
+                          base_product_commit='1ea788c04d55f0bb06810ac8ff8c5961e0f0872d',
+                          ui_version='2026.11.15.153',target='PGN-Horizon',compiler=subprocess.check_output([str(SDK/'bin/g++.exe'),'--version'],text=True).splitlines()[0],qt_version=subprocess.check_output([str(next(p for p in (SDK/'bin/qmake6.exe',SDK/'bin/qmake.exe')if p.is_file())),'-query','QT_VERSION'],text=True).strip(),
+                          flags=next(line for line in (BUILD/'CMakeCache.txt').read_text().splitlines()if line.startswith('CMAKE_CXX_FLAGS_RELEASE:')),parallelism=min(os.cpu_count()or 1,4),
+                          observed_compilation_scope='All default source targets and complete registered ctest suite',
+                          sources=observed,files=binaries,imports=imports,extra_sdk_copies=copied,
+                          unresolved_native_imports=unresolved,stage=str(STAGE),
+                          live_processes_launched=False,network_requested=False,core_built=False,gpu_host_built=False,
+                          disk_free_bytes=shutil.disk_usage(ROOT).free)
+              (ROOT/'WINDOWS-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
+              assert shutil.disk_usage(ROOT).free>=1.5*1024**3,'Disk reserve breached'
+              import tarfile
+              with tarfile.open(ROOT/'ui153-windows.tar.gz','w:gz')as archive:
+                  archive.add(STAGE,arcname='ui')
+                  archive.add(ROOT/'WINDOWS-UI-BUILD.json',arcname='WINDOWS-UI-BUILD.json')
+              print(json.dumps(dict(PASS=True,stage=str(STAGE),files=len(binaries),sources=len(observed),
+                                   executable_sha256=sha(STAGE/'PGN-Horizon.exe'),bytes=sum(x['bytes']for x in binaries))))
+          
+          if __name__=='__main__':main()
+          
+          PGN_UI_COLLECTOR
+      - name: Preserve qualified UI-only runtime
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui153-windows-${{ github.run_id }}
+          path: ui153-windows.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: e66ac20782a9fea27d4f1110a25b3b8914f4540e
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv
+      - name: Install pinned updater test dependencies
+        run: |
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Record the actual toolchain
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          dpkg-query -W qt6-base-dev libgmp-dev libsqlite3-dev
+      - name: Configure from a fresh checkout
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+      - name: Build every default target
+        run: cmake --build build-ci --parallel 2
+      - name: Run registered isolated tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
+      - name: Check audit lifecycle and grouped publication regressions
+        run: |
+          .ci-python/bin/python -I tests/test_late_cycle_completion.py
+          .ci-python/bin/python -I tests/test_audit_reveal_batch.py
+          .ci-python/bin/python -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ubuntu-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Collect exact UI153 and matching runtime dependencies only
+        run: |
+          .ci-python/bin/python - <<'PGN_UI_COLLECTOR'
+          
+          from pathlib import Path
+          import hashlib,json,os,re,shutil,subprocess,tarfile
+          ROOT=Path.cwd();BUILD=ROOT/'build-ci';STAGE=ROOT/'ui-stage';STAGE.mkdir()
+          FROZEN={'source': 'e66ac20782a9fea27d4f1110a25b3b8914f4540e', 'tree': '97ca7da2a5c27bb37ba6e3981e7dbbcf5d069e2f', 'verified_files': [{'path': 'src/ui/social_chat_list.h', 'patched_sha256': 'ca91fcd918f6662e7e523a84b70d5370d2dec639ea9fecffb725dc0c34366fbe'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': 'd9c53ee734eb748dac0d019964b4c9f40acbc9c0d3f3d1a8e8b85f574f3d9801'}, {'path': 'src/ui/social_leaderboard_delegate.h', 'patched_sha256': 'c85d4bb6460987c2827a8f64e7b69b59447e1b167d1e334126415fa83baaaa4b'}, {'path': 'src/ui/social_light_style.h', 'patched_sha256': 'f2aad8a45f965ad5ad3e29648867c858f8a1ead112011ee4cea5cf47aba2cf6f'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '6a553bbb6c2e9e204adc1e1e39b08d97b433bf656ec3e210a1b3d90ec008c1e3'}, {'path': 'src/ui/social_view.h', 'patched_sha256': 'ee94864d4c1b929a3741043a524d6ff01028456fec202b09fdbe6f9bf92526eb'}, {'path': 'tests/social_chat_scroll_checks.h', 'patched_sha256': '34473f4d8201e7b836980a4aaa67970399caf5030c04c402e4ef4f02b05cae70'}, {'path': 'tests/social_component/CMakeLists.txt', 'patched_sha256': '6d38bd0010e88e6a5a09da58cbe09d348ae0222cf7fd461b1edef8d6d87f3b81'}, {'path': 'tests/social_native_network.py', 'patched_sha256': '817872c6010b539e103ed5fe742a8d6a93157cc6ce8e6b55f3c97734de1d0a9b'}, {'path': 'tests/social_native_witness.cpp', 'patched_sha256': 'e93806137af30ce3d290089c4eb0e39d52afe91bb6c64c9d105f16211c12fdc2'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': '4202cb77f5144dacda3427faf0f623fac87e3dd37b6fad89b7dd19c08ac6ea2b'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'fd8b6a9287b64c6aa5b75d213a4204f69bf48e7cd64fad18deebcf38c316ba50'}, {'path': 'tools/component_versions.json', 'patched_sha256': '63152de2d369a50fd4dbd5b176aee69b5150c8a464382b517543627f74af656b'}]}
+          def sha(p):
+              with p.open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          for row in FROZEN['verified_files']:assert sha(ROOT/row['path'])==row['patched_sha256'],row['path']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==FROZEN['source']
+          shutil.copy2(BUILD/'PGN-Horizon',STAGE/'PGN-Horizon')
+          (STAGE/'assets').mkdir();shutil.copy2(BUILD/'assets/audit-animation.rcc',STAGE/'assets/audit-animation.rcc')
+          plugin_root=Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')
+          for group,names in [('platforms',['libqxcb.so']),('sqldrivers',['libqsqlite.so'])]:
+              for name in names:
+                  target=STAGE/'plugins'/group/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(plugin_root/group/name,target)
+          (STAGE/'lib').mkdir();imports={};seen=set();origins={};system={}
+          base_system=re.compile(r'^(ld-linux|libc[.]|libm[.]|libdl[.]|libpthread[.]|librt[.]|libresolv[.]|libutil[.])')
+          pending=[STAGE/'PGN-Horizon',*sorted((STAGE/'plugins').rglob('*.so'))]
+          while pending:
+              image=pending.pop()
+              if image in seen:continue
+              seen.add(image);raw=subprocess.check_output(['ldd',str(image)],text=True);assert 'not found'not in raw,raw
+              imports[image.relative_to(STAGE).as_posix()]=raw
+              for name,path in re.findall(r'\s+(\S+)\s+=>\s+(/\S+)\s+\(',raw):
+                  if base_system.match(name):system[name]=path;continue
+                  target=STAGE/'lib'/name
+                  if target.exists():assert sha(target)==sha(Path(path));continue
+                  shutil.copy2(Path(path).resolve(),target);origins[target.relative_to(STAGE).as_posix()]=str(Path(path).resolve());pending.append(target)
+          (STAGE/'qt.conf').write_text('[Paths]\nPlugins=plugins\n')
+          files=[dict(path=p.relative_to(STAGE).as_posix(),bytes=p.stat().st_size,sha256=sha(p),origin=origins.get(p.relative_to(STAGE).as_posix()))for p in sorted(STAGE.rglob('*'))if p.is_file()]
+          result=dict(schema='PGN_LINUX_UI_BUILD_V1',source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.15.153',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
+          (ROOT/'LINUX-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n')
+          with tarfile.open(ROOT/'ui153-ubuntu.tar.gz','w:gz')as archive:
+              archive.add(STAGE,arcname='ui');archive.add(ROOT/'LINUX-UI-BUILD.json',arcname='LINUX-UI-BUILD.json')
+          print(json.dumps(dict(PASS=True,source=FROZEN['source'],files=len(files),executable_sha256=sha(STAGE/'PGN-Horizon'))))
+          
+          PGN_UI_COLLECTOR
+      - name: Preserve qualified UI-only runtime
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui153-ubuntu-${{ github.run_id }}
+          path: ui153-ubuntu.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
