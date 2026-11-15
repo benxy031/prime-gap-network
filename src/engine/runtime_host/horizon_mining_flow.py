@@ -149,6 +149,7 @@ class MiningFlow:
         native_actors = native_service_actors(worker, lab_actors)
         self.assigned_audit_recovery = AssignedAuditRecovery(worker,
             'service-audit-lanes' if native_actors else 'audit-lanes')
+        self.assigned_audit_recovery.reconcile_duplicates()
         if native_actors:
             # Existing lab answers keep their original signer and durable
             # catalogue. They may reveal already-computed answers only; all
@@ -232,7 +233,18 @@ class MiningFlow:
                     return not self.cycles.snapshot(cycle)["hold"] and self.physical_audits.may_audit(cycle, job.context["audit_position"])
                 return self.cycles.may_audit(cycle, job.context["audit_position"])
             owner = self.extra_audit_owner(job)
-            return self.may_unbound_audit(job) if owner is None else self.cycles.may_extra_audit(owner, job.context['presentation']['audit_id'])
+            if owner is not None:
+                return self.cycles.may_extra_audit(owner, job.context['presentation']['audit_id'])
+            if not self.may_unbound_audit(job):
+                return False
+            if callable(getattr(self.worker.source, 'bind_service_audit', None)):
+                from horizon_cpu_service_work import service_request, CpuServiceObservationChanged
+                try:
+                    job.context['cpu_service_grant'] = service_request(self.worker, job.ticket, job.context)
+                except CpuServiceObservationChanged:
+                    job.context.pop('cpu_service_grant', None)
+                    return False
+            return True
         if job.context.get("legacy_assignment"):
             return True
         state = self.cycles.snapshot(cycle)
@@ -605,6 +617,11 @@ class MiningFlow:
                 if job.context.get("physical_cycle"):
                     state["audits"] = self.physical_audits.snapshot(cycle)
                 bind(job.ticket, job.context, state)
+            elif job.context.get('role') == 'audit' and callable(getattr(worker.source, 'bind_service_audit', None)):
+                grant = job.context.get('cpu_service_grant')
+                if grant is None:
+                    raise ValueError('CPU service job lacks its own-Core admission receipt')
+                worker.source.bind_service_audit(job.ticket, grant)
             else:
                 worker.source.clear_cycle()
         save(worker.root / "gpu-active.json", dict(ticket_id=job.ticket["ticket_id"],

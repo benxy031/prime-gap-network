@@ -64,6 +64,13 @@ class CpuOnlyNormalSource:
         from horizon_cpu_cycle import cycle_request
         with self.lock:self.grant=cycle_request(ticket,context,cycle)
 
+    def bind_service_audit(self,ticket,request):
+        from horizon_cpu_service_work import SCHEMA
+        if (request.get('schema')!=SCHEMA or any(request.get(k)!=ticket.get(k)for k in ('ticket_id','start','end'))
+                or 'normal_ticket'in request or 'work_cycle'in request):
+            raise ValueError('Explicit native audit service grant required')
+        with self.lock:self.grant=copy.deepcopy(request)
+
     def clear_cycle(self):
         with self.lock:self.grant=None
 
@@ -168,6 +175,8 @@ class CpuOnlyNormalSource:
             device=active['device'];request=active['request'];client=self.clients.get(device)
             if client is None:raise CpuScientificSourcePending('Reconnect the CPU endpoint retaining this quantum')
             expected=self._digest(request);status=client.call('status')['status']
+            if grant.get('schema')=='PGN_CPU_NATIVE_AUDIT_SERVICE_WORK_V1'and status.get('native_audit_service_schema')!=grant['schema']:
+                raise CpuScientificSourcePending('Installed CPU executor needs the native audit service work contract; retained work is unchanged')
             if status['request_sha256']is None:
                 mode=dict(keep_resident=True)if status.get('resident_result_handoff')is True else{}
                 status=client.call('execute',request=request,**mode)['status']

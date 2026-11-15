@@ -1,0 +1,49 @@
+name: Frozen CPU service recovery 231
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/cpu-service-recovery231]
+permissions:
+  contents: read
+jobs:
+  frozen-control:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned freezer only
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-engine-host.txt
+      - name: Verify targeted source contracts
+        shell: python
+        run: |
+          import subprocess, sys
+          tests = ['test_cpu_service_audit.py','test_cpu_only_source.py','test_network_cpu_source.py','test_cpu_complete_delivery.py','test_inactive_cpu_cycles.py','test_audit_assignment_reservation.py','test_assigned_audit_recovery.py','test_audit_assignment_durability.py','test_network_audit_lifecycle.py','test_network_audit_publication.py','test_audit_seal_recovery.py','test_retained_audit_signer.py','test_audit_actor_transition.py','test_mining_flow_cycle.py']
+          for name in tests:
+              subprocess.run([sys.executable, '-B', 'tests/'+name], check=True)
+          subprocess.run([sys.executable,'-B','src/engine/cpu_auditor/shared_service/test_contracts.py'],check=True)
+      - name: Freeze host and CPU control with unchanged scientific images
+        run: python -B tools/build_service_recovery231.py --output frozen231
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpu-service231-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            frozen231/runtime
+            frozen231/BUILD-RECEIPT.json
+            frozen231/ENGINE-HOST-SOURCE.json
+            frozen231/CPU-SOURCE.json
+            frozen231/BINARY-FILES.json
+            frozen231/HOST-SELFTEST.json
+            frozen231/CPU-SELFTEST.json
+            frozen231/NATIVE-LOAD-PROBE.json

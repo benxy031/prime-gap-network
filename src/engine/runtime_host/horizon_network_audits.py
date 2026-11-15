@@ -597,28 +597,33 @@ class NetworkAudits:
         else:
             audit = None
         if audit is None:
-            proposal = self.apply("assign")
-            if not proposal.get("available"):
-                self.last_unavailable = proposal
-                recover = getattr(self.worker, 'recover_assigned_audit', None)
-                if proposal.get('unavailable_reason') == 'no_eligible_independent_work' and callable(recover):
-                    audit, complete = recover(self.folder)
-                    if audit is None and not complete:
-                        self.last_unavailable = dict(proposal, unavailable_reason='assignment_recovery_pending',
-                            reason='Recovering existing assigned audits from the verified chain')
-                if audit is None:
-                    return "none"
-            else:
-                reports = self.worker.rpc.call("getpgnreports", [0, 1, proposal["request_id"]])
-                if len(reports) != 1:
-                    raise ValueError("Assigned audit has no immutable report")
-                report = reports[0]
-                audit = dict(schema="PGN_HORIZON_ASSIGNED_AUDIT_V1", request_id=proposal["request_id"], ticket=report["ticket"], report_root=report["report_root"], slot=proposal["slot"], attempt=proposal["attempt"], ranges=proposal["ranges"], counts=[])
-            # The Core attribution is already confirmed. Retain its identity
-            # before the catalogue can return BUSY/ENOSPC: a retry must resume
-            # this assignment, not ask for another and waive its service slot.
-            # Seal recovery still precedes any computation or nonce creation.
-            save(journal, audit)
+            # Confirming a fresh attribution and retaining its scheduling
+            # identity are one reservation. A second lane may recover an
+            # already-confirmed attribution only after this journal exists.
+            # The publication lane is reentrant; seal/compute work stays out.
+            with self.worker.network_lock:
+                proposal = self.apply("assign")
+                if not proposal.get("available"):
+                    self.last_unavailable = proposal
+                    recover = getattr(self.worker, 'recover_assigned_audit', None)
+                    if proposal.get('unavailable_reason') == 'no_eligible_independent_work' and callable(recover):
+                        audit, complete = recover(self.folder)
+                        if audit is None and not complete:
+                            self.last_unavailable = dict(proposal, unavailable_reason='assignment_recovery_pending',
+                                reason='Recovering existing assigned audits from the verified chain')
+                    if audit is None:
+                        return "none"
+                else:
+                    reports = self.worker.rpc.call("getpgnreports", [0, 1, proposal["request_id"]])
+                    if len(reports) != 1:
+                        raise ValueError("Assigned audit has no immutable report")
+                    report = reports[0]
+                    audit = dict(schema="PGN_HORIZON_ASSIGNED_AUDIT_V1", request_id=proposal["request_id"], ticket=report["ticket"], report_root=report["report_root"], slot=proposal["slot"], attempt=proposal["attempt"], ranges=proposal["ranges"], counts=[])
+                # The Core attribution is already confirmed. Retain its identity
+                # before the catalogue can return BUSY/ENOSPC: a retry must resume
+                # this assignment, not ask for another and waive its service slot.
+                # Seal recovery still precedes any computation or nonce creation.
+                save(journal, audit)
             audit = self.restore_reassigned_answer(audit)
             save(journal, audit)
         elif audit.get('publication_intent') and self.reassignment_needed is not None and self.reassignment_needed(audit):

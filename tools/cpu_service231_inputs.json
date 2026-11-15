@@ -1,0 +1,40 @@
+{
+  "linux-x86_64": {
+    "cpu_version": "2026.11.6.389",
+    "catalogue_sha256": "f3463005bf561c87a70c857663e5112221cbe913f25d103c830f8544ff81db40",
+    "native": [
+      {
+        "path": "payload/cpu/EngineRuntime/cpu/_internal/native/horizon-cpu-inventory",
+        "bytes": 51752,
+        "sha256": "4f853f8ac6bd6466f109d6538c2a85c5c046994b6323283f7340afb41877fa4e"
+      },
+      {
+        "path": "payload/cpu/EngineRuntime/cpu/_internal/native/horizon-cpu-shared68-worker",
+        "bytes": 149272,
+        "sha256": "d7aeecc22ec2f06650e378df6a6381ea8663b5588010f7cf80c0ef48eee23da8"
+      }
+    ],
+    "url": "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Horizon-testnet-Ubuntu-x86_64.tar.gz",
+    "archive_bytes": 241076193,
+    "archive_sha256": "1de8bfc590e6749a0f3539178018a4902feb689e538cb973437d61b12b10111d"
+  },
+  "windows-x86_64": {
+    "cpu_version": "2026.11.6.389",
+    "catalogue_sha256": "2c436868aa1990f9c08301f89cd75ce77bcf6c4934fa58fc595ea72b73f63335",
+    "native": [
+      {
+        "path": "payload/cpu/EngineRuntime/cpu/_internal/native/horizon-cpu-inventory.exe",
+        "bytes": 2936349,
+        "sha256": "6df31ea78036ed3ef8ab0b5b8f70401252fdfaa9cd940ccdca6a445a2ac619f0"
+      },
+      {
+        "path": "payload/cpu/EngineRuntime/cpu/_internal/native/horizon-cpu-shared68-worker.exe",
+        "bytes": 3272811,
+        "sha256": "2745fd47c0bfd9314bb97fb4f666252c3aebd62ea3d2b40460fa21d3f18acf70"
+      }
+    ],
+    "url": "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Horizon-testnet-Windows-x64.zip",
+    "archive_bytes": 266136067,
+    "archive_sha256": "c8cd51a9eee5e8e8d80a1651763c7038745507f4f7e7b3a7093c520672d19a5a"
+  }
+}
