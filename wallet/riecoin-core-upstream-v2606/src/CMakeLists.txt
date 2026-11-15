@@ -544,3 +544,7 @@ target_link_libraries(pgn-native-leaderboard-test PRIVATE core_interface riecoin
 
 add_executable(pgn-native-epoch3-reset-test EXCLUDE_FROM_ALL pgn/epoch3_reset_test.cpp)
 target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoin_node univalue)
+
+# Exact multi-Gold group qualification; no network-profile activation.
+add_executable(pgn-native-ticket-gold-group-test EXCLUDE_FROM_ALL pgn/native_ticket_gold_group_test.cpp)
+target_link_libraries(pgn-native-ticket-gold-group-test PRIVATE core_interface riecoin_node univalue)
