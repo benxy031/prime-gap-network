@@ -1,0 +1,50 @@
+name: Grouped audit settlement248 Windows and legacy codec
+on:
+  push:
+    branches: [qualification/grouped-audit-settlement248-windows]
+permissions:
+  contents: read
+jobs:
+  grouped_windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Long paths on disposable runner
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-libevent
+      - name: Configure actual native libraries
+        run: cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_BITCOIN_BIN=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF
+      - name: Full native ABI rebuild
+        run: cmake --build build-native --parallel 2 --target pgn-native-audit-settlement-test pgn-native-epoch3-reset-test pgn-native-audit-availability-test
+      - name: Native conservation and frozen legacy bytes
+        run: |
+          set -euo pipefail
+          mkdir -p evidence248
+          build-native/bin/pgn-native-audit-settlement-test.exe "$PWD/build-native/settlement248" | tee evidence248/settlement.jsonl
+          build-native/bin/pgn-native-epoch3-reset-test.exe | tee evidence248/epoch3.jsonl
+          build-native/bin/pgn-native-audit-availability-test.exe | tee evidence248/availability.jsonl
+      - name: Preserve qualification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: grouped248-windows-${{ github.run_id }}
+          path: evidence248
+          if-no-files-found: warn

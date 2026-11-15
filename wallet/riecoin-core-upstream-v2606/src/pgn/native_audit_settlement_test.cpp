@@ -140,6 +140,52 @@ int main(int argc,char** argv){
         PassedReceipt(ledger,first,Id(700+i),0,indexes.blocks[7+i],Id(1));
         PassedReceipt(ledger,second,Id(700+i),1,indexes.blocks[i?11:8],Id(1));
     }
+    { // Frozen pre-v6 bytes: no inferred state or automatic migration.
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        snapshot.pools.reset();
+        snapshot.partition.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("016e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        snapshot.pools.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("026e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce092301000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("036e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("046e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce09230100000a000000000000000a00000000000000000000000000000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("056e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce09230100000a000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.minted=416666666667LL;snapshot.promised=833333333333LL;
+        snapshot.partition->ordinary_minted=416666666667LL;snapshot.partition->ordinary_promised=833333333333LL;
+        snapshot.pools->audit=833333333333LL;snapshot.audit_settlement->total_paid=416666666667LL;
+        snapshot.audit_settlement->active=AuditSettlementActive{10,3,1,10,Id(110),Id(701),125*coin};
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("056e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000000000000000000000000000000000000000000000000000558d8906c20000000a000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000abc6440361000000010a00000000000000030000000000000001000000000000000a0000006e00000000000000000000000000000000000000000000000000000000000000bd020000000000000000000000000000000000000000000000000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+    }
     auto before=Initial(definition);auto after=before;after.tip=Id(900);
     unsigned reads{};
     const auto missing_ledger=[&]()->const NativeAuditLedger*{++reads;return nullptr;};
