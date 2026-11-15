@@ -4,6 +4,7 @@
 #include <pgn/native_report_audit.h>
 #include <pgn/rpc_public_attribution.h>
 #include <pgn/leaderboard_utc_window.h>
+#include <pgn/leaderboard_rosettes.h>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -41,6 +42,7 @@ struct NativeLeaderboardRow {
     std::optional<std::string> display_name;
     int32_t display_name_height{-1}; // Projection provenance only, not an API/authority field.
     uint256 display_name_request;
+    LeaderboardRosetteTotals rosettes;
 };
 inline void ConsiderLeaderboardDisplayName(NativeLeaderboardRow& row,int32_t height,const uint256& request,
                                            const std::string& disclosure,const uint256& root) {
@@ -105,6 +107,24 @@ inline NativeLeaderboardSnapshot BuildNativeLeaderboard(
         if(activity)row.last_activity_height = std::max(row.last_activity_height, height);
         return row;
     };
+    // Canonical first disclosed observation per operator, independent of map
+    // hash order and of the selected display window. No new on-chain event.
+    std::map<uint256,LeaderboardRosettes> rosettes;
+    std::vector<std::pair<uint256,const NativeReportAudit*>> ordered;
+    ordered.reserve(ledger.size());
+    for(const auto& [id,report]:ledger)if(NativeAuditReportQualified(ledger,report))ordered.emplace_back(id,&report);
+    std::sort(ordered.begin(),ordered.end(),[](const auto& a,const auto& b){
+        if(a.second->report.height!=b.second->report.height)return a.second->report.height<b.second->report.height;
+        return a.first.GetHex()<b.first.GetHex();
+    });
+    for(const auto& [id,ptr]:ordered){
+        const auto& report=*ptr;
+        const auto owner=LeaderboardOperatorAt(result.bindings,report.owner,report.report.height);
+        const auto height=window.utc_start?LeaderboardQualificationHeight(ledger,report,result.bindings,tip):report.report.height;
+        const bool in_window=!window.utc_start||window.Contains(LeaderboardEventTime(tip,height));
+        rosettes[owner].Observe(report.owner_reveal,report.report.commitment.root.GetHex(),in_window,
+            [](std::string_view raw){return HexStr(AuditSha(Bytes{raw.begin(),raw.end()}));});
+    }
     for (const auto& [id, report] : ledger) {
         const auto* confirmation = tip.GetAncestor(report.report.height);
         if (!confirmation || confirmation->GetBlockHash() != report.report.block || report.range.length <= 0)
@@ -139,6 +159,7 @@ inline NativeLeaderboardSnapshot BuildNativeLeaderboard(
         const auto row = grouped.find(binding.operator_id);
         if (row != grouped.end()) row->second.signing_scripts.insert(script);
     }
+    for(auto& [id,row]:grouped)row.rosettes=static_cast<const LeaderboardRosetteTotals&>(rosettes[id]);
     result.rows.reserve(grouped.size());
     for (auto& [id, row] : grouped)if(!window.utc_start||row.tickets_reported||row.tickets_validated||row.audits_finalized_valid)
         result.rows.push_back(std::move(row));
@@ -184,6 +205,12 @@ inline UniValue NativeLeaderboardPage(const NativeLeaderboardSnapshot& snapshot,
     out.pushKV("identity_attribution", "NativeAuditOperator_at_report_inclusion_or_audit_finalization_height");
     out.pushKV("validation_scope", "native_qualification_at_snapshot_tip");
     out.pushKV("volume_unit", "search_positions");
+    out.pushKV("rosette_counting_unit","unique_disclosed_gap_records_per_operator");
+    out.pushKV("rosette_history_scope","qualified_report_disclosures");
+    out.pushKV("rosette_target_scope","signed_per_report_target");
+    out.pushKV("rosette_categories","exclusive_g_s_b_r_at_target_target_minus_1_2_3");
+    out.pushKV("quadrigantium_scope","independent_merit_at_least_40_included_in_g_s_b_r_when_applicable");
+    out.pushKV("rosette_payment_scope","discovery_statistics_not_coin_payments");
     out.pushKV("volume_definition", "sum_of_qualified_report_range_lengths_including_repeated_coverage");
     out.pushKV("alias_scope", "historical_contributors_plus_current_authenticated_aliases");
     out.pushKV("alias_limit_per_row", uint64_t(LeaderboardAliasesPerRow));
@@ -195,6 +222,7 @@ inline UniValue NativeLeaderboardPage(const NativeLeaderboardSnapshot& snapshot,
         const auto& source = snapshot.rows[size_t(index)]; UniValue row{UniValue::VOBJ}, aliases{UniValue::VARR};
         row.pushKV("rank", index + 1); row.pushKV("operator_id", source.operator_id.GetHex());
         if(source.display_name)row.pushKV("display_name",*source.display_name);
+        row.pushKV("rosettes",source.rosettes.Json());
         row.pushKV("tickets_reported", std::to_string(source.tickets_reported));
         row.pushKV("tickets_validated", std::to_string(source.tickets_validated));
         row.pushKV("audits_finalized_valid", std::to_string(source.audits_finalized_valid));

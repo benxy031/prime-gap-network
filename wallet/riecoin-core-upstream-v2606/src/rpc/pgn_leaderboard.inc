@@ -96,7 +96,9 @@ RPCMethod getpgnleaderboard(){
    {RPCResult::Type::STR,"tickets_reported","Exact confirmed report count"},
    {RPCResult::Type::STR,"tickets_validated","Exact natively qualified report count"},
    {RPCResult::Type::STR,"audits_finalized_valid","Exact passed eligible audit-job count"},
-   {RPCResult::Type::STR,"validated_search_positions","Exact sum of qualified report range lengths"}}}}}}},RPCExamples{""},
+   {RPCResult::Type::STR,"validated_search_positions","Exact sum of qualified report range lengths"},
+   {RPCResult::Type::OBJ_DYN,"rosettes","Unique disclosed discoveries from qualified reports, not coin payments",{
+    {RPCResult::Type::ELISION,"","Q/G/S/B/R counters are exact decimal strings only when complete; missing data never becomes zero"}}}}}}}}},RPCExamples{""},
  [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
   const auto offset=request.params[0].isNull()?0:request.params[0].getInt<int64_t>();
   const auto limit=request.params[1].isNull()?100:request.params[1].getInt<int64_t>();

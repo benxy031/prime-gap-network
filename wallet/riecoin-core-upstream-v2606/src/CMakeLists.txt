@@ -548,3 +548,7 @@ target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoi
 # Read-only scientific coverage qualification; no node state is changed.
 add_executable(pgn-validated-range-coverage-test EXCLUDE_FROM_ALL pgn/validated_range_coverage_test.cpp)
 target_link_libraries(pgn-validated-range-coverage-test PRIVATE core_interface)
+
+# R257: exact read-only medal statistics, no consensus caller.
+add_executable(pgn-leaderboard-rosettes-test EXCLUDE_FROM_ALL pgn/leaderboard_rosettes_test.cpp)
+target_link_libraries(pgn-leaderboard-rosettes-test PRIVATE core_interface univalue pgn-merit-arithmetic)
