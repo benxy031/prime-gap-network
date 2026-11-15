@@ -1,4 +1,5 @@
 #include "ui/social_view.h"
+#include "ui/quadrigantium_rosette.h"
 #include "ui/render/horizon_workspace_style.h"
 #include "ui/render/horizon_primary_navigation.h"
 #include "qt_offscreen_fixture.h"
@@ -171,7 +172,11 @@ int main(int argc,char** argv){
     view->selectSection(social::Section::Miners);auto data=snapshot(pending.last().request);data.miners=miners();data.miners[2].validatedSearchPositions.provenance.source="<img src='not-loaded'>";pending.last().reply(data,{});
     auto* table=find<QTableWidget>(*view,"pgn-social-miners");
     const QStringList columns{"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block"};
-    check(table->columnCount()==6,"Leaderboard column count changed");for(int i=0;i<columns.size();++i)check(table->horizontalHeaderItem(i)->text()==columns[i],"Wrong leaderboard columns");
+    check(table->columnCount()==11,"Six verified metrics plus five explicit unavailable tier columns expected");for(int i=0;i<columns.size();++i)check(table->horizontalHeaderItem(i)->text()==columns[i],"Wrong leaderboard columns");
+    {const ui::MeritTier tiers[]{ui::MeritTier::Gold,ui::MeritTier::Silver,ui::MeritTier::Bronze,ui::MeritTier::NearMiss};
+     for(int col=6;col<11;++col){const auto* h=table->horizontalHeaderItem(col);check(!h->icon().isNull()&&!h->data(Qt::AccessibleTextRole).toString().isEmpty()&&!h->toolTip().isEmpty(),"Tier glyph lacks icon/accessibility");for(int row=0;row<table->rowCount();++row)check(table->item(row,col)->text()==QString::fromUtf8("—"),"Tier counter fabricated from absent data");}
+     for(int col=7;col<11;++col)check(table->horizontalHeaderItem(col)->icon().pixmap(24,28).toImage()==ui::gapRosetteIcon(tiers[col-7],false).pixmap(24,28).toImage(),"Existing Mining artwork changed");
+     check(table->horizontalHeaderItem(6)->toolTip()==QString::fromUtf8("Quadrigantium · merit 40"),"Q lost its approved meaning");}
     const auto rowId=[&](int row){return table->item(row,0)->data(Qt::UserRole).toString();};
     check(rowId(0)=="large"&&rowId(1)=="adjacent"&&rowId(2)=="zero"&&rowId(3)=="missing","Exact volume sort failed above 2^53 or missing value sorted as zero");
     check(table->item(0,1)->text()==social::leaderboardNumber("9007199254740993")&&table->item(0,1)->text()==table->item(1,1)->text(),"Scientific display fixture does not exercise equal rounded text");

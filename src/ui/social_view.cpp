@@ -4,6 +4,8 @@
 #include "ui/render/horizon_workspace_style.h"
 #include "ui/social_light_style.h"
 #include "ui/social_entry_delegate.h"
+#include "ui/quadrigantium_rosette.h"
+#include <QStyleOptionHeader>
 #include "ui/social_access_dialog.h"
 #include "ui/social_controls.h"
 #include "ui/social_presentation.h"
@@ -92,7 +94,8 @@ protected:
         QHeaderView::keyPressEvent(event);
     }
     void paintSection(QPainter* painter,const QRect& rect,int logical)const override{
-        QHeaderView::paintSection(painter,rect,logical);
+        if(logical<6)QHeaderView::paintSection(painter,rect,logical);
+        else{QStyleOptionHeader option;initStyleOption(&option);option.rect=rect;option.section=logical;option.text.clear();option.icon={};style()->drawControl(QStyle::CE_Header,&option,painter,this);const auto icon=qvariant_cast<QIcon>(model()->headerData(logical,orientation(),Qt::DecorationRole));icon.paint(painter,QRect(rect.center().x()-12,rect.center().y()-14,24,28),Qt::AlignCenter);}
         if(hasFocus()&&logical==section_){QStyleOptionFocusRect option;option.initFrom(this);option.rect=rect.adjusted(3,3,-3,-3);style()->drawPrimitive(QStyle::PE_FrameFocusRect,&option,painter,this);}
     }
 };
@@ -125,11 +128,15 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         auto* browse=new QWidget;auto* browseBox=vertical(browse);browseBox->addLayout(tools);
         p.dataSlot=new QStackedWidget;p.dataSlot->setObjectName(QString("pgn-social-data-slot-%1").arg(i));
         if(i==3){
-            p.ranking=new QTableWidget(0,6);p.ranking->setObjectName("pgn-social-miners");
+            p.ranking=new QTableWidget(0,11);p.ranking->setObjectName("pgn-social-miners");
             auto* header=new SortHeader(p.ranking);p.ranking->setHorizontalHeader(header);
-            p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block"});
+            p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block","Quadrigantium","Gold","Silver","Bronze","Rust"});
             header->setSectionResizeMode(0,QHeaderView::Stretch);for(int col=1;col<6;++col)header->setSectionResizeMode(col,QHeaderView::ResizeToContents);
-            header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
+            // Presentation only: the current authenticated snapshot supplies no
+            // exhaustive per-operator tier totals. Never infer zero/medals.
+            const MeritTier tiers[]{MeritTier::Gold,MeritTier::Silver,MeritTier::Bronze,MeritTier::NearMiss};
+            for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium · merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Verified per-miner total unavailable; no zero inferred.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,48);item->setSizeHint(QSize(48,36));}
+            header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){if(col>=6)return;sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
             p.ranking->verticalHeader()->hide();p.ranking->setEditTriggers(QAbstractItemView::NoEditTriggers);p.ranking->setSelectionBehavior(QAbstractItemView::SelectRows);
             p.ranking->setSelectionMode(QAbstractItemView::SingleSelection);p.ranking->setWordWrap(false);p.ranking->verticalHeader()->setDefaultSectionSize(32);
             p.dataSlot->addWidget(p.ranking);
@@ -475,7 +482,8 @@ void SocialView::renderMiners(){
             else{const auto& source=counter(m,col).provenance;
                 const bool present=bool(counter(m,col).value);
                 info=present?"Exact value: "+raw+"\n"+source.source+"\nObserved: "+stamp(source.observedUtc)+"\nGenesis: "+source.genesis:"Unavailable: no authenticated value supplied. No zero inferred.";}
-            item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}}
+            item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}
+        for(int col=6;col<11;++col){auto* item=new QTableWidgetItem(QString::fromUtf8("—"));item->setTextAlignment(Qt::AlignCenter);item->setToolTip("Unavailable: current authenticated projection has no exhaustive per-miner "+p.ranking->horizontalHeaderItem(col)->text()+" total. No zero or award inferred.");item->setData(Qt::AccessibleDescriptionRole,item->toolTip());p.ranking->setItem(row,col,item);}}
     filter(3);
 }
 void SocialView::formatChat(QString tag){formatDraft(0,std::move(tag));}
