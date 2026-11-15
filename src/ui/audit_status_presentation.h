@@ -46,7 +46,8 @@ inline AuditStatusPresentation auditReportPresentation(const QJsonObject& report
     for(const auto& entry:report.value("jobs").toArray()){
         const auto state=entry.toObject().value("state").toString();
         if(state=="failed")return auditStatusPresentation("failed");
-        assigned|=state=="assigned";committed|=state=="committed";
+        // Match the native atlas: a passed slot keeps an unqualified report in Checking, while expired assignments return to Pending.
+        assigned|=state=="passed"||(state=="assigned"&&!entry.toObject().value("expired").toBool());committed|=state=="committed";
         unknown|=state!="assigned"&&state!="committed"&&state!="passed";
     }
     if(unknown)return auditStatusPresentation("unknown");

@@ -46,8 +46,8 @@ int main(int argc, char** argv) {
     auto* previous=view.findChild<QPushButton*>("pgn-audit-previous");
     auto snapshot=page(1,100);answer(0,snapshot);
     require(table->rowCount()==100,"Initial page missing");
-    require(table->item(0,2)->text()=="Assigned"&&table->item(0,2)->foreground().color()==QColor("#62cfff")&&!table->item(0,2)->icon().isNull(),"Assigned audit lacks persistent color/icon");
-    require(table->item(0,3)->foreground().color()==QColor("#ffbd69"),"Missing auditor must remain awaiting");
+    require(table->item(0,2)->text()=="Assigned"&&table->item(0,2)->foreground().color()==pgn::ui::ticketStagePresentation("audits_assigned").color&&!table->item(0,2)->icon().isNull(),"Assigned audit lacks persistent color/icon");
+    require(table->item(0,3)->foreground().color()==pgn::ui::ticketStagePresentation("pending_audits").color,"Missing auditor must remain awaiting");
     require(table->item(0,2)->toolTip().contains("does not prove"),"Assignment must not imply running computation");
     require(view.property("pgn_audit_waiting_slots").toInt()==199,"Unassigned slots not counted");
     require(view.property("pgn_audit_active_jobs").toInt()==1,"Active audit count wrong");
