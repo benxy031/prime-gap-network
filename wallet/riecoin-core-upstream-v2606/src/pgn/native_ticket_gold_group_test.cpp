@@ -19,6 +19,8 @@
 #include <script/solver.h>
 #include <streams.h>
 #include <txdb.h>
+#include <validation.h>
+#include <consensus/params.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
 #include <array>
@@ -379,13 +381,52 @@ int main(int argc,char** argv){try{
     need(!Consensus::CheckTxInputs(CTransaction{overspend},overspend_state,fee_inputs,at.nHeight+1,overspend_fee),
          "Native ordinary transaction overspend accepted");
     CBlock fee_block=paid;fee_block.vtx.push_back(MakeTransactionRef(transfer));CMutableTransaction fee_cb{*paid.vtx.front()};
-    fee_cb.vout.front().nValue+=native_fees;fee_block.vtx.front()=MakeTransactionRef(fee_cb);fee_block.hashMerkleRoot=BlockMerkleRoot(fee_block);
+    fee_cb.vout.front().nValue+=native_fees;
+    // Same witness commitment construction as the inherited Core generator.
+    const Bytes witness_nonce(32,0);uint256 witness_root=BlockWitnessMerkleRoot(fee_block);
+    CHash256{}.Write(witness_root).Write(witness_nonce).Finalize(witness_root);
+    CScript commitment;commitment.resize(38);commitment[0]=OP_RETURN;commitment[1]=0x24;
+    commitment[2]=0xaa;commitment[3]=0x21;commitment[4]=0xa9;commitment[5]=0xed;
+    std::memcpy(&commitment[6],witness_root.begin(),32);fee_cb.vout.emplace_back(0,commitment);
+    fee_cb.vin[0].scriptWitness.stack={witness_nonce};fee_block.vtx.front()=MakeTransactionRef(fee_cb);
+    fee_block.hashMerkleRoot=BlockMerkleRoot(fee_block);
     const auto fee_science=VerifyNativeTicketGoldBlock(view,at,history,fee_block,body_budget);
     need(fee_science.block.has_value(),"Fee block lost verified science");
     const auto fee_plan=PrepareNativeTicketGoldMonetaryPlan(view,at,fee_block,*fee_science.block,*money.policy);
     need(fee_plan&&VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,native_fees)&&
          !VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,native_fees-1)&&
          !VerifyNativeTicketGoldCoinbase(*fee_plan,fee_block,-1),"Fees were multiplied per Gold or overpayment accepted");
+    Consensus::Params native_rules{};native_rules.amount_rules=Consensus::AmountRules::ApprovedPgn();
+    BlockValidationState native_block_state;
+    // These context-free checks deliberately do not assert header/fork PoW.
+    need(CheckBlock(fee_block,native_block_state,native_rules,false,true)&&!IsBlockMutated(fee_block,true),
+         "Inherited native body/Merkle/witness checks rejected the six-Gold block");
+    CBlock bad_witness=fee_block;auto changed_transfer=transfer;
+    changed_transfer.vin[0].scriptWitness.stack[0][0]^=1;bad_witness.vtx[1]=MakeTransactionRef(changed_transfer);
+    bad_witness.fChecked=false;bad_witness.checked_amount_max.reset();bad_witness.m_checked_merkle_root=false;bad_witness.m_checked_witness_commitment=false;
+    need(IsBlockMutated(bad_witness,true),"Native witness commitment accepted a changed transaction witness");
+    auto duplicate_input=transfer;duplicate_input.vin.push_back(duplicate_input.vin.front());TxValidationState duplicate_state;
+    need(!CheckTransaction(CTransaction{duplicate_input},duplicate_state,Consensus::AmountRules::ApprovedPgn()),
+         "Inherited duplicate-input check was bypassed");
+    const auto fee_hash=fee_block.GetHash();CBlockIndex fee_index;fee_index.phashBlock=&fee_hash;
+    fee_index.pprev=const_cast<CBlockIndex*>(&at);fee_index.nHeight=at.nHeight+1;fee_index.nTx=fee_block.vtx.size();
+    const auto fee_facts=PrepareNativeTicketGoldBlockForward(view,at,fee_index,*fee_science.block);
+    fee_inputs.SetBestBlock(at.GetBlockHash());fee_inputs.Flush();view.Flush();
+    const auto fee_before_money=view.GetPgnIssuanceState();const auto fee_before_head=view.GetPgnFactHead();
+    Coin spent_input;const COutPoint created{signed_transfer.GetHash(),0};
+    {CCoinsViewCache child{&view};need(child.SpendCoin(input,&spent_input),"Native input disappeared before combined commit");
+     child.AddCoin(created,Coin{signed_transfer.vout[0],fee_index.nHeight,false},false);child.SetBestBlock(fee_hash);
+     child.StagePgnFactHistoryStep(fee_facts);child.StagePgnIssuanceHistoryStep(fee_plan->Forward());child.Flush();}
+    need(view.AccessCoin(input).IsSpent()&&!view.AccessCoin(created).IsSpent()&&view.GetBestBlock()==fee_hash&&
+         view.GetPgnIssuanceState()==std::optional{fee_plan->Forward().forward.after},
+         "Combined native UTXO/fact/money commit diverged");
+    {CCoinsViewCache undo{&view};need(undo.SpendCoin(created),"Native created output disappeared before undo");
+     undo.AddCoin(input,std::move(spent_input),false);undo.SetBestBlock(at.GetBlockHash());
+     undo.StagePgnIssuanceHistoryStep({IssuanceDirection::Rewind,fee_plan->Forward().forward});
+     undo.StagePgnFactHistoryStep({FactDirection::Rewind,fee_facts.forward});undo.Flush();}
+    need(view.GetBestBlock()==at.GetBlockHash()&&view.GetPgnIssuanceState()==fee_before_money&&view.GetPgnFactHead()==fee_before_head&&
+         view.AccessCoin(created).IsSpent()&&view.AccessCoin(input).out==CTxOut{funding_value,miner},
+         "Combined native UTXO/fact/money undo failed to restore its parent");
     }
     auto wrong=proofs;wrong[1]=wrong[0];
     need(VerifyNativeTicketGoldGroup(view,at,history,wrong,body_budget).verdict==TicketGoldGroupVerdict::DuplicateGold,"Duplicate accepted");
