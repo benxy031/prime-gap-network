@@ -1,0 +1,49 @@
+name: Core22 built artifact real relay wallet and reorg qualification
+on:
+  push:
+    branches: [qualification/core22-runtime]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Retrieve exact compiled artifact and public fixture
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api repos/wizz13150/prime-gap-network/actions/artifacts/14184204301/zip > core-built.zip
+          echo '30bb32d8ffa2124e9169a3b2f63af27975fa488cd78b3aefafdc1dbe82a8b737  core-built.zip' | sha256sum -c -
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history249.blocks
+          echo '09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4  public-history249.blocks' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path,PurePosixPath
+          import hashlib,json,zipfile
+          with zipfile.ZipFile('core-built.zip') as z:
+            for i in z.infolist():
+              assert not i.is_dir() and not i.filename.startswith('/') and '..'not in PurePosixPath(i.filename).parts and i.file_size<134217728
+              p=Path(i.filename);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(z.read(i))
+          b=json.loads(Path('evidence22/CORE-BUILD.json').read_bytes());assert b['source']=='a45df218f623528fd162c8ce3c64367babb4b033'
+          p=Path('core22/pgn-core');assert hashlib.sha256(p.read_bytes()).hexdigest()==b['files'][0]['sha256'];p.chmod(0o755)
+          assert 'PASS 4134 checks' in Path('evidence22/rosettes.txt').read_text()
+          PY
+      - name: Actual ConnectBlock relay wallet cold restart and reorg
+        run: |
+          set -euo pipefail
+          python3 tests/native_grouped249_actual.py --core core22/pgn-core --history public-history249.blocks --legacy --receipt evidence22/actual.json
+      - name: Preserve qualified exact production candidate
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core22-qualified-ubuntu-${{ github.run_id }}
+          path: |
+            core22
+            evidence22
+          if-no-files-found: error
+          retention-days: 7
