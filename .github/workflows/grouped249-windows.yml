@@ -1,0 +1,73 @@
+name: Grouped249 Windows actual block wallet and reorg
+on:
+  push:
+    branches: [qualification/grouped249-windows]
+permissions:
+  contents: read
+jobs:
+  grouped_windows_actual:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Disposable runner paths and interpreter
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          $qualPython = (Get-Command python).Source.Replace('\','/')
+          "QUAL_PYTHON=$qualPython" >> $env:GITHUB_ENV
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Exact public fixture only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history249.blocks
+          echo '09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4  public-history249.blocks' | sha256sum -c -
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-libevent
+      - name: Qualification-only schedule
+        run: |
+          "$QUAL_PYTHON" - <<'PY'
+          from pathlib import Path
+          p=Path('wallet/riecoin-core-upstream-v2606/src/pgn/audit_grouping_activation.h')
+          s=p.read_text(encoding='utf-8')
+          old='    (void)chain;\n    // QUALIFICATION_PIN: public schedules remain absent until qualified.\n    return {};'
+          new='    const auto test=*uint256::FromHex("710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314");\n    if(chain==test)return AuditGroupingActivation{test,322};\n    return {};'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new),encoding='utf-8',newline='\n')
+          PY
+      - name: Rebuild complete Windows Core and native guards
+        run: |
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_DAEMON=ON -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF -DPGN_DAEMON_OUTPUT_NAME=pgn-core-qualified249
+          cmake --build build-native --parallel 2 --target riecoind pgn-native-audit-settlement-test
+      - name: Actual Native blocks wallet maturity relay and reorg
+        run: |
+          set -euo pipefail
+          mkdir -p evidence249
+          build-native/bin/pgn-native-audit-settlement-test.exe "$PWD/build-native/guards249" | tee evidence249/guards.jsonl
+          "$QUAL_PYTHON" tests/native_grouped249_actual.py --core build-native/bin/pgn-core-qualified249.exe --history public-history249.blocks --receipt evidence249/windows-actual.json
+      - name: Preserve exact qualification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: grouped249-windows-${{ github.run_id }}
+          path: evidence249
+          if-no-files-found: warn
+
