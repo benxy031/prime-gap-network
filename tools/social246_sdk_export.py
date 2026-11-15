@@ -36,6 +36,10 @@ last=''
 for line in commands_run.stdout:
  if re.search(r'-o\s+\"?bin[\\\\/]+riecoind[.]exe',line):last=line.rstrip()
 assert commands_run.wait()==0 and last,'Exact daemon link command missing'
+for name in re.findall(r'[A-Za-z]:[\\/][^\s";]+[.]a',last):
+ p=Path(name)
+ if p.is_file()and msys.resolve()in p.resolve().parents:copy(p,'thirdparty/lib/'+p.name)
+if (src/'COPYING').is_file():copy(src/'COPYING','COPYING.Native')
 (out/'link-command.txt').write_text(last+'\n',encoding='utf8');(out/'affected-commands.json').write_text(json.dumps(wanted,indent=2)+'\n',encoding='utf8')
 git=shutil.which('git')or'C:/Program Files/Git/bin/git.exe';pin=subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()
 cache=(build/'CMakeCache.txt').read_text(encoding='utf8');assert 'PGN_SOCIAL_PRIVATE_QUALIFICATION:BOOL=OFF'in cache
