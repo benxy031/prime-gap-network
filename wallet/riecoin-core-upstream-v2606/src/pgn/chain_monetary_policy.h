@@ -6,10 +6,10 @@
 #include <pgn/audit_settlement_network_activation.h>
 namespace pgn::core {
 inline constexpr std::string_view AuditSettlementPolicyTag{"PGN-AUDIT-SETTLEMENT-CANDIDATE-1"};
-struct AuditSettlementDefinition {uint16_t page_outputs;};
-inline std::optional<CScript> BuildCandidateAuditSettlementPolicy(uint16_t page_outputs){
+struct AuditSettlementDefinition {uint16_t page_outputs;bool grouped{};};
+inline std::optional<CScript> BuildCandidateAuditSettlementPolicy(uint16_t page_outputs,bool grouped=false){
     if(!page_outputs||page_outputs>128)return {};
-    return CScript{}<<OP_RETURN<<Bytes{AuditSettlementPolicyTag.begin(),AuditSettlementPolicyTag.end()}<<Bytes{1,1,uint8_t(page_outputs),uint8_t(page_outputs>>8)};
+    return CScript{}<<OP_RETURN<<Bytes{AuditSettlementPolicyTag.begin(),AuditSettlementPolicyTag.end()}<<Bytes{1,uint8_t(grouped?2:1),uint8_t(page_outputs),uint8_t(page_outputs>>8)};
 }
 inline constexpr std::string_view MonetaryPolicyEnvelopeTag{"PGNMONEY-POLICY-CANDIDATE-1"};
 struct FeeRoutingDefinition {uint32_t numerator,denominator;};
@@ -82,11 +82,11 @@ inline ChainMonetaryPolicyCheck ReadChainMonetaryPolicy(const CCoinsView& view,c
     std::optional<AuditSettlementDefinition> audits;
     const auto settlement=ReadCandidateGenesisPolicyPayload(view,parent,archive,archive_budget,budget,AuditSettlementPolicyTag);
     if(settlement.verdict!=ChainRangePolicyVerdict::MissingConfiguration){
-        if(!settlement.genesis||!epochs||settlement.payload.size()!=4||settlement.payload[0]!=1||settlement.payload[1]!=1)
+        if(!settlement.genesis||!epochs||settlement.payload.size()!=4||settlement.payload[0]!=1||(settlement.payload[1]!=1&&settlement.payload[1]!=2))
             return {ChainRangePolicyVerdict::InvalidConfiguration,{}};
         const auto page=uint16_t(settlement.payload[2])|(uint16_t(settlement.payload[3])<<8);
         if(!page||page>128)return {ChainRangePolicyVerdict::InvalidConfiguration,{}};
-        audits=AuditSettlementDefinition{uint16_t(page)};
+        audits=AuditSettlementDefinition{uint16_t(page),settlement.payload[1]==2};
     }
     HashWriter id{TaggedHash("PGN/CANDIDATE/NATIVE-MONETARY-POLICY/1")};id<<p.genesis->Chain()<<p.genesis->Block()<<p.payload;
     if(audits)id<<settlement.payload;

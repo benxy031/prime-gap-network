@@ -10,6 +10,7 @@ struct AuditSettlementActive {
     int32_t height{};
     uint256 cutoff,root;
     CAmount pot{};
+    CAmount grouped_remaining{}; // v6 only, absent from the legacy v5 encoding.
     bool Valid() const {
         return golds&&tasks&&next<tasks&&height>0&&!cutoff.IsNull()&&!root.IsNull()&&
             pot>=0&&pot<=PGN_MAX_SUPPLY_ATOMIC;
@@ -22,10 +23,14 @@ struct AuditSettlementBalances {
     int32_t completed_height{};
     CAmount total_paid{};
     std::optional<AuditSettlementActive> active;
+    bool grouped{}; // Explicit IssuanceSnapshot v6; never inferred from old state.
     bool Valid(CAmount pool) const {
         if(completed_height<0||total_paid<0||total_paid>PGN_MAX_SUPPLY_ATOMIC||pool<0)return false;
         if(!active)return true;
         if(!active->Valid())return false;
+        if(grouped)return active->golds>completed_golds&&active->height>completed_height&&
+            active->grouped_remaining>=0&&active->grouped_remaining<=active->pot&&active->grouped_remaining<=pool;
+        if(active->grouped_remaining)return false;
         const auto remaining=QuoteAuditPotRange(active->pot,active->tasks,active->next,active->tasks-active->next);
         return active->golds>completed_golds&&active->height>completed_height&&remaining&&*remaining<=pool;
     }
