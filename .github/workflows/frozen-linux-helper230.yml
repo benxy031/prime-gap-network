@@ -1,0 +1,137 @@
+name: Frozen Linux helper 28 qualification
+on:
+  push:
+    branches: [qualification/frozen-linux-helper230]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  frozen-helper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Download exact artifact without forwarding credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, stat, tarfile, urllib.error, urllib.parse, urllib.request, zipfile
+          expected = '0c5b18612bec0b922a606f14f0cb7c084a10bbab602a20bf94e392b489cbd8e4'
+          root = pathlib.Path('frozen-helper-qa230')
+          root.mkdir()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, response, code, message, headers, new_url):
+                  return None
+          api_url = 'https://api.github.com/repos/wizz13150/prime-gap-network/actions/artifacts/14141902919/zip'
+          assert urllib.parse.urlsplit(api_url).hostname == 'api.github.com'
+          request = urllib.request.Request(api_url, headers={
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'pgn-frozen-helper-qualification'})
+          try:
+              try:
+                  response = urllib.request.build_opener(NoRedirect()).open(request, timeout=30)
+              except urllib.error.HTTPError as error:
+                  if error.code not in (301, 302, 303, 307, 308):
+                      raise SystemExit('Artifact API HTTP ' + str(error.code)) from None
+                  location = error.headers.get('Location', '')
+                  error.close()
+                  parsed = urllib.parse.urlsplit(location)
+                  if parsed.scheme != 'https' or not parsed.hostname:
+                      raise SystemExit('Artifact redirect is not HTTPS')
+                  # A new unauthenticated request: no API headers or token are
+                  # attached to the storage URL, or to any later redirects.
+                  response = urllib.request.urlopen(urllib.request.Request(location), timeout=30)
+              archive = root / 'artifact.zip'
+              with response, archive.open('xb') as output:
+                  total = 0
+                  while chunk := response.read(1024 * 1024):
+                      total += len(chunk)
+                      if total > 64 * 1024 * 1024:
+                          raise SystemExit('Artifact exceeds qualification bound')
+                      output.write(chunk)
+          except urllib.error.HTTPError as error:
+              raise SystemExit('Artifact storage HTTP ' + str(error.code)) from None
+          except Exception as error:
+              # Never expose a signed storage URL through an exception string.
+              raise SystemExit('Artifact download failed: ' + type(error).__name__) from None
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert digest == expected, 'Exact CI ZIP SHA-256 mismatch'
+          with zipfile.ZipFile(archive) as outer:
+              entries = outer.infolist()
+              assert len(entries) == 1 and entries[0].filename == 'product-linux-ui.tar.gz'
+              assert not stat.S_ISLNK(entries[0].external_attr >> 16)
+              assert entries[0].file_size <= 64 * 1024 * 1024
+              compressed = root / 'product-linux-ui.tar.gz'
+              with outer.open(entries[0]) as source, compressed.open('xb') as target:
+                  shutil.copyfileobj(source, target)
+          destination = root / 'runtime'
+          destination.mkdir()
+          with tarfile.open(compressed, 'r:gz') as bundle:
+              members = bundle.getmembers()
+              assert len(members) <= 4096 and sum(m.size for m in members) <= 256 * 1024 * 1024
+              names = set()
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  assert not path.is_absolute() and '..' not in path.parts
+                  assert '\\' not in member.name and ':' not in member.name
+                  assert member.isfile() or member.isdir(), 'Unexpected archive link or special entry'
+                  normalized = str(path)
+                  assert normalized not in names, 'Duplicate archive path'
+                  names.add(normalized)
+              bundle.extractall(destination, members=members, filter='data')
+          print('Verified exact CI ZIP SHA-256; safe extraction complete; no build or dependency installation.')
+          PY
+      - name: Execute the frozen helper and supplied runtime
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, stat, subprocess
+          root = pathlib.Path('frozen-helper-qa230').resolve()
+          runtime = root / 'runtime'
+          executable = runtime / 'updater/horizon-updater'
+          provenance = json.loads((runtime / 'UPDATER-SOURCE.json').read_text())
+          actual = hashlib.sha256(executable.read_bytes()).hexdigest()
+          assert actual == provenance['executable_sha256'] == '1ef341a0517a7a92e0f230437fbd1260f3b0321ed650fd50710657fc8f1f040b'
+          assert executable.read_bytes()[:4] == b'\x7fELF'
+          assert stat.S_IMODE(executable.stat().st_mode) & 0o111, 'Packaged helper lacks execute permission'
+          assert (executable.parent / '_internal').is_dir(), 'Bundled runtime absent'
+          environment = {k: v for k, v in os.environ.items()
+                         if not any(word in k.upper() for word in ('TOKEN', 'SECRET', 'PASSWORD', 'AUTH'))
+                         and k not in ('PYTHONPATH', 'PYTHONHOME', 'LD_LIBRARY_PATH', 'LD_PRELOAD')}
+          home = root / 'empty-home'
+          temporary = root / 'temporary'
+          home.mkdir()
+          temporary.mkdir()
+          environment.update(HOME=str(home), TMPDIR=str(temporary), PYTHONNOUSERSITE='1', PATH='/usr/bin:/bin')
+          results = {}
+          for flag, name in (('--version', 'version'), ('--self-test', 'self_test')):
+              completed = subprocess.run([str(executable), flag], cwd=executable.parent,
+                                         env=environment, capture_output=True, text=True, timeout=45)
+              (root / (name + '.stdout')).write_text(completed.stdout)
+              (root / (name + '.stderr')).write_text(completed.stderr)
+              if completed.returncode:
+                  print(completed.stdout[-4096:])
+                  print(completed.stderr[-4096:])
+                  raise SystemExit('Frozen helper ' + name + ' exit ' + str(completed.returncode))
+              results[name] = json.loads(completed.stdout)
+          version, check = results['version'], results['self_test']
+          assert version['schema'] == 'PGN_UPDATE_HELPER_VERSION_V1' and version['version'] == '2026.11.15.28'
+          assert check['schema'] == 'PGN_UPDATE_HELPER_SELF_TEST_V1' and check['PASS'] is True
+          assert check['version'] == '2026.11.15.28'
+          assert check['network_requested'] is False and check['installation_performed'] is False
+          assert check['linux_lifecycle_imported'] is True and check['linux_recovery_imported'] is True
+          assert check['native_process_identity_verified'] is True
+          result = dict(PASS=True, artifact_run=43665107272, artifact_id=14141902919,
+                        artifact_zip_sha256='0c5b18612bec0b922a606f14f0cb7c084a10bbab602a20bf94e392b489cbd8e4',
+                        product_source='b891f5836e829fa4cf398dddbb1e4bad08b97213',
+                        qualification_base='e83063a7ff96b93c693de0d5cab4d4cc9c99d1cf',
+                        qualification_commit=os.environ['GITHUB_SHA'],
+                        executable_sha256=actual, version=version, self_test=check,
+                        os='ubuntu-24.04', no_build=True, no_dependencies_installed=True,
+                        frozen_executable_executed=True)
+          (root / 'RESULT.json').write_text(json.dumps(result, indent=2) + '\n')
+          print('QUALIFICATION_RESULT=' + json.dumps(result, separators=(',', ':')))
+          PY
