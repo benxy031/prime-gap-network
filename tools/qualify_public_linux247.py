@@ -18,6 +18,11 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore,inventory
 from horizon_linux_install import LinuxCohortLifecycle
 from horizon_linux_lifecycle import OwnedLinuxProcess,owned_ipc
+def gui_command(owned,operation,*args):
+    assert not owned.exited()
+    run=subprocess.run([str(owned.executable),operation,str(owned.pid),*args],capture_output=True,timeout=12)
+    assert run.returncode==0,(operation,run.stderr.decode(errors='replace')[-500:])
+    return json.loads(run.stdout)
 old,files,_,_=inventory(base)
 for name in ('config','data','cache','runtime'):(QA/name).mkdir()
 os.environ.update(XDG_CONFIG_HOME=str(QA/'config'),XDG_DATA_HOME=str(QA/'data'),XDG_CACHE_HOME=str(QA/'cache'),XDG_RUNTIME_DIR=str(QA/'runtime'),QT_QPA_PLATFORM='xcb')
@@ -57,9 +62,9 @@ try:
     assert sha(sentinel)==saved
     seen=[]
     for section in ('Wallet','Social','SocialMiners','Mining'):
-        view=owned_ipc(life.new_ui,'--show-owned',section);seen.append(section)
+        view=gui_command(life.new_ui,'--show-owned',section);seen.append(section)
         (E/(section+'.json')).write_text(json.dumps(view,indent=2)+'\n')
-    new_pid=life.new_ui.pid;owned_ipc(life.new_ui,'--close-owned')
+    new_pid=life.new_ui.pid;gui_command(life.new_ui,'--close-owned')
     for _ in range(80):
         if life.new_ui.exited():break
         time.sleep(.25)
@@ -70,7 +75,7 @@ try:
 finally:
     active=life.new_ui if life and life.new_ui else own
     if active and not active.exited():
-        owned_ipc(active,'--close-owned')
+        gui_command(active,'--close-owned')
         for _ in range(80):
             if active.exited():break
             time.sleep(.25)
@@ -81,3 +86,4 @@ finally:
     out.close();err.close()
 assert result
 (QA/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
+
