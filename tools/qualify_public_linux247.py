@@ -22,7 +22,7 @@ def gui_command(owned,operation,*args):
     assert not owned.exited()
     run=subprocess.run([str(owned.executable),operation,str(owned.pid),*args],capture_output=True,timeout=12)
     assert run.returncode==0,(operation,run.stderr.decode(errors='replace')[-500:])
-    return json.loads(run.stdout)
+    return None if operation=='--close-owned' else json.loads(run.stdout)
 old,files,_,_=inventory(base)
 for name in ('config','data','cache','runtime'):(QA/name).mkdir()
 os.environ.update(XDG_CONFIG_HOME=str(QA/'config'),XDG_DATA_HOME=str(QA/'data'),XDG_CACHE_HOME=str(QA/'cache'),XDG_RUNTIME_DIR=str(QA/'runtime'),QT_QPA_PLATFORM='xcb')
