@@ -13,6 +13,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Existing native runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libevent-dev libgmp10 libsqlite3-0
       - name: Retrieve exact compiled artifact and public fixture
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,6 +40,7 @@ jobs:
       - name: Actual ConnectBlock relay wallet cold restart and reorg
         run: |
           set -euo pipefail
+          ldd core22/pgn-core
           python3 tests/native_grouped249_actual.py --core core22/pgn-core --history public-history249.blocks --legacy --receipt evidence22/actual.json
       - name: Preserve qualified exact production candidate
         if: ${{ !cancelled() }}
