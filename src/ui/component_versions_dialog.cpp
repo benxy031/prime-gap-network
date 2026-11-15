@@ -1,5 +1,6 @@
 #include "app/horizon_user_paths.h"
 #include "ui/component_versions_dialog.h"
+#include "wallet/installed_core_binding.h"
 #include "update/component_catalog.h"
 #include <QSignalBlocker>
 #include <QDateTime>
@@ -58,11 +59,10 @@ QByteArray componentProfileIdentity(const ComponentVersionsContext& context){
 ComponentVersionsContext refreshComponentVersionsContext(ComponentVersionsContext context){
  if(context.coreProfilePath.isEmpty())return context;
  context.codeRoots.remove("core");context.primaryPrograms.remove("core");context.genesisHash.clear();
- QFile profile(context.coreProfilePath);
- if(profile.open(QIODevice::ReadOnly)&&profile.size()<=32768){
-  const auto object=QJsonDocument::fromJson(profile.readAll()).object();context.genesisHash=object.value("genesis_hash").toString();
-  const QFileInfo executable(object.value("executable").toString());
-  if(executable.isAbsolute()&&executable.isFile()&&executable.isExecutable()){context.codeRoots.insert("core",executable.canonicalPath());context.primaryPrograms.insert("core",executable.canonicalFilePath());}
+ const auto binding=pgn::wallet::installedCoreBinding(context.applicationRoot,context.coreProfilePath,context.testnet);
+ if(!binding.program.isEmpty()){
+  context.genesisHash=binding.genesis;const QFileInfo executable(binding.program);
+  context.codeRoots.insert("core",executable.canonicalPath());context.primaryPrograms.insert("core",executable.canonicalFilePath());
  }
  return context;
 }
