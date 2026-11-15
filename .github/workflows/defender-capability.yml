@@ -1,0 +1,41 @@
+name: Disposable Windows Defender capability observation
+on:
+  push:
+    branches: [qualification/defender-environment-20261115]
+permissions:
+  contents: read
+jobs:
+  defender_capability:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read protection state without changing it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Path evidence | Out-Null
+          $result=[ordered]@{scope='Disposable hosted runner only';policy_changed=$false;sample_scanned=$false;qualified_scan_environment=$false}
+          try {
+            $state=Get-MpComputerStatus
+            $result.status=$state|Select-Object AMRunningMode,AMServiceEnabled,AntivirusEnabled,AntispywareEnabled,RealTimeProtectionEnabled,BehaviorMonitorEnabled,AMProductVersion,AMEngineVersion,AntivirusSignatureVersion,AntivirusSignatureLastUpdated
+            $pref=Get-MpPreference
+            $result.cloud=$pref|Select-Object MAPSReporting,SubmitSamplesConsent,DisableBlockAtFirstSeen,CloudBlockLevel,DisableIOAVProtection
+            $paths=@(Get-ChildItem -LiteralPath 'C:\ProgramData\Microsoft\Windows Defender\Platform' -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending|ForEach-Object {Join-Path $_.FullName 'MpCmdRun.exe'})
+            $paths+= 'C:\Program Files\Windows Defender\MpCmdRun.exe'
+            $tool=$paths|Where-Object {Test-Path -LiteralPath $_}|Select-Object -First 1
+            if($tool){
+              $out=& $tool -ValidateMapsConnection 2>&1
+              $result.cloud_connection_exit=$LASTEXITCODE
+              $result.cloud_connection_output=($out|Out-String)
+            }
+            $result.qualified_scan_environment=($state.AMRunningMode -eq 'Normal' -and $state.AMServiceEnabled -and $state.AntivirusEnabled -and $state.RealTimeProtectionEnabled -and $tool -and $result.cloud_connection_exit -eq 0)
+          } catch {$result.error=$_.Exception.Message}
+          $result|ConvertTo-Json -Depth 6|Set-Content -LiteralPath evidence/DEFENDER-CAPABILITY.json -Encoding utf8
+          $result|ConvertTo-Json -Depth 6
+      - name: Preserve exact observation
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: defender-capability-${{ github.run_id }}
+          path: evidence
+          retention-days: 7
