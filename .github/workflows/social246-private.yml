@@ -1,7 +1,7 @@
-name: Private Social246 Native association qualification
+name: Private Social246 existing V2 consent path
 on:
   push:
-    branches: [qualification/social246-native]
+    branches: [qualification/social246-consent]
 permissions:
   contents: read
 concurrency:
@@ -48,7 +48,15 @@ jobs:
             mingw-w64-ucrt-x86_64-libevent
       - name: Configure exact public Core21 plus isolated Social overlay
         run: |
-          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_BITCOIN_BIN=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_BITCOIN_BIN=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF
+      - name: Compile affected native objects before full build
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
+          export CMAKE_EXPLICIT="$(cygpath -w "$(command -v cmake)")"
+          qa_cwd="$(cygpath -w "$PWD")"
+          "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/consent-preflight-resource.json" --timeout 600 -- "$PYTHON_EXPLICIT" -B tools/social246_preflight.py > consent-preflight.log 2>&1
       - name: Build at Idle priority, one compiler, bounded2.5GiB
         id: build
         env:
@@ -94,7 +102,7 @@ jobs:
           qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
           qa_cmake="$(cygpath -w "$(command -v cmake)")"
           qa_cwd="$(cygpath -w "$PWD")"
-          "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/components-build-resource.json" --timeout 600 -- "$qa_cmake" --build build-native --parallel 1 --target pgn-social-committed-identity-test pgn-social-identity-index-test pgn-social-identity-target-test pgn-social-identity-batch-test > components-build.log 2>&1
+          "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/components-build-resource.json" --timeout 600 -- "$qa_cmake" --build build-native --parallel 1 --target pgn-social-consent-prepare-test pgn-social-consent-pending-test pgn-social-committed-identity-test > components-build.log 2>&1
       - name: Check actual Native archive, dual BIP322, rollback and request isolation
         if: steps.components.outcome == 'success'
         shell: pwsh

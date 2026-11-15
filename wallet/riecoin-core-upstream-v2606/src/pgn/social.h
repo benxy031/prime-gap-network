@@ -25,6 +25,9 @@ struct Link {
   std::string remote_generation;
   uint64_t remote_cursor{}, remote_access_cursor{};
   bool access_capable{};
+  bool association_capable{};
+  uint64_t association_offer_cursor{};
+  int64_t association_retry_ms{};
   int64_t last_request_ms{};
 };
 bool Enabled();

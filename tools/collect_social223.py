@@ -15,7 +15,7 @@ def copy(source,target):
     target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target);files[target.relative_to(out).as_posix()]=dict(bytes=target.stat().st_size,sha256=hashlib.sha256(target.read_bytes()).hexdigest())
 for source in Path('private-social223-delivery/Core').glob('*'):
     if source.suffix.lower() in ['.exe','.dll']:files[source.relative_to(out).as_posix()]=dict(bytes=source.stat().st_size,sha256=hashlib.sha256(source.read_bytes()).hexdigest())
-for name in ['components-build-resource.json','components-build.log','build-resource.json','test-resource.json','public-off-resource.json','private-build-resource.json','private-mode-build.log','build-private.log','private-public-default-off/RESULT.json','private-social223/dependencies.txt','private-social223/private-native-test/RESULT.json']:
+for name in ['consent-preflight-resource.json','consent-preflight.log','consent-preflight-targets.json','components-build-resource.json','components-build.log','build-resource.json','test-resource.json','public-off-resource.json','private-build-resource.json','private-mode-build.log','build-private.log','private-public-default-off/RESULT.json','private-social223/dependencies.txt','private-social223/private-native-test/RESULT.json']:
     name=name.replace('private-social223/private-native-test/','private-social223-test/')
     source=Path(name)
     if source.is_file():copy(source,out/'receipts'/source.name)

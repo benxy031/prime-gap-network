@@ -18,6 +18,7 @@
 #include <chain.h>
 #include <chainparams.h>
 #include <pgn/social.h>
+#include <pgn/social_identity_rpc.h>
 #include <chainparamsbase.h>
 #include <clientversion.h>
 #include <common/args.h>
@@ -288,6 +289,7 @@ static void ShutdownNotify(const ArgsManager& args)
 void Interrupt(NodeContext& node)
 {
     // Stop Social workers before native cryptographic/global teardown.
+    pgn::social::identity::StopNativeAssociations();
     pgn::social::Shutdown();
 #if HAVE_SYSTEM
     ShutdownNotify(*node.args);
@@ -1885,6 +1887,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     // Start asynchronous Social storage/verifier before native net threads.
     pgn::social::Start();
+    pgn::social::identity::StartNativeAssociations(chainman, *node.args);
     assert(!node.peerman);
     node.peerman = PeerManager::make(*node.connman, *node.addrman,
                                      node.banman.get(), chainman,

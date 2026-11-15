@@ -12,6 +12,7 @@
 #include <pgn/native_network_metrics.h>
 #include <pgn/native_leaderboard.h>
 #include <pgn/social_identity_snapshot.h>
+#include <pgn/social_identity_rpc.h>
 #include <pgn/leaderboard_snapshot_cache.h>
 #include <pgn/audit_activity_selection.h>
 #include <pgn/ticket_atlas_projection.h>
@@ -277,6 +278,7 @@ RPCMethod getpgnbootstraptemplate(){
    if(settlement->page.receipt)cb.vout.emplace_back(0,*settlement->page.receipt);
     if(settlement->page.activation)cb.vout.emplace_back(0,*settlement->page.activation);
    block.vtx[0]=MakeTransactionRef(cb);block.hashMerkleRoot=BlockMerkleRoot(block);
+   if(pgn::social::identity::AppendNativeAssociations(cb,tip.GetBlockHash(),GetBlockWeight(block)<MAX_BLOCK_WEIGHT?(MAX_BLOCK_WEIGHT-GetBlockWeight(block))/WITNESS_SCALE_FACTOR:0)){block.vtx[0]=MakeTransactionRef(cb);block.hashMerkleRoot=BlockMerkleRoot(block);}
    if(GetBlockWeight(block)>MAX_BLOCK_WEIGHT)throw JSONRPCError(RPC_INVALID_PARAMETER,"Native template exceeds actual block weight");
   const auto proposed=VerifyProposedTicketRequests(active.CoinsTip(),tip,*history.registry,block,budget.requests.scan,budget.requests.maximum_total_requests);
   if(!proposed.batch)throw JSONRPCError(RPC_VERIFY_ERROR,"Supplied request is invalid, duplicate, stale or already confirmed");
@@ -387,6 +389,7 @@ RPCMethod getpgnscientifictemplate(){
   CMutableTransaction cb;cb.vin.resize(1);cb.vin[0].prevout.SetNull();cb.vin[0].scriptSig=CScript{}<<(tip.nHeight+1)<<OP_0;cb.vout.emplace_back(0,CScript{bytes.begin(),bytes.end()});
   CBlock block;block.nVersion=4;block.hashPrevBlock=tip.GetBlockHash();block.nTime=std::max<int64_t>(GetTime(),tip.GetMedianTimePast()+1);block.nBits=*target;block.nNonce=0;
   block.vtx={MakeTransactionRef(cb)};block.hashMerkleRoot=BlockMerkleRoot(block);
+  if(pgn::social::identity::AppendNativeAssociations(cb,tip.GetBlockHash(),GetBlockWeight(block)<MAX_BLOCK_WEIGHT?(MAX_BLOCK_WEIGHT-GetBlockWeight(block))/WITNESS_SCALE_FACTOR:0)){block.vtx[0]=MakeTransactionRef(cb);block.hashMerkleRoot=BlockMerkleRoot(block);}
   if(GetBlockWeight(block)>MAX_BLOCK_WEIGHT)throw JSONRPCError(RPC_INVALID_PARAMETER,"Proof exceeds block weight");
   const auto checked=VerifyNativeCandidateBlockScience(active.CoinsTip(),tip,history.archive,block,budget);
   if(!checked.candidate)throw JSONRPCError(RPC_VERIFY_ERROR,"Scientific proof rejected at current parent");

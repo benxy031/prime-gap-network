@@ -14,6 +14,7 @@
 #include <map>
 #include <pgn/component_version.h>
 #include <pgn/social.h>
+#include <pgn/social_identity_rpc.h>
 #include <pgn/social_access.h>
 #include <pgn/social_storage.h>
 #include <random.h>
@@ -783,11 +784,15 @@ class Service {
         return;
       link->capable = true;
       link->access_capable=link->local_transport&&PrivateQualificationEnabled()&&frame.exists("moderation_v")&&frame["moderation_v"].isNum()&&frame["moderation_v"].getInt<int>()==1;
+      link->association_capable=frame.exists("association_v")&&frame["association_v"].isNum()&&frame["association_v"].getInt<int>()==2;
       Ask(link);AskAccess(link);
       return;
     }
     if (!link->capable)
       return;
+    if(op=="association_offer"&&link->association_capable){
+      if(frame["certificate"].isStr())identity::OfferNativeAssociation(link->id,frame["certificate"].get_str());return;
+    }
     if(op=="access_get"&&link->access_capable&&access){
       if(String(frame,"root_id")!=access->Root()||access->Root().empty())return;
       const auto page=access->Read(frame["cursor"].getInt<uint64_t>(),1);
@@ -866,6 +871,7 @@ public:
     auto cap = Frame("cap");
     cap.pushKV("v", 1);
     cap.pushKV("genesis", Genesis());
+    if(identity::NativeAssociationsAvailable())cap.pushKV("association_v",2);
     if(loopback&&PrivateQualificationEnabled())cap.pushKV("moderation_v",1);
     Output(link, std::move(cap));
     return link;
@@ -883,7 +889,13 @@ public:
     if (!Enqueue(link, [this, link] {
           link->tick_pending = false;
           if (Now() - link->last_request_ms >= 1000)
-            {Ask(link);AskAccess(link);}
+            {Ask(link);AskAccess(link);
+              if(link->association_capable){
+                if(Now()-link->association_retry_ms>=10000){link->association_offer_cursor=0;link->association_retry_ms=Now();}
+                const auto cursor=link->association_offer_cursor;
+                if(auto source=identity::NextNativeAssociationOffer(link->association_offer_cursor)){auto offer=Frame("association_offer");offer.pushKV("certificate",*source);if(!Output(link,std::move(offer)))link->association_offer_cursor=cursor;}
+              }
+            }
         }))
       link->tick_pending = false;
   }

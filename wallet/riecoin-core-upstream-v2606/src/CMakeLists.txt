@@ -570,3 +570,11 @@ target_compile_options(pgn-social-identity-target-test PRIVATE -UNDEBUG)
 add_executable(pgn-social-identity-batch-test EXCLUDE_FROM_ALL pgn/social_identity_batch_test.cpp)
 target_link_libraries(pgn-social-identity-batch-test PRIVATE core_interface riecoin_node univalue)
 target_compile_options(pgn-social-identity-batch-test PRIVATE -UNDEBUG)
+
+add_executable(pgn-social-consent-prepare-test EXCLUDE_FROM_ALL pgn/social_identity_prepare_test.cpp)
+target_link_libraries(pgn-social-consent-prepare-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-consent-prepare-test PRIVATE -UNDEBUG)
+
+add_executable(pgn-social-consent-pending-test EXCLUDE_FROM_ALL pgn/social_identity_pending_test.cpp)
+target_link_libraries(pgn-social-consent-pending-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-consent-pending-test PRIVATE -UNDEBUG)

@@ -2,18 +2,13 @@
 // V2 is persistent only through verified canonical coinbase state; V1 leases
 // retain their original expiry. Reuses Native BIP322 and authenticated archive.
 #pragma once
-#include <pgn/social_identity_contract.h>
+#include <pgn/social_identity_certificate.h>
 #include <pgn/native_leaderboard.h>
 #include <pgn/ticket_request_confirmation.h>
 #include <functional>
 #include <optional>
 
 namespace pgn::social::identity::committed {
-inline const std::string Tag="PGN-SOCIAL-LINK-2";
-inline const std::string Prefix="PGN/SOCIAL/IDENTITY-LINK";
-inline std::string EventId(const UniValue& statement){return Hash(Prefix+"-ID/2\n"+Canonical(statement));}
-inline std::string Message(const UniValue& statement,const std::string& side){auto v=Obj();v.pushKV("event_id",EventId(statement));v.pushKV("statement",statement);return Prefix+"/"+side+"/2\n"+Canonical(v);}
-inline CScript Envelope(const std::string& source){return CScript{}<<OP_RETURN<<std::vector<unsigned char>(Tag.begin(),Tag.end())<<std::vector<unsigned char>(source.begin(),source.end());}
 struct Position {int32_t height{};uint32_t output{};uint256 block;};
 class VerifiedEvent {
     friend VerifiedEvent Verify(const pgn::core::NativeLeaderboardSnapshot&,const pgn::core::VerifiedNativeRequestBlock&,uint32_t,const std::function<bool(const uint256&,int32_t)>&);
@@ -25,8 +20,6 @@ public:
     const Position& At()const{return position;}
     const std::string& SocialScript()const{return social_script;}
 };
-class InvalidAssociation:public std::runtime_error {public:using std::runtime_error::runtime_error;};
-class AssociationContextUnavailable:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 class TargetResolver;
 inline VerifiedEvent Verify(const pgn::core::NativeLeaderboardSnapshot& native,const pgn::core::VerifiedNativeRequestBlock& block,uint32_t output,const std::function<bool(const uint256&,int32_t)>& canonical){
     if(!canonical||block.Chain()!=native.genesis||native.height<block.Height()||!canonical(native.tip,native.height)||!canonical(block.Block(),block.Height()))
@@ -41,28 +34,15 @@ inline VerifiedEvent Verify(const pgn::core::NativeLeaderboardSnapshot& native,c
     const auto& script=txout.scriptPubKey;auto cursor=script.begin();opcodetype op;std::vector<unsigned char> tag,payload;
     Require(script.GetOp(cursor,op)&&op==OP_RETURN&&script.GetOp(cursor,op,tag)&&std::string(tag.begin(),tag.end())==Tag&&script.GetOp(cursor,op,payload)&&cursor==script.end(),"Exact association envelope required");
     const std::string source(payload.begin(),payload.end());Require(script==Envelope(source),"Canonical association script required");
-    UniValue value;Require(value.read(source)&&value.isObject()&&Canonical(value)==source,"Canonical association certificate required");
-    Fields(value,{"statement","social_proof","operator_proof","authorizer_script","authorization_proof"});const auto& statement=value["statement"];
-    Fields(statement,{"v","genesis","origin","scope","action","social_script","operator_script","operator_id","anchor_hash","anchor_height","previous_link","nonce"});
-    VerifiedEvent event;event.source=source;event.id=EventId(statement);event.action=statement["action"].get_str();event.social_script=statement["social_script"].get_str();event.operator_script=statement["operator_script"].get_str();event.operator_id=statement["operator_id"].get_str();event.previous=statement["previous_link"].get_str();event.anchor=statement["anchor_hash"].get_str();event.anchor_height=statement["anchor_height"].getInt<int32_t>();event.authorizer=value["authorizer_script"].get_str();event.position={block.Height(),output,block.Block()};
-    Require(statement["v"].getInt<int>()==2&&statement["genesis"].get_str()==native.genesis.GetHex()&&statement["origin"].get_str()=="pgn-social://"+native.genesis.GetHex()&&statement["scope"].get_str()==Scope,"Persistent association version/network/scope mismatch");
-    const auto script_ok=[](const std::string& s){return Hex(s,44)&&s.starts_with("0014");};
-    Require(script_ok(event.social_script)&&script_ok(event.operator_script)&&Hex(event.operator_id,64)&&Hex(event.previous,64)&&Hex(statement["nonce"].get_str(),64),"Persistent association identity bound");
-    const auto anchor=uint256::FromHex(event.anchor);Require(anchor&&anchor->GetHex()==event.anchor&&event.anchor_height>=0&&event.anchor_height<block.Height(),"Association must refer to a known prior canonical Native anchor");
+    const auto certificate=DecodeConsentCertificate(source,native.genesis.GetHex());
+    VerifiedEvent event;event.source=certificate.source;event.id=certificate.id;event.action=certificate.action;event.social_script=certificate.social_script;event.operator_script=certificate.operator_script;event.operator_id=certificate.operator_id;event.previous=certificate.previous;event.anchor=certificate.anchor;event.anchor_height=certificate.anchor_height;event.authorizer=certificate.authorizer;event.position={block.Height(),output,block.Block()};
+    Require(event.anchor_height<block.Height(),"Association must refer to a known prior canonical Native anchor");
     if(event.action=="bind"){
-        Require(event.authorizer.empty()&&value["authorization_proof"].get_str().empty(),"Initial/new binding uses two explicit consents");
-        // Committed history is authenticated at source and inclusion. Current
-        // membership is checked separately by CurrentName; otherwise a later
-        // enrollment would erase the restart lineage and prevent withdrawal.
         const auto raw=ParseHex(event.operator_script);const CScript key{raw.begin(),raw.end()};
         for(const auto height:{event.anchor_height,block.Height()})Require(pgn::core::LeaderboardOperatorAt(native.bindings,key,height).GetHex()==event.operator_id,"Native operator mismatch at historical source/commit anchor");
         Require(std::any_of(native.rows.begin(),native.rows.end(),[&](const auto& row){return row.operator_id.GetHex()==event.operator_id;}),"Recognized productive Native operator required");
-        VerifyProof(event.social_script,value["social_proof"].get_str(),Message(statement,"SOCIAL-CONSENT"));VerifyProof(event.operator_script,value["operator_proof"].get_str(),Message(statement,"OPERATOR-CONSENT"));
-    }else if(event.action=="withdraw"){
-        Require(event.previous!=std::string(64,'0')&&(event.authorizer==event.social_script||event.authorizer==event.operator_script)&&value["social_proof"].get_str().empty()&&value["operator_proof"].get_str().empty(),"Withdrawal needs a current participant transition proof");
-        VerifyProof(event.authorizer,value["authorization_proof"].get_str(),Message(statement,"STATE-TRANSITION"));
-    }else throw std::runtime_error("Unsupported persistent association action");
-
+    }
+    CheckConsentProofs(certificate,true);
             return event;
         }catch(const std::bad_alloc&){throw;}
         catch(const std::exception& error){throw InvalidAssociation(error.what());}

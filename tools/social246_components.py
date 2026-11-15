@@ -2,7 +2,7 @@ from pathlib import Path
 import subprocess,json,hashlib,sys
 r=Path.cwd();out=r/'private-social223-delivery/components';out.mkdir(parents=True,exist_ok=True)
 results={}
-for name in ['committed-identity','identity-index','identity-target','identity-batch']:
+for name in ['consent-prepare','consent-pending','committed-identity']:
  exe=r/'build-native/bin'/('pgn-social-'+name+'-test.exe')
  if not exe.exists():exe=r/'build-native/src'/exe.name
  if not exe.exists():raise SystemExit('Built component not found: '+exe.name)
