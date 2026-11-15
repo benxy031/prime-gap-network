@@ -19,7 +19,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check exact lifecycle and recovery invariants
-        run: python tools/check_audit_batch227.py --full
+        run: python tools/check_shared229.py --full
       - name: Freeze the corrected resident controller
         run: |
           python -m pip install --disable-pip-version-check -r tools/requirements-engine-host.txt

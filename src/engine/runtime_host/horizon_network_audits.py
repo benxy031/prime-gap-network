@@ -173,6 +173,62 @@ class NetworkAudits:
                     raise
         raise RuntimeError('Unreachable reveal batch retry state')
 
+    def apply_reveal_group(self, queued):
+        """Coalesce ready seals from the two independent physical audit lanes.
+
+        Selected identities stay pending on disk until the next canonical ACK
+        sweep. Publication grouping changes neither actor nor audit ownership.
+        """
+        if len(queued) > 256:
+            raise ValueError('Combined reveal selection exceeds four bounded pages')
+        for publisher, name, audit in queued:
+            if (publisher.worker.rpc is not self.worker.rpc or
+                    publisher.worker.network_lock is not self.worker.network_lock):
+                raise ValueError('Reveal group crosses authority or publication lane')
+        for retry in range(2):
+            errors = []
+            envelopes = []
+            seen = set()
+            byte_count = 0
+            try:
+                with self.worker.network_lock:
+                    for publisher, name, audit in queued:
+                        if self.worker.quitting.is_set():
+                            return errors
+                        key = (audit['request_id'], audit['slot'], audit['attempt'])
+                        # Duplicate retained catalogues refer to one canonical
+                        # job. Their own next ACK sweep will retire each copy.
+                        if key in seen:
+                            continue
+                        try:
+                            proposal = publisher.event('reveal', *key,
+                                canonical_bytes(audit['answer']['body']).hex())
+                        except RetainedAuditPublicationError as error:
+                            errors.append((publisher, name, error))
+                            continue
+                        if not proposal.get('available'):
+                            continue
+                        envelope = proposal['envelope']
+                        if not isinstance(envelope, str) or len(envelope) % 2:
+                            raise ValueError('Invalid signed shared reveal envelope')
+                        size = len(envelope) // 2
+                        if len(envelopes) >= 64 or byte_count + size > 262144:
+                            continue
+                        bytes.fromhex(envelope)
+                        byte_count += size
+                        seen.add(key)
+                        envelopes.append(envelope)
+                    if envelopes:
+                        receipt = self.worker.ledger(envelopes)
+                        block = receipt.get('block_hash') if isinstance(receipt, dict) else None
+                        if (not isinstance(block, str) or len(block) != 64 or block == '0' * 64
+                                or any(c not in '0123456789abcdef' for c in block)):
+                            raise RuntimeError('Shared reveal submission lacks canonical receipt; all seals retained')
+                return errors
+            except CoordinationParentChanged:
+                if retry:
+                    raise
+
     def state(self, request):
         values = self.worker.rpc.call("getpgnauditstate", [0, 1, request])
         return values[0] if values else {}
@@ -261,7 +317,7 @@ class NetworkAudits:
                         and states.current(self.worker.rpc))
         # Only the final ACK needs this exact atomic projection. The ordinary
         # batched progress read stays cheap. Before/after tip equality alone
-        # cannot exclude an AÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢BÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢A branch race during that read.
+        # cannot exclude an AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢A branch race during that read.
         view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, audit["request_id"]])
         state = view.get("state", {})
         rows = view.get("audits", [])
@@ -278,7 +334,7 @@ class NetworkAudits:
         return bool(verdict and verdict.get("state") in ("passed", "failed")
                     and self.worker.rpc.call("getbestblockhash") == anchor["hash"])
 
-    def reveal_committed(self):
+    def reveal_committed(self, *, publication_batch=None):
         # Existing sealed payloads plus a bounded identity-only recovery index.
         index = self.folder / "pending.json"
         if index.is_file() and index.stat().st_size > 1024 * 1024:
@@ -308,7 +364,7 @@ class NetworkAudits:
         if isinstance(states, AnchoredAuditStates):
             anchor = states.anchor
         batched = {}
-        if getattr(self.worker, 'batch_audit_reveals', False):
+        if publication_batch is None and getattr(self.worker, 'batch_audit_reveals', False):
             ready = []
             for name, audit in saved:
                 state = states.get(audit['request_id'], {})
@@ -337,6 +393,10 @@ class NetworkAudits:
                 self.answers.acknowledge(name)
                 continue
             if job["state"] != "committed" or not state.get("details_root"):
+                keep.append(name)
+                continue
+            if publication_batch is not None:
+                publication_batch.append((self, name, audit))
                 keep.append(name)
                 continue
             try:
