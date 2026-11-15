@@ -12,6 +12,25 @@ from horizon_core_rpc import CoreRpcError
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
 
+LEGACY_AUDIT_USAGE = 'getpgnauditevent "action" "miner" ( "request_id" slot attempt "body" "signature" )'
+
+
+def prefix_capability(publisher):
+    try:
+        probe = publisher.worker.rpc.call('getpgnauditevent',
+            ['assign', publisher.worker.address(), None, None, None, None, None, []])
+    except CoreRpcError as error:
+        # Core19's actual excess-parameter reply is -1 plus this exact legacy
+        # seven-argument usage line. Other -1/-8 errors are NOT capabilities.
+        if error.code == -1 and str(error).splitlines()[0] == LEGACY_AUDIT_USAGE:
+            return False
+        if error.code == -32601 and str(error) == 'Method not found':
+            return False
+        raise
+    if probe.get('proposal_context_version') != 1:
+        raise RuntimeError('Core returned an unrecognized audit-prefix contract; work retained')
+    return True
+
 
 def save(path, value):
     atomic_bytes(path, canonical_bytes(value) + b'\n')
@@ -113,8 +132,7 @@ def reserve_assignments(publisher):
             return json.loads(own.read_bytes())
         supported = getattr(publisher.worker, 'audit_prefix_supported', None)
         if supported is None:
-            probe = publisher.event('assign')
-            supported = probe.get('proposal_context_version') == 1
+            supported = prefix_capability(publisher)
             for peer in peers:
                 peer.worker.audit_prefix_supported = supported
         if not supported:

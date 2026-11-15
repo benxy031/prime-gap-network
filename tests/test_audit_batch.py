@@ -5,7 +5,7 @@ import copy, json, sys, tempfile, threading, unittest
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src/engine/runtime_host'),str(ROOT/'src/protocol')]
-from horizon_audit_batch import apply_group,reserve_assignments,commit_ready,save
+from horizon_audit_batch import apply_group,reserve_assignments,commit_ready,save,LEGACY_AUDIT_USAGE
 from horizon_coordination import native_header_hash
 from horizon_core_rpc import CoreRpcError
 
@@ -17,7 +17,7 @@ class Fixture:
         self.peers=[]
         for index in range(2):
             folder=root/str(index)/'audits';folder.mkdir(parents=True)
-            worker=SimpleNamespace(rpc=self,network_lock=self.lock,quitting=threading.Event(),ledger=self.ledger)
+            worker=SimpleNamespace(rpc=self,network_lock=self.lock,quitting=threading.Event(),ledger=self.ledger,address=lambda i=index:str(i))
             peer=SimpleNamespace(folder=folder,worker=worker)
             peer.event=lambda action,request=None,slot=None,attempt=None,body=None,preceding_events=None,i=index:self.event(i,action,request,slot,attempt,body,preceding_events)
             peer.state=lambda request:self.state(request)
@@ -26,6 +26,7 @@ class Fixture:
             peer.worker.audit_publishers=tuple(self.peers);peer.worker.audit_group_journal=root/'assign-group.json'
     def call(self,method,params=None,**kwargs):
         if method=='getbestblockhash':return self.tip
+        if method=='getpgnauditevent':return dict(proposal_context_version=1)
         if method=='getpgnreports':return [dict(ticket='d'*64,report_root='e'*64)]
         if method=='getblockheader':
             if params[0] not in self.intents:raise CoreRpcError(-5,'unknown block')
@@ -78,7 +79,7 @@ class BatchTests(unittest.TestCase):
         self.assertTrue((self.f.peers[0].folder/'current.json').exists())
     def test_parent_conflict_resigns_whole_prefix_without_partial_send(self):
         self.f.conflict=True;reserve_assignments(self.f.peers[0]);self.assertEqual(len(self.f.sent),1)
-        self.assertEqual([call[2]for call in self.f.calls],[PARENT,PARENT,PARENT,'b'*64,'b'*64])
+        self.assertEqual([call[2]for call in self.f.calls],[PARENT,PARENT,'b'*64,'b'*64])
         self.assertEqual(json.loads(bytes.fromhex(self.f.calls[-1][3][0]))['parent'],'b'*64)
     def ready(self):
         reserve_assignments(self.f.peers[0]);audits=[]
@@ -123,11 +124,22 @@ class BatchTests(unittest.TestCase):
         self.assertTrue(all(not(p.folder/'current.json').exists()for p in self.f.peers))
         self.assertEqual(len(self.f.sent),1)
     def test_older_core_preserves_ordinary_single_publication_path(self):
-        peer=self.f.peers[0];original=peer.event
-        def old(*args,**kwargs):
-            proposal=original(*args,**kwargs);proposal.pop('proposal_context_version');return proposal
-        peer.event=old
+        peer=self.f.peers[0];original=self.f.call
+        def old(method,params=None,**kwargs):
+            if method=='getpgnauditevent':raise CoreRpcError(-1,LEGACY_AUDIT_USAGE)
+            return original(method,params,**kwargs)
+        self.f.call=old
         self.assertIs(reserve_assignments(peer),NotImplemented)
+        self.assertEqual(self.f.sent,[])
+    def test_signature_parent_quota_or_bad_metadata_are_never_missing_capability(self):
+        peer=self.f.peers[0]
+        for code,text in ((-1,'Signature invalid'),(-8,'Audit quota exceeded'),(-25,'Parent mismatch')):
+            def failing(*args,code=code,text=text,**kwargs):raise CoreRpcError(code,text)
+            with patch.object(self.f,'call',side_effect=failing):
+                with self.assertRaises(CoreRpcError):reserve_assignments(peer)
+            self.assertFalse(hasattr(peer.worker,'audit_prefix_supported'))
+        with patch.object(self.f,'call',return_value=dict(available=True)):
+            with self.assertRaises(RuntimeError):reserve_assignments(peer)
         self.assertEqual(self.f.sent,[])
     def test_real_transport_retains_group_before_shared_journal_crash(self):
         from horizon_network_worker import NetworkWorker

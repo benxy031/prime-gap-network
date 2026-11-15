@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src/engine/runtime_host'), str(ROOT/'src/protocol')]
@@ -33,6 +34,7 @@ GENESIS = '710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314'
 class Node:
     def __init__(self, core, data):
         self.core, self.data = core, data
+        self.audit_rpc_count = 0
         self.process = None
         self.log = None
         self.start()
@@ -54,9 +56,11 @@ class Node:
             except (OSError, RuntimeError):
                 time.sleep(.1)
         self.close()
-        raise RuntimeError('Disposable Core readiness failed')
+        tail = (self.data/'owned-core.log').read_bytes()[-1200:].decode('utf-8',errors='replace')
+        raise RuntimeError('Disposable Core readiness failed: '+tail)
 
     def call(self, method, params=None, wallet=False):
+        if method == 'getpgnauditevent': self.audit_rpc_count += 1
         auth = base64.b64encode((self.data/'testnet/.cookie').read_bytes().strip()).decode()
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=10)
         try:
@@ -189,12 +193,28 @@ def main():
                     reserve_assignments(peer)
                 except BaseException as error:
                     failures.append(error)
+            import horizon_network_worker
+            transport_save = horizon_network_worker.save
+            interruption = {}
+            def fail_shared(path, value):
+                if Path(path) == peers[0].worker.root/'coordination-intent.json' and not interruption:
+                    retained = json.loads((temp/'audit-assignment-group.json').read_bytes())
+                    assert retained['intent'] == value
+                    assert not Path(path).exists()
+                    assert node.call('getbestblockhash') == value['parent']
+                    interruption.update(hash=value['hash'],audit_rpc_count=node.audit_rpc_count)
+                    raise OSError('injected interruption before shared candidate write')
+                return transport_save(path,value)
             producers = [threading.Thread(target=reserve, args=(peer,)) for peer in peers]
-            for producer in producers: producer.start()
-            for producer in producers:
-                producer.join(timeout=20)
-                assert not producer.is_alive()
-            if failures: raise failures[0]
+            with patch('horizon_network_worker.save',new=fail_shared):
+                for producer in producers: producer.start()
+                for producer in producers:
+                    producer.join(timeout=20)
+                    assert not producer.is_alive()
+            assert len(failures) == 1 and isinstance(failures[0],OSError) and str(failures[0]).startswith('injected interruption')
+            assert interruption['hash'] == node.call('getbestblockhash')
+            assert interruption['audit_rpc_count'] == node.audit_rpc_count
+            result['group_only_journal_recovered_without_new_signature'] = True
             result['two_concurrent_producers_one_assignment_block'] = True
             peers[0].worker.ledger = original
             assignment_height = node.call('getblockcount')
