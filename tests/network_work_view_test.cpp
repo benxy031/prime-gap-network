@@ -26,6 +26,9 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  NetworkWorkView batched([&](int,NetworkWorkView::Result done){done(batch,{});},[](const QString&,NetworkWorkView::Result done){done({},"Detail omitted");});
  batched.resize(1280,800);batched.show();app.processEvents();
  auto* batchedTable=batched.findChild<QTableWidget*>("pgn-network-ticket-table");need(batchedTable->item(99,3)->text()=="Both audits passed","batched audit state overrides stale submitted lease state without report details");need(batchedTable->item(0,3)->text()=="Audits assigned","batched audit assignment and passed rows remain distinct");
+ need(batchedTable->item(0,3)->foreground().color()==pgn::ui::ticketStagePresentation("audits_assigned").color,"table assignment color equals shared atlas stage color");need(batchedTable->item(0,3)->foreground().color()!=pgn::ui::ticketStagePresentation("assigned").color,"audit assignment is distinct from search-ticket assignment");
+ need(pgn::ui::auditReportPresentation(QJsonObject{{"jobs",QJsonArray{QJsonObject{{"state","committed"}}}}}).color==pgn::ui::ticketStagePresentation("audits_assigned").color,"committed reports share their aggregate atlas lane color");
+ const auto legend=batched.findChild<QLabel*>("pgn-network-state-legend");need(legend&&legend->text()==pgn::ui::ticketStageLegendText(),"table legend uses the same palette and stage descriptions");
  NetworkWorkView partial([&](int,NetworkWorkView::Result consume){consume(thin,{});},[&](const QString& id,NetworkWorkView::Result consume){++thinReads;auto value=page;QJsonArray one;for(const auto& row:leases)if(row.toObject().value("request").toString()==id)one.append(row);value.insert("leases",one);for(const auto* key:{"reports","audits"}){QJsonArray found;for(const auto& row:page.value(key).toArray())if(row.toObject().value("request_id").toString()==id)found.append(row);value.insert(key,found);}consume(value,{});});
  partial.resize(1280,800);partial.show();for(int n=0;n<30;++n)app.processEvents();need(thinReads>=2&&thinReads<=9,"partial page uses bounded visible prefetch, not100detailRPC");
  auto* partialTable=partial.findChild<QTableWidget*>("pgn-network-ticket-table");const int prefetched=thinReads;partialTable->setCurrentCell(1,0);partialTable->selectRow(1);app.processEvents();need(thinReads==prefetched,"prefetched visible selection is immediate without another RPC");const auto exact=partial.property("pgn_selected_ticket_evidence").toJsonObject();need(exact.value("reports").toArray().size()==1&&exact.value("audits").toArray().size()==1,"omitted page report/audit is fetched, never labeled absent");need(partial.property("pgn_ticket_detail_cache_size").toInt()<=64,"detail cache remains bounded");
@@ -77,5 +80,23 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  const auto selectPoint=[&](int n){const auto id=QString::number(n,16).rightJustified(64,'0');pointCallback->inspect(id);app.processEvents();QTableWidgetItem* item=nullptr;for(int row=0;row<selectedTable->rowCount();++row)if(selectedTable->item(row,0)->data(Qt::UserRole).toString()==id)item=selectedTable->item(row,0);need(item!=nullptr,"atlas-selected ticket appears on current table page");need(item->isSelected(),"atlas-selected row is highlighted");need(selectedTable->viewport()->rect().intersects(selectedTable->visualItemRect(item)),"selected row is scrolled into the visible viewport");need(paged.property("pgn_selected_ticket_evidence").toJsonObject().value("leases").toArray().first().toObject().value("request")==id,"right evidence and selected row identify the same ticket");};
  selectPoint(250);selectPoint(50);need(seekReads<=6,"page lookup is bounded, not a whole-history walk");paged.close();
  }
-  std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
+ 
+ { // Exhaustive native-atlas projection: all 36 logical slot pairs.
+ const QString states[]{"awaiting","assigned","expired","committed","passed","failed"};
+ const char* expected[6][6]{
+  {"pending_audits","audits_assigned","pending_audits","audits_assigned","audits_assigned","audit_failed"},
+  {"audits_assigned","audits_assigned","audits_assigned","audits_assigned","audits_assigned","audit_failed"},
+  {"pending_audits","audits_assigned","pending_audits","audits_assigned","audits_assigned","audit_failed"},
+  {"audits_assigned","audits_assigned","audits_assigned","audits_assigned","audits_assigned","audit_failed"},
+  {"audits_assigned","audits_assigned","audits_assigned","audits_assigned","audits_assigned","audit_failed"},
+  {"audit_failed","audit_failed","audit_failed","audit_failed","audit_failed","audit_failed"}};
+  for(int a=0;a<6;++a)for(int b=0;b<6;++b){
+   QJsonArray jobs;for(const int slot:{a,b})if(states[slot]!="awaiting")jobs.append(QJsonObject{{"state",states[slot]=="expired"?QString("assigned"):states[slot]},{"expired",states[slot]=="expired"}});
+   const auto actual=pgn::ui::auditReportPresentation(QJsonObject{{"audited",false},{"jobs",jobs}});
+   need(actual.color==pgn::ui::ticketStagePresentation(expected[a][b]).color,"two-slot report projection differs from native atlas state table");
+  }
+  const auto qualified=pgn::ui::auditReportPresentation(QJsonObject{{"audited",true},{"jobs",QJsonArray{QJsonObject{{"state","passed"}},QJsonObject{{"state","passed"}}}}});
+  need(qualified.color==pgn::ui::ticketStagePresentation("audits_passed").color,"qualified pair must use the passed atlas stage");
+ }
+ std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
  }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}

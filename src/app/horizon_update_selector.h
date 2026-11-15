@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QSet>
 #include <QString>
 #include <QVersionNumber>
 #include <map>
@@ -14,7 +15,7 @@
 #include <stdexcept>
 
 namespace pgn::app {
-struct SelectedCohort {QString executable,error;};
+struct SelectedCohort {QString executable,error;bool preferRunning{};};
 // The selector was committed only after reference-TUF verification and native
 // startup health. Re-check its binding and UI files when an old shortcut runs.
 // This is local installation integrity, not a new signature/trust authority.
@@ -41,20 +42,24 @@ inline SelectedCohort selectedUpdateCohort(const QString& applicationDirectory,c
 #else
   const QString primaryName="PGN-Horizon";
 #endif
-  bool primary=false;int count=0;qint64 total=0;
+  bool primary=false;int count=0;qint64 total=0;QSet<QString> ids,paths;
   for(const auto& value:manifest.value("components").toArray()){
-   const auto component=value.toObject();if(component.value("id")!="ui")continue;
-   require(++count==1,"Duplicate selected UI component");
-   const auto files=component.value("files").toArray();require(!files.isEmpty()&&files.size()<=512,"Selected UI inventory exceeds its bound");
+   const auto component=value.toObject();const auto id=component.value("id").toString();
+   require((id=="ui"||id=="core"||id=="gpu"||id=="cpu")&&!ids.contains(id)&&++count<=4,"Duplicate or unknown selected component");ids.insert(id);
+   const QString prefix=id=="core"?"Core/":id=="gpu"?"EngineRuntime/":id=="cpu"?"EngineRuntime/cpu/":"";
+   const auto files=component.value("files").toArray();require(!files.isEmpty()&&files.size()<=512,"Selected component inventory exceeds its bound");
    for(const auto& value:files){
-    const auto row=value.toObject();const auto relative=row.value("path").toString();
+    const auto row=value.toObject();const auto entry=row.value("path").toString();const auto relative=prefix+entry;
+    require(!entry.isEmpty()&&!QFileInfo(entry).isAbsolute(),"Selected component path is invalid");
     require(!relative.isEmpty()&&!QFileInfo(relative).isAbsolute()&&!relative.contains('\\')&&!relative.contains(':')&&!relative.split('/').contains("..")&&!relative.split('/').contains("."),"Selected UI path escapes its cohort");
     const auto path=directory+"/"+relative;const QFileInfo info(path);
-    require(info.canonicalFilePath().startsWith(directory+"/")&&info.isFile()&&!info.isSymLink()&&!info.isJunction()&&info.size()==row.value("bytes").toInteger(-1)&&info.size()<=128*1024*1024,"Selected UI file differs");
-    total+=info.size();require(total<=512*1024*1024,"Selected UI exceeds its byte budget");
+    if(!info.exists())throw std::runtime_error(("Selected update code file missing: "+id+": "+relative+". Launch a complete verified package to repair it; retain user data.").toStdString());
+    require(!paths.contains(relative.toCaseFolded()),"Overlapping selected component path");paths.insert(relative.toCaseFolded());
+    require(info.canonicalFilePath().startsWith(directory+"/")&&info.isFile()&&!info.isSymLink()&&!info.isJunction()&&info.size()==row.value("bytes").toInteger(-1)&&info.size()<=128*1024*1024,"Selected component file differs");
+    total+=info.size();require(total<=512*1024*1024,"Selected cohort exceeds its byte budget");
     QFile file(path);require(file.open(QIODevice::ReadOnly),"Selected UI file cannot be read");QCryptographicHash hash(QCryptographicHash::Sha256);
     require(hash.addData(&file)&&QString::fromLatin1(hash.result().toHex())==row.value("sha256").toString(),"Selected UI fingerprint differs");
-    if(relative==primaryName)primary=true;
+    if(id=="ui"&&relative==primaryName)primary=true;
    }
   }
   require(primary,"Selected UI entry point is absent");
@@ -79,7 +84,7 @@ inline SelectedCohort selectedUpdateCohort(const QString& applicationDirectory,c
    const auto current=versions(running),selected=versions(manifest);
    for(const auto& [id,version]:current){
     const auto target=selected.find(id);
-    if(target==selected.end()||QVersionNumber::compare(version,target->second)>0)return {};
+    if(target==selected.end()||QVersionNumber::compare(version,target->second)>0)return {{},{},true};
    }
   }
 

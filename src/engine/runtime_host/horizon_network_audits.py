@@ -5,7 +5,7 @@ import json
 import math
 import secrets
 import time
-from pgn_native_contract import fields
+from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import audit_commitment, canonical_bytes
 from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged
@@ -16,6 +16,10 @@ from horizon_audit_snapshot import AnchoredAuditStates
 
 def save(file, value):
     atomic_bytes(Path(file), canonical_bytes(value) + b"\n")
+
+
+class RetainedAuditPublicationError(RuntimeError):
+    """One immutable receipt needs recovery; it cannot block other receipts."""
 
 
 def partition_ticket(audit, part):
@@ -48,6 +52,19 @@ class NetworkAudits:
         self.reassignment_needed = reassignment_needed
         self.on_retired = on_retired
 
+    def retained_signer(self, script, owner):
+        if (type(script) is not str or not script or len(script) > 8192
+                or len(script) % 2 or any(c not in '0123456789abcdef' for c in script)):
+            raise RetainedAuditPublicationError('Invalid canonical audit signer; private answer retained')
+        address = self.worker.rpc.call('decodescript', [script]).get('address')
+        if type(address) is not str or not address:
+            raise RetainedAuditPublicationError('Canonical audit signer has no supported address; private answer retained')
+        if address != owner:
+            info = self.worker.rpc.call('getaddressinfo', [address], wallet=True)
+            if info.get('ismine') is not True or info.get('scriptPubKey') != script:
+                raise RetainedAuditPublicationError('Retained audit signer key is unavailable in this wallet; private answer retained')
+        return address
+
     def event(self, action, request=None, slot=None, attempt=None, body=None):
         owner = self.worker.address()
         if action == 'reveal':
@@ -58,20 +75,20 @@ class NetworkAudits:
             job = next((j for j in state.get('jobs', [])
                         if j.get('slot') == slot and j.get('attempt') == attempt), None)
             if not job or job.get('commitment') != hashlib.sha256(bytes.fromhex(body)).hexdigest():
-                raise RuntimeError('Retained audit no longer matches its canonical commitment; private answer retained')
+                raise RetainedAuditPublicationError('Retained audit no longer matches its canonical commitment; private answer retained')
             script = job.get('actor')
             if script is not None:
-                if (type(script) is not str or not script or len(script) > 8192
-                        or len(script) % 2 or bytes.fromhex(script).hex() != script):
-                    raise ValueError('Invalid canonical audit signer; private answer retained')
-                address = self.worker.rpc.call('decodescript', [script]).get('address')
-                if type(address) is not str or not address:
-                    raise RuntimeError('Canonical audit signer has no supported address; private answer retained')
-                if address != owner:
-                    info = self.worker.rpc.call('getaddressinfo', [address], wallet=True)
-                    if info.get('ismine') is not True or info.get('scriptPubKey') != script:
-                        raise RuntimeError('Retained audit signer key is unavailable in this wallet; private answer retained')
-                    owner = address
+                owner = self.retained_signer(script, owner)
+        elif action == 'reveal_report':
+            # Reports can outlive the selected mining address too. Their
+            # original commitment and owning script are chain facts; a current
+            # address is never authority to reveal somebody else's report.
+            reports = self.worker.rpc.call('getpgnreports', [0, 1, request])
+            if (not isinstance(reports, list) or len(reports) != 1
+                    or reports[0].get('request_id') != request
+                    or reports[0].get('report_root') != hashlib.sha256(bytes.fromhex(body)).hexdigest()):
+                raise RetainedAuditPublicationError('Retained owner report no longer matches its canonical commitment; private report retained')
+            owner = self.retained_signer(reports[0].get('miner_script'), owner)
         args = [action, owner, request, slot, attempt, body]
         proposal = self.worker.rpc.call("getpgnauditevent", args)
         if not proposal.get("available"):
@@ -100,6 +117,116 @@ class NetworkAudits:
                 stopping = getattr(self.worker, 'quitting', None)
                 running = getattr(self.worker, 'running', None)
                 if stopping is not None and stopping.is_set() or running is not None and not running.is_set():
+                    raise
+
+    def apply_reveals(self, ready):
+        """Publish independent ready answers under one exact parent.
+
+        Every answer already has a durable seal/catalogue entry. The existing
+        ledger journal retains the exact candidate across ambiguous sends.
+        Nothing is acknowledged here; canonical terminal observation does that.
+        """
+        if len(ready) > 64 or len({name for name, _ in ready}) != len(ready):
+            raise ValueError('Reveal batch exceeds the durable selected page')
+        for retry in range(2):
+            results = {}
+            envelopes = []
+            byte_count = 0
+            try:
+                with self.worker.network_lock:
+                    for name, audit in ready:
+                        stopping = getattr(self.worker, 'quitting', None)
+                        if stopping is not None and stopping.is_set():
+                            return {}
+                        try:
+                            proposal = self.event('reveal', audit['request_id'], audit['slot'],
+                                                  audit['attempt'], canonical_bytes(audit['answer']['body']).hex())
+                        except RetainedAuditPublicationError as error:
+                            results[name] = error
+                            continue
+                        if not proposal.get('available'):
+                            results[name] = proposal
+                            continue
+                        envelope = proposal['envelope']
+                        if not isinstance(envelope, str) or len(envelope) % 2:
+                            raise ValueError('Core returned an invalid signed reveal')
+                        size = len(envelope) // 2
+                        # Leave larger payloads on the ordinary exact single
+                        # publication path rather than creating oversized blocks.
+                        if byte_count + size > 262144:
+                            continue
+                        bytes.fromhex(envelope)
+                        byte_count += size
+                        envelopes.append(envelope)
+                        results[name] = proposal
+                    if envelopes:
+                        receipt = self.worker.ledger(envelopes)
+                        block = receipt.get('block_hash') if isinstance(receipt, dict) else None
+                        if not isinstance(block, str) or len(block) != 64 or block == '0' * 64 or any(c not in '0123456789abcdef' for c in block):
+                            raise RuntimeError('Reveal batch has no canonical block receipt; sealed answers retained')
+                        for name, proposal in list(results.items()):
+                            if isinstance(proposal, dict) and proposal.get('available'):
+                                results[name] = dict(proposal, confirmed_block=receipt['block_hash'])
+                    return results
+            except CoordinationParentChanged:
+                if retry:
+                    raise
+        raise RuntimeError('Unreachable reveal batch retry state')
+
+    def apply_reveal_group(self, queued):
+        """Coalesce ready seals from the two independent physical audit lanes.
+
+        Selected identities stay pending on disk until the next canonical ACK
+        sweep. Publication grouping changes neither actor nor audit ownership.
+        """
+        if len(queued) > 256:
+            raise ValueError('Combined reveal selection exceeds four bounded pages')
+        for publisher, name, audit in queued:
+            if (publisher.worker.rpc is not self.worker.rpc or
+                    publisher.worker.network_lock is not self.worker.network_lock):
+                raise ValueError('Reveal group crosses authority or publication lane')
+        for retry in range(2):
+            errors = []
+            envelopes = []
+            seen = set()
+            byte_count = 0
+            try:
+                with self.worker.network_lock:
+                    for publisher, name, audit in queued:
+                        if self.worker.quitting.is_set():
+                            return errors
+                        key = (audit['request_id'], audit['slot'], audit['attempt'])
+                        # Duplicate retained catalogues refer to one canonical
+                        # job. Their own next ACK sweep will retire each copy.
+                        if key in seen:
+                            continue
+                        try:
+                            proposal = publisher.event('reveal', *key,
+                                canonical_bytes(audit['answer']['body']).hex())
+                        except RetainedAuditPublicationError as error:
+                            errors.append((publisher, name, error))
+                            continue
+                        if not proposal.get('available'):
+                            continue
+                        envelope = proposal['envelope']
+                        if not isinstance(envelope, str) or len(envelope) % 2:
+                            raise ValueError('Invalid signed shared reveal envelope')
+                        size = len(envelope) // 2
+                        if len(envelopes) >= 64 or byte_count + size > 262144:
+                            continue
+                        bytes.fromhex(envelope)
+                        byte_count += size
+                        seen.add(key)
+                        envelopes.append(envelope)
+                    if envelopes:
+                        receipt = self.worker.ledger(envelopes)
+                        block = receipt.get('block_hash') if isinstance(receipt, dict) else None
+                        if (not isinstance(block, str) or len(block) != 64 or block == '0' * 64
+                                or any(c not in '0123456789abcdef' for c in block)):
+                            raise RuntimeError('Shared reveal submission lacks canonical receipt; all seals retained')
+                return errors
+            except CoordinationParentChanged:
+                if retry:
                     raise
 
     def state(self, request):
@@ -190,7 +317,7 @@ class NetworkAudits:
                         and states.current(self.worker.rpc))
         # Only the final ACK needs this exact atomic projection. The ordinary
         # batched progress read stays cheap. Before/after tip equality alone
-        # cannot exclude an A→B→A branch race during that read.
+        # cannot exclude an AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢A branch race during that read.
         view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, audit["request_id"]])
         state = view.get("state", {})
         rows = view.get("audits", [])
@@ -207,7 +334,7 @@ class NetworkAudits:
         return bool(verdict and verdict.get("state") in ("passed", "failed")
                     and self.worker.rpc.call("getbestblockhash") == anchor["hash"])
 
-    def reveal_committed(self):
+    def reveal_committed(self, *, publication_batch=None):
         # Existing sealed payloads plus a bounded identity-only recovery index.
         index = self.folder / "pending.json"
         if index.is_file() and index.stat().st_size > 1024 * 1024:
@@ -236,6 +363,17 @@ class NetworkAudits:
             return
         if isinstance(states, AnchoredAuditStates):
             anchor = states.anchor
+        batched = {}
+        if publication_batch is None and getattr(self.worker, 'batch_audit_reveals', False):
+            ready = []
+            for name, audit in saved:
+                state = states.get(audit['request_id'], {})
+                job = next((j for j in state.get('jobs', [])
+                            if j['slot'] == audit['slot'] and j['attempt'] == audit['attempt']), None)
+                if job and job['state'] == 'committed' and state.get('details_root'):
+                    ready.append((name, audit))
+            if len(ready) > 1:
+                batched = self.apply_reveals(ready)
         keep = []
         for name, audit in saved:
             stopping = getattr(self.worker, 'quitting', None)
@@ -257,7 +395,24 @@ class NetworkAudits:
             if job["state"] != "committed" or not state.get("details_root"):
                 keep.append(name)
                 continue
-            proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
+            if publication_batch is not None:
+                publication_batch.append((self, name, audit))
+                keep.append(name)
+                continue
+            try:
+                proposal = batched.get(name)
+                if isinstance(proposal, RetainedAuditPublicationError):
+                    raise proposal
+                if proposal is None:
+                    proposal = self.apply("reveal", audit["request_id"], audit["slot"], audit["attempt"], canonical_bytes(audit["answer"]["body"]).hex())
+            except RetainedAuditPublicationError as error:
+                # Preserve this exact commitment and its waiting row. An
+                # unavailable historic key must not starve unrelated results
+                # in the same bounded publication page. Transport failures
+                # still propagate; no successful publication is fabricated.
+                self.answers.publication_issues += (dict(name=name, error_type=type(error).__name__, reason=str(error)),)
+                keep.append(name)
+                continue
             if not proposal.get("available"):
                 # The assignment can change between the initial read and send.
                 # An unavailable proposal is not a publication acknowledgement.
@@ -475,10 +630,7 @@ class NetworkAudits:
             save(journal, audit)
         if "target_merit_q16" not in audit:
             work = self.worker.rpc.call("getpgnscientificwork", [audit["request_id"], audit["report_root"]])
-            numerator, denominator = int(work["target_numerator"]), int(work["target_denominator"])
-            if denominator <= 0 or numerator <= 0 or numerator * 65536 % denominator:
-                raise ValueError("Invalid fixed-point audit target")
-            audit["target_merit_q16"] = numerator * 65536 // denominator
+            audit["target_merit_q16"] = encode_target_q16(work)
             save(journal, audit)
         if type(audit["target_merit_q16"]) is not int or not 0 < audit["target_merit_q16"] < 1 << 31:
             raise ValueError("Invalid retained audit target")

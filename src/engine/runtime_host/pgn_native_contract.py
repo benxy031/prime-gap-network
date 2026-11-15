@@ -17,6 +17,31 @@ MAX_GAP = 2147483647
 from pgn_threshold_pointwise import MINIMUM_GAP as MINIMUM_POLICY_GAP
 
 
+def encode_target_q16(work):
+    """Encode the native header/display ID; the proof keeps its exact fraction.
+
+    Decimal hourly targets (e.g.138/5) are not binary fixed-point fractions.
+    Native encodes their identifier by ceiling, without changing the signed
+    numerator/denominator used for scientific proof verification.
+    """
+    values=[]
+    for field in ('target_numerator','target_denominator'):
+        value=work[field]
+        if type(value)is int:
+            number=value
+        elif (type(value)is str and 0<len(value)<=64 and value.isascii()
+              and value.isdecimal() and (value=='0'or value[0]!='0')):
+            number=int(value)
+        else:
+            raise ValueError('Canonical positive scientific target fraction required')
+        if number<=0 or number.bit_length()>256:
+            raise ValueError('Canonical positive scientific target fraction required')
+        values.append(number)
+    numerator,denominator=values
+    if numerator>64*denominator:raise ValueError('Scientific target exceeds native header range')
+    return (numerator*65536+denominator-1)//denominator
+
+
 def logical_range(start, end):
     start, end = int(start), int(end)
     if not LOW <= start < end <= HIGH:

@@ -15,7 +15,7 @@ def main():
    c.request('POST','/',json.dumps(dict(jsonrpc='2.0',id='native-clock-latency',method=method,params=[])),{'Content-Type':'application/json','Authorization':'Basic '+auth});r=c.getresponse();body=json.loads(r.read());assert r.status==200 and not body.get('error');return body['result']
   finally:c.close()
  def frame(s,command,body):
-  magic=bytes.fromhex('d7544e32');s.sendall(magic+command.encode().ljust(12,b'\0')+struct.pack('<I',len(body))+hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]+body)
+  magic=bytes.fromhex('d7544e33');s.sendall(magic+command.encode().ljust(12,b'\0')+struct.pack('<I',len(body))+hashlib.sha256(hashlib.sha256(body).digest()).digest()[:4]+body)
  def read(s,n):
   out=b''
   while len(out)<n:
@@ -40,7 +40,7 @@ def main():
     if delay:time.sleep(delay)
     frame(s,'version',body);seen=set();nonce=secrets.token_bytes(8);ping_sent=False;deadline=time.monotonic()+8
     while time.monotonic()<deadline:
-     header=read(s,24);assert header[:4]==bytes.fromhex('d7544e32');size=struct.unpack('<I',header[16:20])[0];assert size<4*1024*1024;payload=read(s,size)
+     header=read(s,24);assert header[:4]==bytes.fromhex('d7544e33');size=struct.unpack('<I',header[16:20])[0];assert size<4*1024*1024;payload=read(s,size)
      assert hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]==header[20:24];command=header[4:16].split(b'\0')[0].decode();seen.add(command)
      if command=='version':frame(s,'verack',b'')
      if {'version','verack'}<=seen and not ping_sent:frame(s,'ping',nonce);ping_sent=True

@@ -9,8 +9,8 @@ from pathlib import Path,PurePosixPath
 import argparse,hashlib,json,os,platform,re,shutil,subprocess,sys,sysconfig,tarfile,tempfile,urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
-GENESIS='0ccd1f2349ed75f9cf4d0279871a204e107683e5baa1dd6641c4e6f08a25a17d'
-ABI='pgn.epoch2.2026.11'
+GENESIS='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314'
+ABI='pgn.epoch3.2026.11'
 INPUT_URL='https://github.com/wizz13150/prime-gap-network/releases/download/v0.1.0-alpha.1/PGN-Horizon-testnet-preview-Ubuntu24.04-x86_64.tar.gz'
 INPUT_SHA='0bc3768ecb953b789b5ea79e1d506ba71333451b260b24f8ce4a8c719a0d6eee'
 INPUT_BYTES=107844589
@@ -141,7 +141,7 @@ def assemble(output,inputs,app,core,host,updater,cpu):
     shutil.copy2(core/'bin/riecoind',core_input/'pgn-core')
     from package_core_bundle import assemble as assemble_core
     assemble_core(core_input/'pgn-core',[],output/'Core',chain='test',genesis=GENESIS,
-                  rpc_port=48982,peer_port=48983,peers=[])
+                  rpc_port=48952,peer_port=48951,peers=[])
     copy_tree(inputs/'EngineRuntime/bin',output/'EngineRuntime/bin')
     copy_tree(inputs/'EngineRuntime/lib',output/'EngineRuntime/lib')
     copy_tree(inputs/'EngineRuntime/THIRD-PARTY-LICENSES',output/'EngineRuntime/THIRD-PARTY-LICENSES')
@@ -151,8 +151,8 @@ def assemble(output,inputs,app,core,host,updater,cpu):
     copy_tree(cpu/'dist/horizon-cpu-controller',output/'EngineRuntime/cpu')
     copy_tree(updater/'dist/horizon-updater',output/'UpdateRuntime')
     bootstrap=dict(schema='PGN_TESTNET_BOOTSTRAP_V1',genesis=GENESIS,
-        tls=dict(host='wizz.tail6acec6.ts.net',port=8443),
-        checkpoint=dict(height=13,hash='71418e43bc8576355e27166b040f8dd26dea7ed86fd735da485bf2671db15037'))
+        tls=dict(host='wizz.tail6acec6.ts.net',port=443),
+        checkpoint=dict(height=13,hash='608d43b194015c381ff2a50a6506e297a7f69dca4f8521aad6cb968a4e5896fc'))
     write=lambda p,v:p.write_text(json.dumps(v,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
     write(output/'EngineRuntime/network/bootstrap.json',bootstrap)
     helper=output/'UpdateRuntime/horizon-updater'

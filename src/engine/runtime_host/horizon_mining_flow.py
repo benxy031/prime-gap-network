@@ -16,7 +16,7 @@ from horizon_work_cycle import WorkCycleJournal
 from horizon_core_rpc import CoreRpcError
 from horizon_ticket_archive import SCHEMA as COMPLETED_TICKET_SCHEMA
 from horizon_audit_progress import presentation as audit_presentation
-from pgn_native_contract import fields
+from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
 
@@ -416,8 +416,11 @@ class MiningFlow:
                 audit['physical_cycle'] = recovered
         if physical is not None and not audit.get('physical_cycle'):
             ident = hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_VIEW_V1',request=audit['request_id'],slot=audit['slot'],attempt=audit['attempt']))).hexdigest()
-            owner = self.cycles.extra_audit_cycle(ident)
-            if owner:physical.completed_extra(owner, ident, block)
+            with self.cycles.lock:
+                owner = self.cycles.extra_audit_cycle(ident)
+                if owner:
+                    hot = {c['work']['request_id'] for c in self.cycles.value['cycles']}
+                    physical.reconcile_extra_completion(owner, ident, block, hot)
         if audit.get('physical_cycle'):
             self.physical_audits.committed(audit['physical_cycle'], position, audit, block) if self.physical_audits.snapshot(audit['physical_cycle']) is not None else None
             self.gpu.wake()
@@ -531,12 +534,9 @@ class MiningFlow:
 
     def job(self, work):
         start, end = int(work["start"]), int(work["start"]) + int(work["length"])
-        numerator, denominator = int(work["target_numerator"]), int(work["target_denominator"])
-        if numerator * 65536 % denominator:
-            raise ValueError("Unsupported work target precision")
         return dict(schema="PGN_HORIZON_ENGINE_TICKET_V1", ticket_id=work["ticket"],
                     start=str(start), end=str(end), threshold_policy=fields(start, end)["threshold_policy"],
-                    target_merit_q16=numerator * 65536 // denominator)
+                    target_merit_q16=encode_target_q16(work))
 
     def prepared(self, work):
         self.prepare_cycle(work)

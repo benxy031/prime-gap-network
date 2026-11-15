@@ -27,7 +27,7 @@ inline QJsonObject networkSummaryRows(const QJsonObject& value){
     add("Reporting miners",QString::number(value.value("reporting_operators_in_window").toInteger()));
     add("Reported search",rateText);
     add("Gold merit",meritTargetText(target));
-    add("Audits pending",QString::number(value.value("pending_audits").toInteger()));
+    add("Audit slots pending",QString::number(value.value("pending_audits").toInteger()));
     return {{"available",true},{"rows",rows},{"window_seconds",seconds},{"parent",value.value("parent")},
             {"scope","Reported search excludes audits; registrations are not online counts"}};
 }

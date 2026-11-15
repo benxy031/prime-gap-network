@@ -1,5 +1,6 @@
 #pragma once
 #include "ui/range_visuals.h"
+#include "ui/audit_status_presentation.h"
 #include "ui/position_formats.h"
 #include "ui/public_profile_store.h"
 #include "wallet/ticket_atlas_snapshot.h"
@@ -44,8 +45,8 @@ private:
     QPoint pressed_;Int pressedFirst_{},pressedLast_{};bool dragging_{},busy_{},pending_{},autoFocused_{},bitScale_{},pressedBitScale_{},embedded_{};
     bool startupWarm_{};
     bool readable()const{return startupWarm_||isVisible()||(embedded_&&parentWidget()&&parentWidget()->isVisible());}
-    static QColor color(size_t s){static const std::array<QColor,5> c{QColor("#70badb"),QColor("#e6bd64"),QColor("#ba9aee"),QColor("#63dfb3"),QColor("#f37b7e")};return c[s];}
-    static QString stageTitle(size_t s){static const std::array<QString,5> names{"Assigned","Awaiting audits","Audits assigned","Audits passed","Audit failed"};return names[s];}
+    static QColor color(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).color;}
+    static QString stageTitle(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).text;}
     QVector<size_t> visibleStages()const{QVector<size_t> result;const auto totals=snapshot_.value("totals").toObject();for(size_t s=0;s<5;++s)if(totals.value(pgn::wallet::AtlasStates[s]).toObject().value("tickets").toInteger()>0)result.append(s);if(result.isEmpty())result.append(0);return result;}
     QRectF plot()const{return {14,4,qreal(std::max(1,width()-28)),qreal(std::max(50,height()-(bitScale_?210:116)))};}
     Int first()const{return first_.isEmpty()?Int(0):Int(first_.toStdString());}

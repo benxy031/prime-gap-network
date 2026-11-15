@@ -21,6 +21,7 @@ class ReportPoller:
         self.owner_error = self.audit_error = None
         self.owner_started = self.audit_started = None
         self.owner_elapsed = self.audit_elapsed = None
+        self.audit_turn = 0
 
     def due(self):
         return self.clock() >= min(self.owner_next, self.audit_next)
@@ -46,12 +47,30 @@ class ReportPoller:
             began = self.clock()
             self.audit_started = began
             errors = []
-            for audit in (self.owner, *self.audit_lanes):
+            shared = bool(getattr(getattr(self.owner, 'worker', None), 'batch_audit_reveals', False))
+            queued = []
+            publishers = (self.owner, *self.audit_lanes)
+            # Rotate the leading lane, so a large recovered catalogue cannot
+            # monopolize the one bounded block ahead of another publisher.
+            if shared:
+                n = self.audit_turn % len(publishers)
+                publishers = publishers[n:] + publishers[:n]
+                self.audit_turn += 1
+            for audit in publishers:
                 try:
-                    audit.reveal_committed()
+                    audit.reveal_committed(publication_batch=queued) if shared else audit.reveal_committed()
                     issues=getattr(getattr(audit,'answers',None),'publication_issues',())
                     if issues:
                         errors.append(str(len(issues))+' retained audit answers require recovery; unrelated valid answers remain publishable')
+                except Exception as error:
+                    errors.append(str(error)[:400])
+            if shared and queued:
+                try:
+                    # This is a send window, not a storage quota. Every row
+                    # beyond it stays durably waiting for a rotated next turn.
+                    for publisher, name, error in self.owner.apply_reveal_group(queued[:256]):
+                        publisher.answers.publication_issues += (dict(name=name, error_type=type(error).__name__, reason=str(error)),)
+                        errors.append(str(error)[:400])
                 except Exception as error:
                     errors.append(str(error)[:400])
             self.audit_error = '; '.join(errors)[:400] if errors else None
