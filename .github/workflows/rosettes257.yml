@@ -1,0 +1,28 @@
+name: Exact read-only rosette counters
+on:
+  push:
+    branches: [qualification/medals257]
+permissions:
+  contents: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Compile actual Native arithmetic and JSON
+        run: |
+          set -eu
+          n=wallet/riecoin-core-upstream-v2606/src
+          g++ -std=c++20 -O2 -I"$n" -I"$n/univalue/include" "$n/pgn/leaderboard_rosettes_test.cpp" "$n/pgn/merit_arithmetic.cpp" "$n"/univalue/lib/*.cpp -o rosettes-test
+      - name: Independent boundary fixtures, deduplication and availability
+        run: |
+          ./rosettes-test wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt | tee TEST257.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rosettes257-ubuntu
+          path: TEST257.txt
+          if-no-files-found: error
+          retention-days: 7
