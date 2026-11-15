@@ -80,7 +80,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-sdk-${{ matrix.os }}-${{ github.run_id }}
+          name: native-sdk-${{ runner.os }}-${{ github.run_id }}
           path: native-sdk
           if-no-files-found: error
           retention-days: 7
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-sdk-${{ matrix.os }}-${{ github.run_id }}
+          name: native-sdk-${{ runner.os }}-${{ github.run_id }}
           path: native-sdk
           if-no-files-found: error
           retention-days: 7

@@ -291,6 +291,9 @@ int main(int argc,char** argv){try{
     final_index.phashBlock=&final_hash;final_index.pprev=const_cast<CBlockIndex*>(&at);
     final_index.nHeight=at.nHeight+1;final_index.nTx=paid.vtx.size();
     const auto final_facts=PrepareNativeTicketGoldBlockForward(view,at,final_index,*paid_whole.block);
+    // The synthetic history above was staged directly. Publish that fixture
+    // prefix before testing tracked native history, exactly as a loaded parent.
+    view.Flush();
     const auto before_money=view.GetPgnIssuanceState();const auto before_head=view.GetPgnFactHead();
     {CCoinsViewCache child{&view};child.SetBestBlock(final_hash);
      child.StagePgnFactHistoryStep(final_facts);child.StagePgnIssuanceHistoryStep(paid_plan->Forward());child.Flush();}
