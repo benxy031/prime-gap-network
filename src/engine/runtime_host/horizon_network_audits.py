@@ -321,7 +321,7 @@ class NetworkAudits:
                         and states.current(self.worker.rpc))
         # Only the final ACK needs this exact atomic projection. The ordinary
         # batched progress read stays cheap. Before/after tip equality alone
-        # cannot exclude an AÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢BÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢A branch race during that read.
+        # cannot exclude an AÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢BÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢A branch race during that read.
         view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, audit["request_id"]])
         state = view.get("state", {})
         rows = view.get("audits", [])
@@ -579,14 +579,14 @@ class NetworkAudits:
             if restored != audit:
                 save(journal, restored)
             audit = restored
-            anchor = self.worker.rpc.call('getbestblockhash')
+            anchor = self.worker.rpc.call('getbestblockhash') if self.on_retired is not None else None
             current = self.state(audit["request_id"])
             job = next((j for j in current.get("jobs", []) if j["slot"] == audit["slot"] and j["attempt"] == audit["attempt"]), None)
             if job and job['state'] == 'assigned' and (job.get('expired') is True
                     or ('actor' in audit and job.get('actor') != audit['actor'])):
                 from horizon_audit_recovery import retain_changed_assignment
                 if anchor is None:
-                    raise RuntimeError('Stable audit anchor required before retiring an inactive reservation')
+                    anchor = self.worker.rpc.call('getbestblockhash')
                 retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc,
                     self.on_retired or (lambda value, block: None))
                 return 'retired'

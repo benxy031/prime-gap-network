@@ -1,8 +1,8 @@
-name: Private audit batch host82 qualification
+name: Private audit batch host83 qualification
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/audit-batch233-public]
+    branches: [qualification/audit-batch240]
     paths:
       - src/engine/runtime_host/**
       - tests/native_audit_batch_rpc.py
@@ -44,13 +44,13 @@ jobs:
         shell: python
         run: |
           import subprocess,sys
-          for name in ('test_audit_batch.py','test_mining_flow_cycle.py','test_retained_audit_signer.py','test_network_audit_publication.py','test_network_audit_lifecycle.py','test_assigned_audit_recovery.py','test_audit_reveal_batch.py','test_shared_audit_reveals.py','test_report_maintenance_poll.py','test_audit_actor_transition.py','test_cpu_only_source.py','test_network_cpu_source.py'):
+          for name in ('test_audit_batch.py','test_mining_flow_cycle.py','test_retained_audit_signer.py','test_network_audit_publication.py','test_network_audit_lifecycle.py','test_assigned_audit_recovery.py','test_audit_reveal_batch.py','test_shared_audit_reveals.py','test_report_maintenance_poll.py','test_audit_actor_transition.py','test_cpu_only_source.py','test_network_cpu_source.py','test_audit_cycle_publication.py','test_core_outage_recovery.py','test_audit_cycle_reassignment.py','test_deferred_complement.py','test_audit_partition_archive.py','test_publication_turn_recovery.py','test_audit_seal_recovery.py','test_hourly_runtime_target.py','test_cpu_normal_flow.py'):
               subprocess.run([sys.executable,'-B','tests/'+name],check=True)
       - name: Actual signed three-block cycle and expired/reassigned journal recovery
         run: python -B tests/native_audit_batch_rpc.py --core qa233/Core/${{ matrix.core }} --receipt qa233/THREE-BLOCKS-AND-RECOVERY.json
       - name: Pinned existing host freezer only
         run: python -m pip install --disable-pip-version-check -r tools/requirements-engine-host.txt
-      - name: Freeze host82 and execute its audit-only self-test
+      - name: Freeze host83 and execute its audit-only self-test
         run: python -B tools/build_audit_batch233_host.py
       - uses: actions/upload-artifact@v4
         if: always()
