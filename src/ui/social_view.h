@@ -41,12 +41,12 @@ private:
     std::array<Page,4> pages_;QTabWidget* tabs_{};QLabel *account_{},*network_{},*status_{};QTimer autosave_;
     bool dirty_{},loadFailed_{},loadingDraft_{},chatPreedit_{};QString loadError_,replyId_,replyPostId_;
     int sortColumn_{1};bool sortDescending_{true};
-    QListWidget *channels_{},*members_{},*forumCategories_{};QWidget* membersPane_{};QLabel *channelTitle_{},*channelDescription_{},*memberCount_{};
+    QListWidget *channels_{},*members_{},*forumCategories_{};QWidget* membersPane_{};QLineEdit* memberSearch_{};QLabel *channelTitle_{},*channelDescription_{},*memberCount_{};
     QTextBrowser* chatPreview_{};QStackedWidget* chatEditor_{};QPushButton* previewChat_{};
     QString channel_;QVector<social::Channel> channelData_;std::optional<social::AccessSnapshot> access_;
     QPointer<QDialog> accessDialog_;
     QWidget* makeComposer(int index);
-    void chatDirectory(const social::Snapshot& snapshot);void selectChannel();void previewChat();void formatChat(QString tag);
+    void chatDirectory(const social::Snapshot& snapshot);void filterMembers();void selectChannel();void previewChat();void formatChat(QString tag);
     void formatDraft(int index,QString tag);void replyToPost(QString post,QString quote={});void readThread();void reactToPost(QString post,QString reaction);social::AccessRequest postRequest(QString post,social::AccessAction action,QString reaction={})const;
     void openAccess(QString member={},QString channel={});void contextMenu(int index,const QPoint& pos,bool reading=false,QString post={});void manageContext(social::AccessRequest request);
     void draftChanged(int index);void loadEditor(int index);

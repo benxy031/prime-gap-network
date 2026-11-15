@@ -17,7 +17,7 @@ inline QString SocialInitials(const QString& name){const auto words=name.split('
 class SocialEntryDelegate final:public QStyledItemDelegate{
     int kind_;
     void content(social::bbcode::Document& doc,const QStyleOptionViewItem& option,const QModelIndex& index)const{
-        QFont font("Segoe UI");font.setPixelSize(14);doc.setDefaultFont(font);doc.setDocumentMargin(0);
+        QFont font("Segoe UI");font.setPixelSize(kind_==0?15:14);doc.setDefaultFont(font);doc.setDocumentMargin(0);
         if(kind_==0){social::bbcode::render(doc,index.data(BodyRole).toString());for(auto block=doc.begin();block.isValid();block=block.next())if(block.layout())block.layout()->setCacheEnabled(true);return;}
         QTextCursor cursor(&doc);QTextCharFormat normal;normal.setFont(font);normal.setForeground(QColor("#161616"));
         auto title=normal;auto titleFont=font;titleFont.setPixelSize(kind_==1?18:16);titleFont.setWeight(QFont::DemiBold);title.setFont(titleFont);
@@ -31,7 +31,7 @@ public:
     SocialEntryDelegate(int kind,QObject* parent):QStyledItemDelegate(parent),kind_(kind){}
     QSize sizeHint(const QStyleOptionViewItem& option,const QModelIndex& index)const override{
         const auto* list=qobject_cast<const QListWidget*>(parent());const int width=list?list->viewport()->width():option.rect.width();
-        if(kind_==0){social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,width-92));const bool grouped=index.data(MessageGroupRole).toBool(),day=index.data(MessageDayRole).toBool();return {width,int(doc.size().height())+(grouped?48:20)+(day?42:0)};}
+        if(kind_==0){social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,width-92));const bool grouped=index.data(MessageGroupRole).toBool(),day=index.data(MessageDayRole).toBool();return {width,int(doc.size().height())+(grouped?38:8)+(day?34:0)};}
         if(kind_==2){auto font=option.font;font.setPixelSize(16);const QFontMetrics metrics(font);return {width,qMax(68,metrics.boundingRect(QRect(0,0,qMax(180,width-520),400),Qt::TextWordWrap,index.data(TitleRole).toString()).height()+38)};}
         social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,width-(kind_==0?84:48)));
         return {width,qMax(kind_==0?52:72,int(doc.size().height())+(kind_==0?30:28))};
@@ -40,17 +40,17 @@ public:
         if(kind_==0){
             painter->save();painter->setRenderHint(QPainter::Antialiasing);painter->setPen(Qt::NoPen);
             painter->fillRect(option.rect,QColor("#e5edef"));
-            const bool grouped=index.data(MessageGroupRole).toBool(),day=index.data(MessageDayRole).toBool();const int gap=day?42:0;
+            const bool grouped=index.data(MessageGroupRole).toBool(),day=index.data(MessageDayRole).toBool();const int gap=day?34:0;
             if(option.state&(QStyle::State_MouseOver|QStyle::State_Selected)){painter->setBrush(QColor(option.state&QStyle::State_Selected?"#cedfe3":"#dce8eb"));painter->drawRoundedRect(option.rect.adjusted(8,gap+2,-8,-2),8,8);}
             QFont font("Segoe UI");font.setPixelSize(12);painter->setFont(font);
             if(day){const auto date=index.data(MessageDateRole).toDateTime().toUTC().date();const auto title=date==QDateTime::currentDateTimeUtc().date()?"Today · "+date.toString("d MMMM yyyy"):date.toString("d MMMM yyyy");const int label=painter->fontMetrics().horizontalAdvance(title)+26,center=option.rect.center().x(),y=option.rect.top()+21;
                 painter->setPen(QPen(QColor("#bacdd2"),1));painter->drawLine(option.rect.left()+20,y,center-label/2,y);painter->drawLine(center+label/2,y,option.rect.right()-20,y);painter->setPen(QColor("#506b74"));painter->drawText(QRect(center-label/2,y-10,label,20),Qt::AlignCenter,title);}
-            const int x=option.rect.left()+68,y=option.rect.top()+gap+10;const auto id=index.data(AuthorIdRole).toString(),author=SocialDisplayName(id,index.data(AuthorRole).toString());
-            if(grouped){const QRect avatar(option.rect.left()+20,y,32,32);painter->setPen(Qt::NoPen);painter->setBrush(SocialAvatarColor(id));painter->drawEllipse(avatar);font.setPixelSize(12);font.setWeight(QFont::DemiBold);painter->setFont(font);painter->setPen(QColor("#193f48"));painter->drawText(avatar,Qt::AlignCenter,SocialAvatarInitials(id,author));
-                font.setPixelSize(13);font.setWeight(QFont::Bold);painter->setFont(font);if(parent())parent()->setProperty("pgn_actual_author_font",SocialActualFont(painter->font()));painter->setPen(QColor("#163b45"));const auto name=painter->fontMetrics().elidedText(author,Qt::ElideRight,qMax(80,option.rect.width()-190));painter->drawText(x,y+12,name);const int clock=x+painter->fontMetrics().horizontalAdvance(name)+12;
+            const int x=option.rect.left()+68,y=option.rect.top()+gap+7;const auto id=index.data(AuthorIdRole).toString(),author=SocialDisplayName(id,index.data(AuthorRole).toString());
+            if(grouped){const QRect avatar(option.rect.left()+18,y,36,36);painter->setPen(Qt::NoPen);painter->setBrush(SocialAvatarColor(id));painter->drawEllipse(avatar);font.setPixelSize(12);font.setWeight(QFont::DemiBold);painter->setFont(font);painter->setPen(QColor("#193f48"));painter->drawText(avatar,Qt::AlignCenter,SocialAvatarInitials(id,author));
+                font.setPixelSize(14);font.setWeight(QFont::Bold);painter->setFont(font);if(parent())parent()->setProperty("pgn_actual_author_font",SocialActualFont(painter->font()));painter->setPen(QColor("#163b45"));const auto name=painter->fontMetrics().elidedText(author,Qt::ElideRight,qMax(80,option.rect.width()-190));painter->drawText(x,y+12,name);const int clock=x+painter->fontMetrics().horizontalAdvance(name)+12;
                 font.setPixelSize(11);font.setWeight(QFont::Normal);painter->setFont(font);painter->setPen(QColor("#526e78"));painter->drawText(clock,y+12,index.data(TimeRole).toString());
             }else if(option.state&QStyle::State_MouseOver){font.setPixelSize(10);painter->setFont(font);painter->setPen(QColor("#526e78"));painter->drawText(QRect(option.rect.left()+11,y+1,49,18),Qt::AlignCenter,index.data(TimeRole).toString());}
-            social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,option.rect.width()-92));painter->translate(x,y+(grouped?22:0));QAbstractTextDocumentLayout::PaintContext paint;paint.palette.setColor(QPalette::Text,QColor("#172d33"));doc.documentLayout()->draw(painter,paint);
+            social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,option.rect.width()-92));painter->translate(x,y+(grouped?21:0));QAbstractTextDocumentLayout::PaintContext paint;paint.palette.setColor(QPalette::Text,QColor("#172d33"));doc.documentLayout()->draw(painter,paint);
             if(parent()){auto actual=SocialActualFont(doc.defaultFont());QStringList glyphs;for(auto block=doc.begin();block.isValid();block=block.next())if(block.layout())for(const auto& run:block.layout()->glyphRuns())glyphs<<run.rawFont().familyName()+" / "+run.rawFont().styleName();glyphs.removeDuplicates();actual.insert("glyphFonts",glyphs);parent()->setProperty("pgn_actual_body_font",actual);}painter->restore();return;
         }
         painter->save();painter->fillRect(option.rect,option.state&QStyle::State_Selected?QColor("#c3d4d4"):option.state&QStyle::State_MouseOver?QColor("#d4dfdf"):QColor("#dfe7e7"));

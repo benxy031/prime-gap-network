@@ -78,8 +78,8 @@ static social::Snapshot previewData(const social::ReadRequest& request){
     auto s=snapshot(request);s.source="Review fixtures";s.access=reviewAccess(request.identity);
     if(request.section==social::Section::Chat){
         s.channel=request.channel.isEmpty()?"preview-general":request.channel;
-        s.channels=QVector<social::Channel>{{"preview-general","general","Network discussion"},{"preview-mining","mining","Mining discussions"},{"preview-research","research","Research notes"},{"preview-support","support","Support questions"}};
-        s.participants=QVector<social::Participant>{{"review-mod-a","Review mod A","Online",{"preview-moderator"}},{"review-mod-b","Review mod B","Online",{"preview-moderator"}},{"review-mod-c","Review mod C","Away",{"preview-moderator"}},{"review-a","Review author A","Online",{"preview-member"}},{"review-b","Review author B","Online",{"preview-member"}},{"review-c","Review author C","Away",{"preview-member"}}};
+        s.channels=QVector<social::Channel>{{"preview-general","Global","Network conversation"}};s.access.reset();
+        s.participants=QVector<social::Participant>{{"review-a","Review author A","Last message 10:21 UTC",{}},{"review-b","Review author B","Last message 10:22 UTC",{}},{"review-c","Review author C","Last message 09:42 UTC",{}}};
         const QStringList messages{
             "Welcome. This channel keeps the discussion tied to the selected network.",
             "Can we include the exact observation window when we discuss a miner's activity?",
@@ -92,7 +92,7 @@ static social::Snapshot previewData(const social::ReadRequest& request){
             "The research topic now contains the method and the questions still open.",
             "Thanks. Let's keep any follow-up in the relevant forum category."
         };
-        for(int i=0;i<messages.size();++i){auto e=entry(QString("chat-%1").arg(i),{},(messages.size()-i)*150);e.author=i%2?"Review author B":"Review author A";e.body=messages[i];s.entries.append(e);}
+        for(int i=0;i<messages.size();++i){auto e=entry(QString("chat-%1").arg(i),{},(messages.size()-i)*90);e.author=i<3||i>=6&&i<8?"Review author A":"Review author B";e.body=messages[i];s.entries.append(e);}
     }else if(request.section==social::Section::Miners){
         s.miners=miners();
     }
@@ -137,7 +137,7 @@ int main(int argc,char** argv){
         buttons[0]->setFocus();key(buttons[0],Qt::Key_Space);key(buttons[0],Qt::Key_Tab);check(QApplication::focusWidget()!=buttons[0],"Hidden tab proxy traps focus");
         body->setFocus();key(body,Qt::Key_Tab);check(QApplication::focusWidget()!=body,"Composer traps Tab");
         fullyVisible(local,find<QPushButton>(local,"pgn-social-send-0"),"Chat Send cut at 1280x720");
-        fullyVisible(local,find<QPushButton>(local,"pgn-social-save-0"),"Chat Save cut at 1280x720");
+        fullyVisible(local,find<QPushButton>(local,"pgn-social-message-options"),"Message options cut at 1280x720");
         fullyVisible(local,find<QLabel>(local,"pgn-social-send-reason-0"),"Disabled Send reason cut");
         check(!find<QPushButton>(local,"pgn-social-send-0")->isEnabled(),"Unconnected send enabled");
     }
@@ -164,6 +164,20 @@ int main(int argc,char** argv){
     auto validChat=snapshot(pending.last().request);validChat.entries={entry("kept",{},10)};
     view->refresh();pending.last().reply(validChat,{});view->refresh();auto duplicate=validChat;duplicate.entries.append(validChat.entries[0]);pending.last().reply(duplicate,{});
     check(messages->count()==1&&view->property("pgn_social_state_0")=="error","Malformed refresh erased valid chat");
+    // Search is a local projection over authenticated participants. Homonymous
+    // display names never collapse stable IDs or change the target of actions.
+    const QString memberA="0014"+QString(40,'a'),memberB="0014"+QString(40,'b');
+    view->refresh();auto directory=snapshot(pending.last().request);directory.entries={entry("kept",{},10)};
+    directory.participants=QVector<social::Participant>{{memberA,"Same Name","Last message 10:20 UTC",{}},{memberB,"Same Name","Last message 10:21 UTC",{}},{"0014"+QString(40,'c'),"Other member","",{}}};pending.last().reply(directory,{});
+    auto* memberSearch=find<QLineEdit>(*view,"pgn-social-member-search");auto* memberList=find<QListWidget>(*view,"pgn-social-chat-members");
+    const auto visibleMembers=[&]{int count=0;for(int row=0;row<memberList->count();++row)if(!memberList->item(row)->isHidden()&&(memberList->item(row)->flags()&Qt::ItemIsEnabled))++count;return count;};
+    memberSearch->setText("sAmE nAmE");check(visibleMembers()==2,"Homonymous members were merged or case-insensitive search failed");
+    memberSearch->setText(memberB);check(visibleMembers()==1,"Full stable member ID is not searchable");
+    for(int row=0;row<memberList->count();++row)if(memberList->item(row)->data(Qt::UserRole).toString()==memberB)memberList->setCurrentRow(row);
+    view->refresh();directory.observedUtc=QDateTime::currentDateTimeUtc();pending.last().reply(directory,{});
+    check(memberSearch->text()==memberB&&visibleMembers()==1&&memberList->currentItem()&&memberList->currentItem()->data(Qt::UserRole).toString()==memberB,"Refresh lost member search or stable action target");
+    memberSearch->setText("nobody");check(visibleMembers()==0,"Member miss unexpectedly matched");
+    check(!memberList->currentItem(),"Search left a hidden member as the current action target");memberSearch->clear();check(visibleMembers()==3,"Clearing member search did not restore participants");
     const int beforeHidden=pending.size();
     for(const auto hidden:{social::Section::Publications,social::Section::Forum})view->selectSection(hidden);
     check(pending.size()==beforeHidden&&find<QTabWidget>(*view,"pgn-social-sections")->currentIndex()==0,"Hidden section started a read");
@@ -171,7 +185,9 @@ int main(int argc,char** argv){
     view->selectSection(social::Section::Miners);auto data=snapshot(pending.last().request);data.miners=miners();data.miners[2].validatedSearchPositions.provenance.source="<img src='not-loaded'>";pending.last().reply(data,{});
     auto* table=find<QTableWidget>(*view,"pgn-social-miners");
     const QStringList columns{"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block"};
-    check(table->columnCount()==6,"Leaderboard column count changed");for(int i=0;i<columns.size();++i)check(table->horizontalHeaderItem(i)->text()==columns[i],"Wrong leaderboard columns");
+    check(table->columnCount()==11,"Leaderboard activity/medal column count changed");for(int i=0;i<columns.size();++i)check(table->horizontalHeaderItem(i)->text()==columns[i],"Wrong leaderboard columns");
+    check(table->horizontalHeader()->logicalIndex(0)==6&&table->horizontalHeader()->logicalIndex(1)==0,"Olympic rank/identity order is wrong");
+    for(int col=7;col<11;++col)check(table->item(0,col)->text()==QString::fromUtf8("—")&&table->item(0,col)->toolTip().contains("Unavailable"),"Missing medals were presented as measured zero or known ranking");
     const auto rowId=[&](int row){return table->item(row,0)->data(Qt::UserRole).toString();};
     check(rowId(0)=="large"&&rowId(1)=="adjacent"&&rowId(2)=="zero"&&rowId(3)=="missing","Exact volume sort failed above 2^53 or missing value sorted as zero");
     check(table->item(0,1)->text()==social::leaderboardNumber("9007199254740993")&&table->item(0,1)->text()==table->item(1,1)->text(),"Scientific display fixture does not exercise equal rounded text");
@@ -237,12 +253,12 @@ int main(int argc,char** argv){
         auto* indicator=new QLabel("REVISION PREVIEW · synthetic fixtures · no network");indicator->setStyleSheet("font:11px 'Segoe UI';color:#e6bd64;");bar->addWidget(indicator,1);layout->addWidget(top);
         social::Services fixtures{[](auto request,auto done){done(previewData(request),{});}};auto* socialView=new ui::SocialView(temp.path()+"/review/drafts.json",fixtures);layout->addWidget(socialView,1);
         auto identity=A();identity.subject="Review author A";socialView->setIdentity(identity);
-        for(const QSize size:{QSize(1366,900),QSize(1920,1080)}){
+        for(const QSize size:{QSize(1366,994),QSize(1920,1080)}){
             shell.resize(size);shell.show();app.processEvents();check(shell.size()==size,"Page forces oversized shell");
             for(const int i:{0,3}){
                 socialView->selectSection(static_cast<social::Section>(i));app.processEvents();
                 if(i==0){find<QPlainTextEdit>(*socialView,"pgn-social-draft-body-0")->setPlainText("I will keep the exact observation window in the draft before sharing it.");find<QPushButton>(*socialView,"pgn-social-save-0")->click();}
-                if(i==0){fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-send-0"),"Chat Send clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-save-0"),"Chat Save clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-send-reason-0"),"Chat reason clipped");}
+                if(i==0){fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-send-0"),"Chat Send clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-message-options"),"Message options clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-send-reason-0"),"Chat reason clipped");}
                 fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-status"),"Stable status line clipped");app.processEvents();
                 QImage image(shell.size(),QImage::Format_ARGB32);image.fill(Qt::transparent);shell.render(&image);check(image.save(output+QString("/social-%1-%2.png").arg(size.width()).arg(i)),"Capture not saved");
             }

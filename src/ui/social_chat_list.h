@@ -48,7 +48,15 @@ protected:
     void resizeEvent(QResizeEvent* event)override{QListWidget::resizeEvent(event);settle();}
     void showEvent(QShowEvent* event)override{QListWidget::showEvent(event);settle();}
     void wheelEvent(QWheelEvent* event)override{++revision_;pending_=false;QListWidget::wheelEvent(event);remember();}
-    void keyPressEvent(QKeyEvent* event)override{++revision_;pending_=false;QListWidget::keyPressEvent(event);remember();}
+    void keyPressEvent(QKeyEvent* event)override{
+        ++revision_;pending_=false;QListWidget::keyPressEvent(event);
+        // Following new messages moves the viewport independently of selection.
+        // QListWidget does not scroll when Home selects an already-current first
+        // row, so enforce the requested viewport endpoint as well.
+        if(event->key()==Qt::Key_Home)verticalScrollBar()->setValue(verticalScrollBar()->minimum());
+        else if(event->key()==Qt::Key_End)verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+        remember();
+    }
 public:
     std::function<void(bool)> unseenChanged;
     explicit SocialChatList(QWidget* parent=nullptr):QListWidget(parent){

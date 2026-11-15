@@ -99,7 +99,8 @@ inline void run(QApplication& app,const QString& path){
         control<QPushButton>(local,"pgn-social-preview-chat")->click();bbcode::Document manual;bbcode::render(manual,expected);expect(control<QTextBrowser>(local,"pgn-social-chat-preview")->toPlainText()==manual.toPlainText(),"Preview and reading renderer diverge");
         control<QPushButton>(local,"pgn-social-preview-chat")->click();}
     expect(local.saveDrafts(),"BBCode draft save failed");Drafts saved;expect(DraftStore(path+"/drafts.json").load(identity(),saved).isEmpty()&&saved.sections[0].body==draft->toPlainText(),"Stored source is not BBCode");
-    control<QPushButton>(local,"pgn-social-open-access")->click();app.processEvents();auto* unverified=local.findChild<QDialog*>("pgn-social-access-dialog");expect(unverified&&!control<QPushButton>(*unverified,"pgn-social-assign-role")->isEnabled(),"Local identity auto-granted a role");
+    auto* accessButton=control<QPushButton>(local,"pgn-social-open-access");accessButton->click();app.processEvents();expect(!accessButton->isEnabled()&&!local.findChild<QDialog*>("pgn-social-access-dialog"),"Unavailable role service was advertised as an active action");
+    {pgn::ui::SocialAccessDialog unverified(identity(),{},{},"",{},&local);expect(!control<QPushButton>(unverified,"pgn-social-assign-role")->isEnabled(),"Local identity auto-granted a role");}
     local.setIdentity({QString(64,'b'),identity().subject});expect(!local.findChild<QDialog*>("pgn-social-access-dialog"),"Identity change retained access dialog");local.close();
     struct PendingRead{ReadRequest request;Services::Reply done;};QVector<PendingRead> reads;
     Services injected;injected.read=[&](auto req,auto done){reads.append({req,done});};

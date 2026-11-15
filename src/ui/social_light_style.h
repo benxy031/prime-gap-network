@@ -141,6 +141,53 @@ QWidget#pgn-social-workspace QTableWidget#pgn-social-miners::item:selected {back
 QWidget#pgn-social-workspace QHeaderView::section {
  background:#d4e2e5;color:#274b55;font:600 12px "Segoe UI";padding:10px 12px;border:0;border-bottom:1px solid #a9c0c8;
 }
+/* One quiet reading surface. Sidebars retain Horizon's dark chrome. */
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane,
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QWidget {
+ background:#e5edef;color:#203e47;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QLabel {background:transparent;color:#3d626e;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QLabel[heading="true"] {color:#193f49;font:600 15px "Segoe UI";}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QListWidget#pgn-social-list-0 {
+ background:#e5edef;border:0;border-radius:0;padding:0;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton {
+ background:#d5e2e5;color:#244b57;border:1px solid #aac3ca;border-radius:7px;padding:5px 10px;min-height:24px;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton:hover {background:#c4d9de;border-color:#709da9;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton:pressed,
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton:checked {background:#b9d2d9;border-color:#638f9c;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton:disabled {background:#dce7e9;color:#6b8790;border-color:#c3d3d8;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton:focus {border:2px solid #477c8c;padding:4px 9px;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QLineEdit {
+ background:#f1f5f5;color:#244b57;border:1px solid #aac3ca;border-radius:8px;padding:5px 10px;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPlainTextEdit#pgn-social-draft-body-0 {
+ background:#f4f7f7;color:#172d33;border:1px solid #9dbac3;border-radius:10px;padding:10px;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPlainTextEdit#pgn-social-draft-body-0:focus {border:2px solid #477c8c;padding:9px;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton[bbcodeTool="true"] {min-height:20px;padding:3px 7px;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-bbcode-b {font-weight:700;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-bbcode-i {font-style:italic;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-bbcode-u {text-decoration:underline;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-bbcode-s {text-decoration:line-through;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-send-0 {
+ background:#23757b;color:#f3ffff;border:1px solid #428f94;font:600 13px "Segoe UI";padding:5px 12px;
+}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-send-0:hover {background:#1a666e;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-send-0:disabled {background:#b3cdd4;color:#264c58;border-color:#8eafb9;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-save-0,
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-clear-0 {background:transparent;border-color:transparent;color:#3d626e;}
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-save-0:hover,
+QWidget#pgn-social-workspace QWidget#pgn-social-conversation-pane QPushButton#pgn-social-clear-0:hover {background:#d5e2e5;border-color:#aac3ca;}
+QWidget#pgn-social-workspace QLineEdit#pgn-social-member-search {background:#10313b;color:#deedef;border:1px solid #345a68;border-radius:8px;font:12px "Segoe UI";padding:5px 8px;}
+QWidget#pgn-social-workspace QLabel#pgn-social-leaderboard-title {font:600 24px "Segoe UI";color:#e6f3f5;margin:4px 0 0 0;}
+QWidget#pgn-social-workspace QLabel#pgn-social-leaderboard-source {font:600 11px "Segoe UI";color:#86b4c1;}
+QWidget#pgn-social-workspace QPushButton#pgn-social-medal-help {font:12px "Segoe UI";color:#a9c3cc;background:#0c2933;border:1px solid #345b6b;border-radius:7px;padding:4px 10px;margin-left:10px;}
+QWidget#pgn-social-workspace QTableWidget#pgn-social-miners {padding:0;border:1px solid #355a67;border-radius:10px;background:#e8f0f2;outline:0;}
+QWidget#pgn-social-workspace QTableWidget#pgn-social-miners::item {padding:0;border:0;}
+QWidget#pgn-social-workspace QPushButton#pgn-social-message-options {font:18px "Segoe UI";padding:3px;}
+QWidget#pgn-social-workspace QPushButton#pgn-social-message-options::menu-indicator {image:none;width:0;height:0;}
 )QSS");}
 
 }
