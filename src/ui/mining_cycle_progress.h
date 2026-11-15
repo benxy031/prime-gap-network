@@ -6,9 +6,9 @@
 #include <cmath>
 #include <optional>
 namespace pgn::ui {
-struct CycleSlice { double weight{},fraction{};QString role;bool skipped{}; };
+struct CycleSlice { double weight{},fraction{};QString role;bool skipped{},pendingAssignment{}; };
 struct CycleProgress {
- bool known{};double fraction{};QString title,phase;QVector<CycleSlice> slices;
+ bool known{},preparing{};double fraction{};QString title,phase;QVector<CycleSlice> slices;
  std::optional<double> taskEta,cycleEta;
 };
 inline bool coherentMiningCycleFrame(const QJsonObject& frame){
@@ -46,6 +46,42 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
  CycleProgress out;const auto cycle=frame.value("audit_service").toObject().value("cycle").toObject();
  const auto audits=cycle.value("audits").toArray();const int index=cycle.value("active_index").toInt(-1);
  const double total=frame.value("positions_total").toString().toDouble(),done=frame.value("positions").toString().toDouble(),rate=frame.value("eta_rate").toDouble();
+
+ // A service audit can precede request issuance. Its observed task progress
+ // must not look like a completed search or borrow the preceding ticket.
+ if(cycle.isEmpty()){
+  const auto service=frame.value("audit_service").toObject();
+  const auto view=service.value("preparation").toObject();
+  if(frame.value("work_role")!="audit"||service.value("mode")!="two_regular_one_catchup"
+     ||view.value("schema")!="PGN_PRE_TICKET_AUDIT_VIEW_V1"
+     ||view.value("search_assigned")!=QJsonValue(false)
+     ||view.value("active_audit_id").toString().isEmpty()
+     ||view.value("active_audit_id")!=frame.value("ticket_id")
+     ||total<=0||done<0||done>total)return out;
+  const auto confirmedValue=view.value("confirmed_service_answers");
+  const auto activeValue=view.value("active_index");
+  const bool countKnown=confirmedValue.isDouble();
+  const int confirmed=countKnown?confirmedValue.toInt(-1):-1;
+  const int active=activeValue.isDouble()?activeValue.toInt(-1):-1;
+  if((countKnown&&(confirmed<0||confirmed>2||confirmedValue.toDouble()!=confirmed))
+     ||(!countKnown&&!confirmedValue.isNull())
+     ||(!activeValue.isNull()&&(!activeValue.isDouble()||active<0||active>1||activeValue.toDouble()!=active))
+     ||(countKnown&&(active<0||active>confirmed))||(!countKnown&&active>=0))return out;
+  out.known=true;out.preparing=true;
+  out.title=active>=0?QString("Next ticket · Audit %1/2").arg(active+1):QString("Next ticket · audits");out.phase="Auditing";
+  const double local=std::clamp(done/total,0.,1.);
+  for(int i=0;i<2;++i){
+   const bool committed=countKnown&&i<confirmed;
+   const double fraction=committed?1.:i==active?local:0.;
+   out.slices.append({.05,fraction,"audit",false,!countKnown});
+   out.fraction+=.05*fraction;
+  }
+  // There is no assigned search range yet. A dashed placeholder is a phase,
+  // never a completed job, skipped audit, admission receipt or measured ETA.
+  out.slices.append({.9,0.,"search",false,true});
+  if(rate>0&&std::isfinite(rate))out.taskEta=std::max(0.,total-done)/rate;
+  return out;
+ }
  if(cycle.value("schema")!="PGN_MINING_CYCLE_VIEW_V1"||audits.size()!=2||index<0||index>2||total<=0||done<0||done>total)return out;
  const bool auditing=frame.value("work_role")=="audit";const double local=std::clamp(done/total,0.,1.);
  int active=-1;const auto identity=frame.value("ticket_id").toString();

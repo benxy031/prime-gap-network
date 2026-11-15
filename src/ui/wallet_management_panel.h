@@ -11,6 +11,7 @@ public:
  void present(const QString& network,const QString& dataDirectory,bool configured,bool pending=false,const QString& pendingDirectory={});
  void refresh();
  void finishSetup(const QString& error={});
+ QString setupError()const{return setupError_;}
  std::function<void(const pgn::wallet::WalletSetupSelection&)> onApplySetup;
  std::function<void()> onCancelChange;
  std::function<void()> onComponents;
@@ -18,6 +19,7 @@ private:
  pgn::wallet::WalletManager* manager_{};QLabel *location_{},*service_{},*message_{};
  QComboBox* wallets_{};QPushButton *configure_{},*cancelChange_{},*reload_{},*create_{},*load_{},*select_{},*close_{};QToolButton* open_{};
  QWidget *setupFields_{},*walletControls_{};QLineEdit *directory_{},*setupWallet_{};QPushButton *applySetup_{},*existingSetup_{};
+ QString setupError_;
  bool configured_{},pending_{},setupBusy_{};
 };
 }

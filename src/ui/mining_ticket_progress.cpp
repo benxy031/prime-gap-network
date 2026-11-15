@@ -371,8 +371,8 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  }
  const auto accent=transition?QColor("#ffbd69"):QColor("#69efc5");
  const double total=frame_.value("positions_total").toString().toDouble(),done=frame_.value("positions").toString().toDouble();
- const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());const auto fraction=cycle.known?std::optional<double>(cycle.fraction):total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
- if(cycle.known&&!storageWait)displayPhase=cycle.phase;
+ const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());const auto fraction=cycle.known&&!cycle.preparing?std::optional<double>(cycle.fraction):total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
+ if(cycle.known&&(active||phase=="Auditing"))displayPhase=cycle.phase;
  const auto field=bar();const double seconds=flow_.moving()?clock_.elapsed()/1000.:0.;
  double pressure=0.;
  for(const auto& event:flow_.events()){
@@ -398,8 +398,8 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  // above is event presentation and can never advance this measurement.
  const double trackY=84.;const QPointF trackStart(field.left(),trackY),trackEnd(field.right(),trackY);
  painter.setPen(QPen(QColor("#17383e"),1));painter.drawLine(trackStart,trackEnd);
- if(cycle.known){double offset=0;int auditIndex=0;for(const auto& slice:cycle.slices){const auto color=slice.role=="search"?QColor("#69efc5"):slice.role=="catch_up"?QColor("#f0b761"):auditIndex++==0?QColor("#b791ee"):QColor("#7aa9e8");const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_cycle_fraction",cycle.fraction);setProperty("pgn_ticket_cycle_eta_seconds",cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else setProperty("pgn_ticket_cycle_fraction",QVariant{});
- if(fraction){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*fraction),trackY);
+ if(cycle.known){double offset=0;int auditIndex=0;for(const auto& slice:cycle.slices){const auto color=slice.role=="search"?QColor("#69efc5"):slice.role=="catch_up"?QColor("#f0b761"):auditIndex++==0?QColor("#b791ee"):QColor("#7aa9e8");const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.pendingAssignment){painter.fillRect(background,faded(color,20));painter.setPen(QPen(faded(color,100),.8,Qt::DashLine));painter.drawRect(background);}else if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_cycle_fraction",cycle.preparing?QVariant{}:QVariant(cycle.fraction));setProperty("pgn_ticket_cycle_eta_seconds",(active||phase=="Auditing")&&cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else setProperty("pgn_ticket_cycle_fraction",QVariant{});
+ if(fraction&&!cycle.preparing){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*fraction),trackY);
   if(!cycle.known){painter.setPen(QPen(faded(accent,70),4));painter.drawLine(trackStart,measured);painter.setPen(QPen(accent,1.2));painter.drawLine(trackStart,measured);}
   painter.setPen(Qt::NoPen);painter.setBrush(accent);painter.drawEllipse(measured,2.,2.);
  }
@@ -412,7 +412,7 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const QString positions=frame_.contains("positions_total")?(audit?QString("Complete audit · "):QString{})+positionFormats(frame_.value("positions_total").toString()).inlineText()+" positions":QString{};
  QString remaining;
  if(eta&&std::isfinite(*eta)&&*eta<365.*86400){const auto value=qint64(std::ceil(*eta));remaining=QString("ETA ≈ %1:%2:%3").arg(value/3600,2,10,QChar('0')).arg(value/60%60,2,10,QChar('0')).arg(value%60,2,10,QChar('0'));}
- if(cycle.known&&!storageWait){const auto format=[](std::optional<double> seconds){if(!seconds||!std::isfinite(*seconds)||*seconds>=365.*86400)return QString("—");const auto n=qint64(std::ceil(*seconds));return QString("≈ %1:%2:%3").arg(n/3600,2,10,QChar('0')).arg(n/60%60,2,10,QChar('0')).arg(n%60,2,10,QChar('0'));};remaining="Cycle ETA "+format(cycle.cycleEta)+" · "+(audit?QString("audit "):QString("search "))+format(cycle.taskEta);}
+ if(cycle.known&&!cycle.preparing&&(active||phase=="Auditing")){const auto format=[](std::optional<double> seconds){if(!seconds||!std::isfinite(*seconds)||*seconds>=365.*86400)return QString("—");const auto n=qint64(std::ceil(*seconds));return QString("≈ %1:%2:%3").arg(n/3600,2,10,QChar('0')).arg(n/60%60,2,10,QChar('0')).arg(n%60,2,10,QChar('0'));};remaining="Cycle ETA "+format(cycle.cycleEta)+" · "+(audit?QString("audit "):QString("search "))+format(cycle.taskEta);}
  if(attention)remaining.clear();
  // One measured row keeps the tables close to the live track. Reserve the
  // changing state/ETA first, then elide metadata instead of resizing fonts.
@@ -428,7 +428,7 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const int detailLeft=contentLeft+titleWidth+int(gap),detailWidth=std::max(0,width()-18-activityWidth-int(gap)-detailLeft);
  if(detailWidth>0)painter.drawText(QRectF(detailLeft,rowY,detailWidth,rowHeight),Qt::AlignLeft|Qt::AlignVCenter,painter.fontMetrics().elidedText(positions,Qt::ElideRight,detailWidth));
  painter.setFont(metricFont);painter.setPen(accent);painter.drawText(QRectF(width()-18-activityWidth,rowY,activityWidth,rowHeight),Qt::AlignRight|Qt::AlignVCenter,metricMetrics.elidedText(activity,Qt::ElideRight,activityWidth));
- setProperty("pgn_ticket_header_rows",1);setProperty("pgn_ticket_header_height",120);
+ setProperty("pgn_ticket_display_phase",attention?status:displayPhase);setProperty("pgn_ticket_progress_scope",cycle.preparing?"pre_ticket_audit":cycle.known?"ticket_cycle":"task");setProperty("pgn_ticket_header_rows",1);setProperty("pgn_ticket_header_height",120);
  setProperty("pgn_ticket_eta_seconds",eta?QVariant(*eta):QVariant{});setProperty("pgn_ticket_progress_fraction",fraction?QVariant(*fraction):QVariant{});if(storageWait)setProperty("pgn_ticket_cycle_eta_seconds",QVariant{});
  setProperty("pgn_ticket_work_presentation",QJsonObject{{"role",audit?"audit":role},{"phase",displayPhase},{"title",title},{"status",status},{"quantity",positions},{"remaining",remaining}});
  setProperty("pgn_ticket_animation_active",flow_.moving());setProperty("pgn_ticket_animation_phase",flow_.moving()?QVariant(std::fmod(clock_.elapsed()/1000.,1.)):QVariant{});

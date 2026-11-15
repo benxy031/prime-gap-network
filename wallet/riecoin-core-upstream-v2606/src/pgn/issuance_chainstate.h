@@ -73,22 +73,28 @@ struct IssuanceSnapshot {
     template <typename Stream> void Serialize(Stream& stream) const
     {
         if (!Valid()) throw std::ios_base::failure("Invalid PGN issuance snapshot");
-        stream << uint8_t(audit_settlement?5:epochs?4:pools?3:partition?2:1) << tip << cap << minted << promised;
+        stream << uint8_t(audit_settlement?(audit_settlement->grouped?6:5):epochs?4:pools?3:partition?2:1) << tip << cap << minted << promised;
         if(partition)stream<<*partition;
         if(pools)stream<<*pools;
         if(epochs)stream<<*epochs;
-        if(audit_settlement)stream<<*audit_settlement;
+        if(audit_settlement){stream<<*audit_settlement;
+            if(audit_settlement->grouped&&audit_settlement->active)stream<<audit_settlement->active->grouped_remaining;
+        }
     }
     template <typename Stream> void Unserialize(Stream& stream)
     {
         uint8_t version{};
         IssuanceSnapshot next;
         stream >> version >> next.tip >> next.cap >> next.minted >> next.promised;
-        if(version==2||version==3||version==4||version==5){IssuanceBudgetPartition value;stream>>value;next.partition=value;}
-        if(version==3||version==4||version==5){OrdinaryRewardPools value;stream>>value;next.pools=value;}
-        if(version==4||version==5){GoldEpochBalances value;stream>>value;next.epochs=value;}
-        if(version==5){AuditSettlementBalances value;stream>>value;next.audit_settlement=value;}
-        if ((version != 1&&version != 2&&version != 3&&version != 4&&version != 5) || !next.Valid())
+        if(version==2||version==3||version==4||version==5||version==6){IssuanceBudgetPartition value;stream>>value;next.partition=value;}
+        if(version==3||version==4||version==5||version==6){OrdinaryRewardPools value;stream>>value;next.pools=value;}
+        if(version==4||version==5||version==6){GoldEpochBalances value;stream>>value;next.epochs=value;}
+        if(version==5||version==6){AuditSettlementBalances value;stream>>value;
+            value.grouped=version==6;
+            if(value.grouped&&value.active)stream>>value.active->grouped_remaining;
+            next.audit_settlement=value;
+        }
+        if ((version != 1&&version != 2&&version != 3&&version != 4&&version != 5&&version != 6) || !next.Valid())
             throw std::ios_base::failure("Invalid PGN issuance snapshot");
         *this = next;
     }

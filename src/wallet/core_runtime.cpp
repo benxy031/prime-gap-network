@@ -225,6 +225,21 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
   if(profile_.frontend=="qt")args.prepend("-min");
   for(const auto& peer:profile_.peers)args.append("-connect="+peer);
   launcher.setArguments(args);launcher.setWorkingDirectory(QFileInfo(profile_.executable).absolutePath());
+#ifdef Q_OS_WIN
+  // lpApplicationName avoids CreateProcess's MAX_PATH module-name parsing.
+  // Keep the verified profile/owner identity unchanged; only the Win32 launch
+  // argument uses the extended spelling. The explicit data directory stays
+  // independent of the extracted program directory.
+  if(profile_.executable.size()>=MAX_PATH){
+   QString nativeProgram=QDir::toNativeSeparators(profile_.executable);
+   if(!nativeProgram.startsWith("\\\\?\\"))nativeProgram=nativeProgram.startsWith("\\\\")?QString("\\\\?\\UNC\\")+nativeProgram.mid(2):QString("\\\\?\\")+nativeProgram;
+   launcher.setWorkingDirectory(profile_.dataDirectory);
+   launcher.setCreateProcessArgumentsModifier([nativeProgram](QProcess::CreateProcessArguments* arguments){
+    arguments->applicationName=reinterpret_cast<LPCWSTR>(nativeProgram.utf16());
+    arguments->flags|=CREATE_NO_WINDOW;
+   });
+  }
+#endif
   launcher.setStandardOutputFile(profile_.dataDirectory+"/core.stdout",QIODevice::Append);
   launcher.setStandardErrorFile(profile_.dataDirectory+"/core.stderr",QIODevice::Append);
   if(!recovery_.permits(preparationGeneration_)){launching_=false;if(ownershipLock_)ownershipLock_->unlock();return;}
@@ -239,7 +254,7 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
    // startDetached returned false: no owned child was created. Removal only
    // settles this metadata intent, never wallet data or a process.
    if(!intent.remove()){failStart("Core did not start; launch intent retained for repair");return;}
-   failStart("Owned Core client could not be launched");return;
+   failStart("Owned Core client could not be launched: "+launcher.errorString());return;
   }
 #ifdef Q_OS_WIN
   processHandle_=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,static_cast<DWORD>(pid_));

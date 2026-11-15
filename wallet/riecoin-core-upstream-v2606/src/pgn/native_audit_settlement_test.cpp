@@ -126,6 +126,12 @@ void Publish(CCoinsViewDB& db,const IssuanceSnapshot& before,const IssuanceSnaps
 }
 }
 int main(int argc,char** argv){
+    const auto configured_chain=*uint256::FromHex("710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314");
+    assert(!AuditGroupingScheduled(configured_chain,4095));
+    assert(AuditGroupingScheduled(configured_chain,4096));
+    assert(AuditGroupingScheduled(configured_chain,4097));
+    assert(!AuditGroupingScheduled(uint256{},4096));
+
     assert(argc==2);ECC_Context ecc;SelectParams(ChainType::TESTNET);LOCK(cs_main);
     PublicAdmissionExercise();
     constexpr CAmount coin=PGN_ATOMIC_UNITS_PER_COIN;
@@ -139,6 +145,52 @@ int main(int argc,char** argv){
         report.jobs[1]=NativeAuditJob{second.script,0,3,30,NativeAuditJob::Committed};ledger.emplace(Id(700+i),report);
         PassedReceipt(ledger,first,Id(700+i),0,indexes.blocks[7+i],Id(1));
         PassedReceipt(ledger,second,Id(700+i),1,indexes.blocks[i?11:8],Id(1));
+    }
+    { // Frozen pre-v6 bytes: no inferred state or automatic migration.
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        snapshot.pools.reset();
+        snapshot.partition.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("016e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        snapshot.pools.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("026e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce092301000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        snapshot.epochs.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("036e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.audit_settlement.reset();
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("046e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce09230100000a000000000000000a00000000000000000000000000000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("056e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce0923010000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00d00000000000000000054ce09230100000000000000000000000000000000000000000000000000000054ce09230100000a000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        {auto snapshot=Initial(definition);
+        snapshot.minted=416666666667LL;snapshot.promised=833333333333LL;
+        snapshot.partition->ordinary_minted=416666666667LL;snapshot.partition->ordinary_promised=833333333333LL;
+        snapshot.pools->audit=833333333333LL;snapshot.audit_settlement->total_paid=416666666667LL;
+        snapshot.audit_settlement->active=AuditSettlementActive{10,3,1,10,Id(110),Id(701),125*coin};
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        const auto expected=ParseHex("056e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000000000000000000000000000000000000000000000000000558d8906c20000000a000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000abc6440361000000010a00000000000000030000000000000001000000000000000a0000006e00000000000000000000000000000000000000000000000000000000000000bd020000000000000000000000000000000000000000000000000000000000000054ce0923010000");
+        assert(HexStr(encoded)==HexStr(expected));
+        DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
     }
     auto before=Initial(definition);auto after=before;after.tip=Id(900);
     unsigned reads{};
@@ -180,6 +232,62 @@ int main(int argc,char** argv){
         auto next=done;next.tip=Id(902);next.epochs->golds=20;next.epochs->last_gold_height=20;next.promised+=125*coin;next.partition->ordinary_promised+=125*coin;next.pools->audit+=125*coin;
         const auto late=ApplyAuditSettlementPage(ledger,definition,2,20,20,Id(120),next);assert(late&&late->count==1&&late->paid==125*coin&&late->outputs[0].scriptPubKey==second.script&&next.pools->audit==0);
     }
+    { // Exact old financial amounts, one output per beneficiary for this period.
+        auto grouped_before=before;grouped_before.audit_settlement->grouped=true;assert(grouped_before.Valid());
+        const auto book=GroupAuditEntitlements(ledger,0,10,125*coin);assert(book.tasks==3&&book.recipients.size()==2);
+        std::map<CScript,CAmount> old_due;
+        auto legacy=before;
+        const auto whole=ApplyAuditSettlementPage(ledger,definition,128,10,10,Id(110),legacy);assert(whole);
+        for(const auto& output:whole->outputs)old_due[output.scriptPubKey]+=output.nValue;
+        for(const auto& output:book.recipients)assert(old_due.at(output.scriptPubKey)==output.nValue);
+        auto grouped=grouped_before;grouped.tip=Id(920);
+        const auto first=ApplyAuditSettlementPage(ledger,definition,1,10,10,Id(110),grouped);
+        assert(first&&first->outputs.size()==1&&first->count==1&&grouped.audit_settlement->active);
+        assert(first->outputs[0]==book.recipients[0]);
+        DataStream wire;wire<<grouped;IssuanceSnapshot cold;wire>>cold;assert(cold==grouped&&cold.audit_settlement->grouped);
+        auto bad_remaining=grouped;--bad_remaining.audit_settlement->active->grouped_remaining;const auto bad_before=bad_remaining;
+        assert(!ApplyAuditSettlementPage(ledger,definition,1,10,10,Id(110),bad_remaining)&&bad_remaining==bad_before);
+        const auto grouped_path=fs::PathFromString(std::string(argv[1])+"-grouped");
+        const auto first_tx=MakeTransactionRef(Coinbase(*first,21));
+        assert(VerifyAuditSettlementOutputs(*first,*first_tx,{},0));
+        {CCoinsViewDB db{{.path=grouped_path,.cache_bytes=1U<<20},{}};Initialize(db,grouped_before);Publish(db,grouped_before,grouped,*first_tx,21);}
+        {CCoinsViewDB db{{.path=grouped_path,.cache_bytes=1U<<20},{}};assert(db.GetPgnIssuanceState()==grouped);
+            auto done=grouped;done.tip=Id(921);const auto second=ApplyAuditSettlementPage(ledger,definition,1,10,10,Id(110),done);
+            assert(second&&second->outputs.size()==1&&second->outputs[0]==book.recipients[1]);
+            assert(done.audit_settlement->grouped&&!done.audit_settlement->active&&done.audit_settlement->total_paid==125*coin&&done.pools->audit==0);
+            assert(first->paid+second->paid==125*coin);
+            const auto second_tx=MakeTransactionRef(Coinbase(*second,22));Publish(db,grouped,done,*second_tx,22);
+            CCoinsViewCache undo{&db};for(unsigned i=0;i<second->outputs.size();++i)assert(undo.SpendCoin({second_tx->GetHash(),i}));undo.SetBestBlock(grouped.tip);
+            undo.StagePgnIssuanceHistoryStep({IssuanceDirection::Rewind,*db.GetPgnIssuanceForward(done.tip)});
+            undo.StagePgnFactHistoryStep({FactDirection::Rewind,*db.GetPgnFactForward(done.tip)});undo.Flush();
+            assert(db.GetPgnIssuanceState()==grouped&&!db.HaveCoin({second_tx->GetHash(),0}));
+            auto replay=grouped;replay.tip=done.tip;const auto same=ApplyAuditSettlementPage(ledger,definition,1,10,10,Id(110),replay);
+            assert(same&&same->outputs==second->outputs&&same->receipt==second->receipt&&replay==done);
+            Publish(db,grouped,replay,*second_tx,22);
+            const auto once=done;const auto no_repeat=ApplyAuditSettlementPage(ledger,definition,128,10,10,Id(110),done);
+            assert(no_repeat&&no_repeat->outputs.empty()&&!no_repeat->paid&&done==once);
+        }
+        // Same display name has no role in aggregation: exact scripts remain distinct.
+        assert(book.recipients[0].scriptPubKey!=book.recipients[1].scriptPubKey);
+        auto missing=ledger;missing.begin()->second.jobs[0]->stage=NativeAuditJob::Committed;
+        auto attempt=grouped;assert(!ApplyAuditSettlementPage(missing,definition,1,10,10,Id(110),attempt)&&attempt==grouped);
+        assert(BuildCandidateAuditSettlementPolicy(128,true)!=BuildCandidateAuditSettlementPolicy(128,false));
+        NativeAuditLedger bulk;
+        for(unsigned i=0;i<25000;++i){auto report=ledger.begin()->second;
+            report.jobs[0]->stage=NativeAuditJob::Passed;report.jobs[0]->passed_height=8;
+            report.jobs[1]->stage=NativeAuditJob::Passed;report.jobs[1]->passed_height=8;
+            bulk.emplace(Id(100000+i),std::move(report));
+        }
+        const auto large=GroupAuditEntitlements(bulk,0,10,125*coin+1);
+        assert(large.tasks==50000&&large.recipients.size()==2);
+        assert(large.recipients[0].nValue+large.recipients[1].nValue==125*coin+1);
+        const auto tiny=GroupAuditEntitlements(bulk,0,10,1);
+        assert(tiny.recipients.size()==2&&tiny.recipients[0].nValue+tiny.recipients[1].nValue==1);
+        const auto maximum=GroupAuditEntitlements(bulk,0,10,PGN_MAX_SUPPLY_ATOMIC);
+        assert(maximum.recipients[0].nValue+maximum.recipients[1].nValue==PGN_MAX_SUPPLY_ATOMIC);
+        std::printf("{\"grouped_native\":true,\"original_tasks\":3,\"beneficiaries\":2,\"exact_rounding\":true,\"cold_DB\":true,\"reorg_replay\":true,\"duplicate_payment_rejected\":true}\n");
+    }
+
     auto tampered=after;tampered.audit_settlement->active->root=Id(999);assert(!ApplyAuditSettlementPage(ledger,definition,2,10,10,Id(110),tampered));
     auto missing=before;missing.pools->audit-=1;missing.promised-=1;missing.partition->ordinary_promised-=1;assert(!ApplyAuditSettlementPage(ledger,definition,2,10,10,Id(110),missing));
     auto disabled=before;disabled.audit_settlement.reset();assert(!ApplyAuditSettlementPage(ledger,definition,2,10,10,Id(110),disabled));

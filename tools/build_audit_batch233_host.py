@@ -1,9 +1,9 @@
-"""Freeze host83 only; public CPU389 and scientific images are not rebuilt."""
+"""Freeze host84 only; public CPU389 and scientific images are not rebuilt."""
 from pathlib import Path
 import hashlib,json,os,shutil,subprocess,sys
 root=Path.cwd();out=root/'host233';out.mkdir(exist_ok=True)
 versions=json.loads((root/'tools/component_versions.json').read_bytes())
-assert versions==dict(ui='2026.11.15.152',core='2026.11.15.20',gpu='2026.11.15.83',cpu='2026.11.6.389')
+assert versions==dict(ui='2026.11.15.157',core='2026.11.15.20',gpu='2026.11.15.84',cpu='2026.11.6.389')
 subprocess.run([sys.executable,'-B','tools/build_horizon_engine_host.py','--output',str(out/'build')],check=True)
 source=json.loads((out/'build/ENGINE-HOST-SOURCE.json').read_bytes());assert source['component_version']==versions['gpu']
 for name,expected in source['sources'].items():

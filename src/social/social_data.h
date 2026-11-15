@@ -11,7 +11,7 @@ namespace pgn::social {
 enum class Section { Chat, Publications, Forum, Miners };
 enum class Window { AllTime, Day, Week, Month };
 inline QString windowLabel(Window w) {
-    switch(w) { case Window::Day:return QString::fromUtf8("Aujourd’hui (UTC)"); case Window::Week:return "Last 7 days";
+    switch(w) { case Window::Day:return QString::fromUtf8("Today (UTC)"); case Window::Week:return "Last 7 days";
     case Window::Month:return "Last 30 days"; default:return "All time"; }
 }
 inline QStringList categories() { return {"General","Mining","Research","Support"}; }

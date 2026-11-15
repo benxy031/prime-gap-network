@@ -37,15 +37,15 @@ inline void run(const QString& path){
     auto complete=[](const Pending& p,SendOutcome outcome,QString message={},QString why={}){
         p.done({p.request.identity,p.request.channel,p.request.requestId,outcome,message,why});
     };
-    const QString source="[b]Source[/b]\n[quote]BBCode only[/quote]";
-    body()->setPlainText(source);send()->click();expect(pending.size()==1,"Composer did not call send adapter");
+    const QString source="[b]Source[/b]\nFormatting stays visible",visible="Source\nFormatting stays visible";
+    body()->setPlainText(visible);{auto cursor=body()->textCursor();cursor.setPosition(0);cursor.setPosition(6,QTextCursor::KeepAnchor);body()->setTextCursor(cursor);control<QPushButton>(*view,"pgn-social-format-b")->click();}send()->click();expect(pending.size()==1,"Composer did not call send adapter");
     const auto first=pending.last();expect(first.request.identity==a&&first.request.bbcode==source&&!first.request.requestId.isEmpty(),"Send changed canonical identity/source");
     send()->click();expect(pending.size()==1&&!send()->isEnabled(),"Overlapping send admitted");
-    expect(control<QListWidget>(*view,"pgn-social-list-0")->count()==0&&body()->toPlainText()==source,"Unconfirmed send invented a message or cleared source");
-    complete(first,SendOutcome::Uncertain,{},"Connection lost");expect(body()->toPlainText()==source&&send()->isEnabled(),"Uncertain send lost editable draft/retry");
+    expect(control<QListWidget>(*view,"pgn-social-list-0")->count()==0&&body()->toPlainText()==visible,"Unconfirmed send invented a message or cleared source");
+    complete(first,SendOutcome::Uncertain,{},"Connection lost");expect(body()->toPlainText()==visible&&send()->isEnabled(),"Uncertain send lost editable draft/retry");
     send()->click();expect(pending.size()==2&&pending.last().request.requestId==first.request.requestId&&pending.last().request.bbcode==source,"Retry duplicated operation or changed source");
     const auto retry=pending.last();complete(first,SendOutcome::Accepted,"late-old-completion");
-    expect(body()->toPlainText()==source&&!send()->isEnabled(),"Duplicate completion cleared in-flight retry");
+    expect(body()->toPlainText()==visible&&!send()->isEnabled(),"Duplicate completion cleared in-flight retry");
     complete(retry,SendOutcome::Accepted,"synthetic-receipt-id");expect(body()->toPlainText().isEmpty(),"Confirmed unchanged source not cleared");
     body()->setPlainText("New source after confirmation");complete(retry,SendOutcome::Accepted,"duplicate");
     expect(body()->toPlainText()=="New source after confirmation","Duplicate confirmation cleared a newer draft");
@@ -66,12 +66,20 @@ inline void run(const QString& path){
     view->refresh();send()->click();const auto mismatch=pending.last();auto wrong=mismatch.request.identity;wrong.genesis=QString(64,'b');
     mismatch.done({wrong,mismatch.request.channel,mismatch.request.requestId,SendOutcome::Accepted,"forged-context",{}});
     expect(body()->toPlainText()=="Unauthorized source"&&!send()->isEnabled()&&reason().contains("scope mismatch"),"Wrong-genesis send response accepted");
+    // A focused button must return to the editor before disabling during an
+    // async send; otherwise Qt advances focus to an unrelated navigation row.
+    view->resize(1366,900);view->show();QApplication::processEvents();view->refresh();
+    body()->setPlainText("Mouse focus source");send()->setFocus();send()->click();
+    expect(view->focusWidget()==body(),"Disabling focused Send advanced focus away from editor");
+    const auto focusPending=pending.last();auto* search=control<QLineEdit>(*view,"pgn-social-search-0");search->setFocus();
+    complete(focusPending,SendOutcome::Accepted,"focus-receipt");
+    expect(view->focusWidget()==search,"Async send completion stole later search focus");
     // Actual composer event filter: Shift+Enter is a newline, Enter submits.
     view->refresh();body()->setPlainText("Keyboard source");const int before=pending.size();
     QKeyEvent newline(QEvent::KeyPress,Qt::Key_Return,Qt::ShiftModifier);QApplication::sendEvent(body(),&newline);
     expect(pending.size()==before&&body()->toPlainText().contains('\n'),"Shift+Enter sent rather than inserted newline");
     QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);QApplication::sendEvent(body(),&enter);
-    expect(pending.size()==before+1&&pending.last().request.bbcode==body()->toPlainText(),"Enter did not send the exact source");
+    expect(pending.size()==before+1&&pending.last().request.bbcode==static_cast<ui::SocialComposeEdit*>(body())->wireSource(),"Enter did not send the exact source");
     const auto destroyed=pending.last();view.reset();complete(destroyed,SendOutcome::Accepted,"after-destruction");
     expect(true,"Destroyed widget callback survived safely");
 }

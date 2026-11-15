@@ -1,6 +1,7 @@
 #pragma once
 #include "social/social_access.h"
 #include "social/social_bbcode.h"
+#include "ui/social_compose_edit.h"
 #include "ui/social_access_dialog.h"
 #include "ui/social_entry_delegate.h"
 #include <QTextBlock>
@@ -94,11 +95,11 @@ inline void run(QApplication& app,const QString& path){
 
     ui::SocialView local(path+"/drafts.json");local.resize(1280,677);local.show();local.setIdentity(identity());app.processEvents();
     auto* draft=control<QPlainTextEdit>(local,"pgn-social-draft-body-0");
-    for(const auto tag:{"b","i","u","s","quote","code","url"}){draft->setPlainText("text");auto cursor=draft->textCursor();cursor.select(QTextCursor::Document);draft->setTextCursor(cursor);
-        control<QPushButton>(local,"pgn-social-bbcode-"+QString(tag))->click();const auto expected=bbcode::opening(tag)+"text[/"+tag+"]";expect(draft->toPlainText()==expected,"Toolbar source differs from manual BBCode");
-        control<QPushButton>(local,"pgn-social-preview-chat")->click();bbcode::Document manual;bbcode::render(manual,expected);expect(control<QTextBrowser>(local,"pgn-social-chat-preview")->toPlainText()==manual.toPlainText(),"Preview and reading renderer diverge");
-        control<QPushButton>(local,"pgn-social-preview-chat")->click();}
-    expect(local.saveDrafts(),"BBCode draft save failed");Drafts saved;expect(DraftStore(path+"/drafts.json").load(identity(),saved).isEmpty()&&saved.sections[0].body==draft->toPlainText(),"Stored source is not BBCode");
+    auto* rich=static_cast<ui::SocialComposeEdit*>(draft);
+    for(const auto tag:{"b","i","u","s"}){rich->setWireSource("text");auto cursor=draft->textCursor();cursor.select(QTextCursor::Document);draft->setTextCursor(cursor);control<QPushButton>(local,"pgn-social-format-"+QString(tag))->click();
+        const auto expected="["+QString(tag)+"]text[/"+QString(tag)+"]";expect(draft->toPlainText()=="text","Visible formatting exposed source tags");expect(rich->wireSource()==expected,"Visible formatting changed existing wire contract");bbcode::Document received;bbcode::render(received,rich->wireSource());expect(received.toPlainText()==draft->toPlainText(),"Editor and recipient text differ");}
+    expect(!local.findChild<QPushButton*>("pgn-social-preview-chat")&&!local.findChild<QPushButton*>("pgn-social-bbcode-code"),"Retired Preview/BBCode controls still exposed");
+    expect(local.saveDrafts(),"Formatted draft save failed");Drafts saved;expect(DraftStore(path+"/drafts.json").load(identity(),saved).isEmpty()&&saved.sections[0].body==rich->wireSource(),"Native formatted draft lost the existing stored representation");
     control<QPushButton>(local,"pgn-social-open-access")->click();app.processEvents();auto* unverified=local.findChild<QDialog*>("pgn-social-access-dialog");expect(unverified&&!control<QPushButton>(*unverified,"pgn-social-assign-role")->isEnabled(),"Local identity auto-granted a role");
     local.setIdentity({QString(64,'b'),identity().subject});expect(!local.findChild<QDialog*>("pgn-social-access-dialog"),"Identity change retained access dialog");local.close();
     struct PendingRead{ReadRequest request;Services::Reply done;};QVector<PendingRead> reads;
