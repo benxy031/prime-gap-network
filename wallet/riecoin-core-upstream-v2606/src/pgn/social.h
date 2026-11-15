@@ -16,7 +16,8 @@ inline constexpr size_t MAX_FRAME = 24576;
 // A PGN transport link is not a wallet identity or moderator capability.
 struct Link {
   const int64_t id;
-  explicit Link(int64_t node) : id(node) {}
+  const bool local_transport;
+  explicit Link(int64_t node,bool local=false) : id(node),local_transport(local) {}
   std::atomic<bool> closed{false}, capable{false}, tick_pending{false};
   std::mutex output_mutex;
   std::deque<std::string> output;
@@ -29,7 +30,7 @@ struct Link {
 bool Enabled();
 void Start();
 void Shutdown();
-std::shared_ptr<Link> Open(int64_t node);
+std::shared_ptr<Link> Open(int64_t node,bool loopback=false);
 void Close(const std::shared_ptr<Link> &);
 bool Receive(const std::shared_ptr<Link> &, std::string bounded_frame);
 void Tick(const std::shared_ptr<Link> &);

@@ -3664,7 +3664,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
 
         pfrom.fSuccessfullyConnected = true;
-        peer.m_social_link = pgn::social::Open(pfrom.GetId());
+        peer.m_social_link = pgn::social::Open(pfrom.GetId(),pfrom.addr.IsLocal());
         return;
     }
 

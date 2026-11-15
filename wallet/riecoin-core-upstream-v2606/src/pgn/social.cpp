@@ -782,7 +782,7 @@ class Service {
           String(frame, "genesis") != Genesis())
         return;
       link->capable = true;
-      link->access_capable=frame.exists("moderation_v")&&frame["moderation_v"].isNum()&&frame["moderation_v"].getInt<int>()==1;
+      link->access_capable=link->local_transport&&PrivateQualificationEnabled()&&frame.exists("moderation_v")&&frame["moderation_v"].isNum()&&frame["moderation_v"].getInt<int>()==1;
       Ask(link);AskAccess(link);
       return;
     }
@@ -821,6 +821,7 @@ class Service {
       return;
     }
     if (op == "event") {
+      if(IsAccessProof(String(frame,"canonical_message")))return; // No unnegotiated control carrier.
       Commit(String(frame, "canonical_message"), String(frame, "signature"));
       return;
     }
@@ -855,8 +856,8 @@ public:
       if (worker.joinable())
         worker.join();
   }
-  std::shared_ptr<Link> Connect(int64_t node) {
-    auto link = std::make_shared<Link>(node);
+  std::shared_ptr<Link> Connect(int64_t node,bool loopback) {
+    auto link = std::make_shared<Link>(node,loopback);
     {
       std::lock_guard guard(links_mutex);
       std::erase_if(links, [](const auto &weak) { return weak.expired(); });
@@ -865,7 +866,7 @@ public:
     auto cap = Frame("cap");
     cap.pushKV("v", 1);
     cap.pushKV("genesis", Genesis());
-    cap.pushKV("moderation_v",1);
+    if(loopback&&PrivateQualificationEnabled())cap.pushKV("moderation_v",1);
     Output(link, std::move(cap));
     return link;
   }
@@ -1042,8 +1043,8 @@ void Shutdown() {
   if (auto *service = existing_service.load())
     service->Shutdown();
 }
-std::shared_ptr<Link> Open(int64_t node) {
-  return Enabled() ? Get().Connect(node) : nullptr;
+std::shared_ptr<Link> Open(int64_t node,bool loopback) {
+  return Enabled() ? Get().Connect(node,loopback) : nullptr;
 }
 void Close(const std::shared_ptr<Link> &link) {
   if (link)

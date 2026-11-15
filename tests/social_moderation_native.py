@@ -1,4 +1,4 @@
-"""Private 2-peer Native admission/ACL witness; synthetic REGTEST wallets only.
+"""Private 2-peer Native admission/ACL witness; synthetic closed PGN testnet wallets only.
 No UI or public governance claim. No user identity/credential is an input.
 """
 from pathlib import Path
@@ -27,7 +27,7 @@ class Node:
     def __init__(self,name):
         self.name=name;self.path=root/name;self.path.mkdir();self.rpcport=port();self.peerport=port();self.process=None;self.cookie=None;self.wallet='private-'+name;self.log=(self.path/'process.log').open('ab');nodes.append(self);self.start();self.rpc('createwallet',[self.wallet]);self.address=self.rpc('getnewaddress',['','bech32'],True);self.script=self.rpc('getaddressinfo',[self.address],True)['scriptPubKey']
     def start(self,reload=False):
-        cmd=[str(core),'-regtest','-datadir='+str(self.path),'-server=1','-listen=1','-bind=127.0.0.1','-port='+str(self.peerport),'-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-listenonion=0','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(self.rpcport),'-par=1','-dbcache=32','-maxconnections=8','-keypool=2','-printtoconsole=0']
+        cmd=[str(core),'-testnet','-datadir='+str(self.path),'-server=1','-listen=1','-bind=127.0.0.1','-port='+str(self.peerport),'-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-listenonion=0','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(self.rpcport),'-par=1','-dbcache=32','-maxconnections=8','-keypool=2','-printtoconsole=0']
         if reload:cmd+=['-wallet='+self.wallet]
         self.process=subprocess.Popen(cmd,cwd=self.path,stdout=self.log,stderr=subprocess.STDOUT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         def ready():
@@ -66,20 +66,24 @@ def submit(node,proof):
     def terminal():
         status=node.rpc('submitsocialevent',[proof['canonical_message'],proof['signature']]);return status if status['state'] in ['accepted_local','rejected','uncertain'] else False
     return wait(terminal,'Native admission')
-def state(n):return n.rpc('getsocialaccess',[0,1])
+def state(n):
+    try:return n.rpc('getsocialaccess',[0,1])
+    except RuntimeError as error:
+        if 'Moderation store loading'in str(error):return {}
+        raise
 def events(n):return n.rpc('getsocialevents',['',0,50])['records']
 def visible(n,event):
     return next((r for r in events(n) if json.loads(r['canonical_message'].split('\n',1)[1])['event_id']==event),None)
 def connect(a,b):
-    a.rpc('addnode',['127.0.0.1:'+str(b.peerport),'add']);wait(lambda:a.rpc('getsocialpeers').get('relay_peers'),'PGN relay negotiation')
+    a.rpc('addnode',['127.0.0.1:'+str(b.peerport),'onetry']);wait(lambda:a.rpc('getsocialpeers').get('relay_peers'),'PGN relay negotiation')
 def policy_doc(epoch,parent,mods,masks):return dict(v=1,genesis=g,origin='pgn-social://'+g,scope='social',epoch=epoch,previous_policy=parent,moderators=sorted(mods),threshold=2,ratified_masks=sorted(masks,key=lambda x:x['action_id']))
-result={'scope':'Private Core20 Social overlay, two actual native peers, synthetic REGTEST only','core_sha256':hashlib.sha256(core.read_bytes()).hexdigest(),'checks':checks,'public_network':False,'qt_witness':False,'production_authority':False}
+result={'scope':'Private Core20 Social overlay, two actual native peers, synthetic closed PGN testnet only','core_sha256':hashlib.sha256(core.read_bytes()).hexdigest(),'checks':checks,'public_network':False,'qt_witness':False,'production_authority':False}
 try:
-    a,b=Node('A'),Node('B');g=a.rpc('getblockhash',[0]);check(g==b.rpc('getblockhash',[0]),'Exact isolated regtest genesis')
+    a,b=Node('A'),Node('B');g=a.rpc('getblockhash',[0]);check(g==b.rpc('getblockhash',[0]),'Exact isolated isolated testnet genesis')
     A=dict(node=a,address=a.address,script=a.script);B=dict(node=b,address=b.address,script=b.script);C=b.identity();D=b.identity()
     root_doc=policy_doc(0,'0'*64,[B['script'],C['script'],D['script']],[]);root_id=sha('PGN/SOCIAL/POLICY-ID/1\n'+canonical(root_doc))
     for n in nodes:
-        n.stop();directory=n.path/'regtest/social';directory.mkdir(exist_ok=True);(directory/'private-moderation-bootstrap.json').write_text(json.dumps(dict(synthetic_only='PGN_PRIVATE_REGTEST_MODERATION_1',policy=root_doc)),encoding='utf-8');n.start(True)
+        n.stop();directory=n.path/'testnet/social';directory.mkdir(exist_ok=True);(directory/'private-moderation-bootstrap.json').write_text(json.dumps(dict(synthetic_only='PGN_PRIVATE_TESTNET_MODERATION_1',policy=root_doc)),encoding='utf-8');n.start(True)
     wait(lambda:state(a).get('available') and state(b).get('available'),'Explicit synthetic trust anchors loaded')
     check(state(a)['root_id']==root_id==state(b)['root_id'],'Same explicit private authority anchor; no name binding')
     connect(a,b);check(all(p['addr'].startswith('127.0.0.1:') for n in nodes for p in n.rpc('getpeerinfo')),'All actual network peers are localhost')

@@ -25,4 +25,5 @@ public:
     std::string Root();
 };
 bool IsAccessProof(const std::string& message);
+bool PrivateQualificationEnabled();
 }

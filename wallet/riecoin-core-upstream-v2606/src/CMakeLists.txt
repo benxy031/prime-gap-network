@@ -547,3 +547,9 @@ target_link_libraries(pgn-native-leaderboard-test PRIVATE core_interface riecoin
 
 add_executable(pgn-native-epoch3-reset-test EXCLUDE_FROM_ALL pgn/epoch3_reset_test.cpp)
 target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoin_node univalue)
+
+# Synthetic moderator bootstrap must not exist in production binaries.
+option(PGN_SOCIAL_PRIVATE_QUALIFICATION "Compile closed-loopback Social qualification bootstrap (never ship)" OFF)
+if(PGN_SOCIAL_PRIVATE_QUALIFICATION)
+  set_property(SOURCE pgn/social_access.cpp APPEND PROPERTY COMPILE_DEFINITIONS PGN_SOCIAL_PRIVATE_QUALIFICATION=1)
+endif()

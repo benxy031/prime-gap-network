@@ -5,6 +5,7 @@
 #include <pgn/social_storage.h>
 #include <addresstype.h>
 #include <chainparams.h>
+#include <common/args.h>
 #include <common/signmessage.h>
 #include <crypto/sha256.h>
 #include <dbwrapper.h>
@@ -40,6 +41,13 @@ std::string Key(uint64_t n){static constexpr char digits[]="0123456789abcdef";st
 UniValue Encode(const Item& item){UniValue out(UniValue::VOBJ);out.pushKV("canonical_message",item.message);out.pushKV("signature",item.signature);return out;}
 }
 bool IsAccessProof(const std::string& message){return message.starts_with("PGN/SOCIAL/MODERATION/1\n")||message.starts_with("PGN/SOCIAL/POLICY-ATTEST/1\n");}
+bool PrivateQualificationEnabled(){
+#if defined(PGN_SOCIAL_PRIVATE_QUALIFICATION) && PGN_SOCIAL_PRIVATE_QUALIFICATION
+    return true;
+#else
+    return false;
+#endif
+}
 class AccessStore::Impl {
 public:
     fs::path directory;Lookup lookup;std::mutex mutex;std::unique_ptr<CDBWrapper> db;
@@ -76,14 +84,19 @@ public:
     }
     void LoadLocked(){
         tracker.reset();db.reset();journal.clear();ids.clear();nonces.clear();actions.clear();masks.clear();bytes=0;root_document.clear();root_id.clear();error.clear();
-        // A local JSON file cannot become public-network moderator authority.
-        if(Params().GetChainType()!=ChainType::REGTEST){error="Moderation unavailable: no public authority/order bootstrap has been approved";return;}
+        // The complete native profile deliberately rejects inherited regtest.
+        // Do not weaken init/consensus. This loader is ABSENT from default OFF
+        // production builds; no runtime argument can enable it there.
+#if !defined(PGN_SOCIAL_PRIVATE_QUALIFICATION) || !PGN_SOCIAL_PRIVATE_QUALIFICATION
+        error="Moderation unavailable: no public authority/order bootstrap has been approved";return;
+#else
+        if(Params().GetChainType()!=ChainType::TESTNET||gArgs.GetArgs("-connect")!=std::vector<std::string>{"0"}||gArgs.GetBoolArg("-dnsseed",true)||gArgs.GetBoolArg("-fixedseeds",true)||gArgs.GetBoolArg("-discover",true)||gArgs.GetArgs("-bind")!=std::vector<std::string>{"127.0.0.1"}){error="Private moderator qualification requires complete PGN testnet, connect0/DNS0/fixedseeds0/discover0/bind127";return;}
         const auto file=directory/"private-moderation-bootstrap.json";
         if(!fs::exists(file)){error="Moderation unavailable: explicit private regtest anchor absent";return;}
         if(fs::file_size(file)>m::MAX_POLICY_BYTES+256)throw std::runtime_error("Private bootstrap oversized");
         FILE* handle=fsbridge::fopen(file,"rb");if(!handle)throw std::runtime_error("Private bootstrap unreadable");
         std::string raw(fs::file_size(file),'\0');const auto n=std::fread(raw.data(),1,raw.size(),handle);std::fclose(handle);
-        UniValue saved;if(n!=raw.size()||!saved.read(raw)||!saved.isObject()||saved.getKeys().size()!=2||saved["synthetic_only"].get_str()!="PGN_PRIVATE_REGTEST_MODERATION_1")throw std::runtime_error("Explicit synthetic regtest bootstrap required");
+        UniValue saved;if(n!=raw.size()||!saved.read(raw)||!saved.isObject()||saved.getKeys().size()!=2||saved["synthetic_only"].get_str()!="PGN_PRIVATE_TESTNET_MODERATION_1")throw std::runtime_error("Explicit synthetic closed-testnet bootstrap required");
         auto anchor=policy.ParseDocument(saved["policy"]);root_document=anchor.canonical;root_id=anchor.id;tracker.emplace(anchor);
         fs::create_directories(directory);db=std::make_unique<CDBWrapper>(DBParams{.path=directory/"access-private-v1",.cache_bytes=1024*1024});
         std::string stored_root;if(db->Read(std::string{"root"},stored_root)){if(stored_root!=root_document)throw std::runtime_error("Private authority root changed: refusing silent local rebind");}
@@ -98,6 +111,7 @@ public:
             ids[item.id]=journal.size();nonces[item.nonce]=item.id;journal.push_back(item);bytes+=value.size();++expected;
         }
         RebuildMasks();
+#endif
     }
 };
 AccessStore::AccessStore(const fs::path& directory,Lookup lookup):impl(std::make_unique<Impl>(directory,std::move(lookup))){}
@@ -118,9 +132,10 @@ void AccessStore::Commit(const std::string& message,const std::string& signature
     try{CommitSocialBatch(*impl->db,batch);}catch(const StorageCommitUncertain&){impl->error="Moderation WAL outcome uncertain; restart/reconcile this Social journal before privileged retry";throw;}
     // Publish only after the synchronous native atomic batch succeeded.
     const bool policy_changed=staged.Current().id!=impl->tracker->Current().id||staged.Conflicted()!=impl->tracker->Conflicted();
-    impl->ids[item.id]=impl->journal.size();impl->nonces[item.nonce]=item.id;impl->journal.push_back(std::move(item));impl->bytes+=encoded.size();impl->tracker=std::move(staged);
-    for(const auto& [id,action]:projected){impl->actions.insert_or_assign(id,action);impl->masks.emplace(action.Channel(),action.TargetEvent());}
-    if(policy_changed)impl->RebuildMasks();
+    try{impl->ids[item.id]=impl->journal.size();impl->nonces[item.nonce]=item.id;impl->journal.push_back(std::move(item));impl->bytes+=encoded.size();impl->tracker=std::move(staged);
+        for(const auto& [id,action]:projected){impl->actions.insert_or_assign(id,action);impl->masks.emplace(action.Channel(),action.TargetEvent());}
+        if(policy_changed)impl->RebuildMasks();
+    }catch(const std::exception&){impl->error="Moderation commit durable but cache publication uncertain; reconcile this journal";throw StorageCommitUncertain{};}
 }
 bool AccessStore::Hidden(const std::string& channel,const std::string& event){
     std::lock_guard guard(impl->mutex);if(!impl->tracker||!impl->error.empty())return false;
@@ -129,7 +144,7 @@ bool AccessStore::Hidden(const std::string& channel,const std::string& event){
 UniValue AccessStore::Read(uint64_t cursor,unsigned limit){
     std::lock_guard guard(impl->mutex);if(limit<1||limit>10)throw std::runtime_error("Moderation page1through10 required");
     UniValue out(UniValue::VOBJ),records(UniValue::VARR),moderators(UniValue::VARR),masks(UniValue::VARR);
-    out.pushKV("genesis",Genesis());out.pushKV("private_qualification",true);out.pushKV("root_id",impl->root_id);out.pushKV("root_document",impl->root_document);
+    out.pushKV("genesis",Genesis());out.pushKV("private_qualification",PrivateQualificationEnabled());out.pushKV("root_id",impl->root_id);out.pushKV("root_document",impl->root_document);
     out.pushKV("available",impl->tracker.has_value()&&impl->error.empty());out.pushKV("error",impl->error);out.pushKV("unique_authority_order_proven",false);
     if(impl->tracker){const auto state=impl->tracker->Snapshot();out.pushKV("policy_id",state.id);out.pushKV("epoch",impl->tracker->Current().epoch);out.pushKV("conflicted",state.conflicted);for(const auto& script:state.moderators)moderators.push_back(script);
         if(!state.conflicted)for(const auto& [id,mask]:state.ratified){UniValue row(UniValue::VOBJ);row.pushKV("action_id",id);row.pushKV("channel",mask.channel);row.pushKV("target_event",mask.target_event);masks.push_back(row);}

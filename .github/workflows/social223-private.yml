@@ -59,6 +59,7 @@ jobs:
           qa_cwd="$(cygpath -w "$PWD")"
           "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/build-resource.json" --timeout 2300 -- "$qa_cmake" --build build-native --parallel 1 --target riecoind > build-private.log 2>&1
       - name: Collect executable and actual DLL closure before tests
+        id: export_public
         if: steps.build.outcome == 'success'
         env:
           PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
@@ -70,13 +71,46 @@ jobs:
         if: always() && steps.build.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: social223-built-core-rescue-windows
+          name: social223-default-off-core-rescue-windows
+          path: private-social223-delivery
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify actual production-default absence with complete native profile
+        if: steps.export_public.outcome == 'success'
+        shell: pwsh
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          $env:Path="$env:SystemRoot\System32;$env:SystemRoot"
+          & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/public-off-resource.json" --timeout 120 -- $env:PYTHON_EXPLICIT -B tests/social_moderation_public_absence.py --core private-social223-delivery/Core/pgn-core.exe --out private-public-default-off
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+      - name: Preserve OFF image and compile only private-gated TU plus link
+        id: build_private
+        if: steps.export_public.outcome == 'success'
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          mkdir -p private-social223-delivery/public-default-off
+          cp -r private-social223-delivery/Core private-social223-delivery/public-default-off/
+          cp private-social223-delivery/PRETEST-CORE-EXPORT.json private-social223-delivery/public-default-off/
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -DPGN_SOCIAL_PRIVATE_QUALIFICATION=ON
+          qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
+          qa_cmake="$(cygpath -w "$(command -v cmake)")"
+          qa_cwd="$(cygpath -w "$PWD")"
+          "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/private-build-resource.json" --timeout 180 -- "$qa_cmake" --build build-native --parallel 1 --target riecoind > private-mode-build.log 2>&1
+          qa_tools="$(cygpath -w "$MINGW_PREFIX/bin")"
+          "$qa_python" -B tools/social223_export.py --tool-bin "$qa_tools"
+      - name: Rescue private-mode executable before the network witness
+        if: always() && steps.build_private.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: social223-private-mode-core-rescue-windows
           path: private-social223-delivery
           if-no-files-found: error
           retention-days: 7
       - name: Two real closed-network peers, BIP322, native CDB and ACL
         id: test
-        if: steps.build.outcome == 'success'
+        if: steps.build_private.outcome == 'success'
         shell: pwsh
         env:
           PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
