@@ -61,6 +61,7 @@ jobs:
         run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
 
       - name: Build every default source target
+        id: ui_build
         run: |
           pgn_build_jobs="$(nproc)"
           if [ "$pgn_build_jobs" -gt 4 ]; then pgn_build_jobs=4; fi
@@ -68,12 +69,14 @@ jobs:
           cmake --build build-ci --parallel "$pgn_build_jobs"
 
       - name: Run the isolated registered tests
+        id: ui_tests
         env:
           QT_QPA_PLATFORM: offscreen
           GSETTINGS_BACKEND: memory
         run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
 
       - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
         run: |
           .ci-python/Scripts/python.exe -I tests/test_late_cycle_completion.py
           .ci-python/Scripts/python.exe -I tests/test_audit_reveal_batch.py
@@ -89,6 +92,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Collect exact UI153 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
         run: |
           export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
           .ci-python/Scripts/python.exe - <<'PGN_UI_COLLECTOR'
@@ -111,6 +120,7 @@ jobs:
           def main():
               assert shutil.disk_usage(ROOT).free>2*1024**3,'Insufficient disk reserve before collection'
               frozen={'source': 'e66ac20782a9fea27d4f1110a25b3b8914f4540e', 'tree': '97ca7da2a5c27bb37ba6e3981e7dbbcf5d069e2f', 'verified_files': [{'path': 'src/ui/social_chat_list.h', 'patched_sha256': 'ca91fcd918f6662e7e523a84b70d5370d2dec639ea9fecffb725dc0c34366fbe'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': 'd9c53ee734eb748dac0d019964b4c9f40acbc9c0d3f3d1a8e8b85f574f3d9801'}, {'path': 'src/ui/social_leaderboard_delegate.h', 'patched_sha256': 'c85d4bb6460987c2827a8f64e7b69b59447e1b167d1e334126415fa83baaaa4b'}, {'path': 'src/ui/social_light_style.h', 'patched_sha256': 'f2aad8a45f965ad5ad3e29648867c858f8a1ead112011ee4cea5cf47aba2cf6f'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '6a553bbb6c2e9e204adc1e1e39b08d97b433bf656ec3e210a1b3d90ec008c1e3'}, {'path': 'src/ui/social_view.h', 'patched_sha256': 'ee94864d4c1b929a3741043a524d6ff01028456fec202b09fdbe6f9bf92526eb'}, {'path': 'tests/social_chat_scroll_checks.h', 'patched_sha256': '34473f4d8201e7b836980a4aaa67970399caf5030c04c402e4ef4f02b05cae70'}, {'path': 'tests/social_component/CMakeLists.txt', 'patched_sha256': '6d38bd0010e88e6a5a09da58cbe09d348ae0222cf7fd461b1edef8d6d87f3b81'}, {'path': 'tests/social_native_network.py', 'patched_sha256': '817872c6010b539e103ed5fe742a8d6a93157cc6ce8e6b55f3c97734de1d0a9b'}, {'path': 'tests/social_native_witness.cpp', 'patched_sha256': 'e93806137af30ce3d290089c4eb0e39d52afe91bb6c64c9d105f16211c12fdc2'}, {'path': 'tests/social_v4_checks.h', 'patched_sha256': '4202cb77f5144dacda3427faf0f623fac87e3dd37b6fad89b7dd19c08ac6ea2b'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'fd8b6a9287b64c6aa5b75d213a4204f69bf48e7cd64fad18deebcf38c316ba50'}, {'path': 'tools/component_versions.json', 'patched_sha256': '63152de2d369a50fd4dbd5b176aee69b5150c8a464382b517543627f74af656b'}]}
+              assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==frozen['source']
               for row in frozen['verified_files']:
                   assert sha(SOURCE/row['path'])==row['patched_sha256'],row['path']
               STAGE.mkdir(exist_ok=True)
@@ -176,6 +186,7 @@ jobs:
               inputs.update(['CMakeLists.txt','tools/component_versions.json','assets/pgn.qrc','assets/audit-animation.qrc'])
               observed=[dict(path=name,bytes=(SOURCE/name).stat().st_size,sha256=sha(SOURCE/name))for name in sorted(inputs)]
               result=dict(schema='PGN_WINDOWS_UI_BUILD_V1',source=frozen['source'],
+                          qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),
                           source_tree=frozen['tree'],
                           base_product_commit='1ea788c04d55f0bb06810ac8ff8c5961e0f0872d',
                           ui_version='2026.11.15.153',target='PGN-Horizon',compiler=subprocess.check_output([str(SDK/'bin/g++.exe'),'--version'],text=True).splitlines()[0],qt_version=subprocess.check_output([str(next(p for p in (SDK/'bin/qmake6.exe',SDK/'bin/qmake.exe')if p.is_file())),'-query','QT_VERSION'],text=True).strip(),
@@ -197,7 +208,8 @@ jobs:
           if __name__=='__main__':main()
           
           PGN_UI_COLLECTOR
-      - name: Preserve qualified UI-only runtime
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui153-windows-${{ github.run_id }}
@@ -231,13 +243,16 @@ jobs:
       - name: Configure from a fresh checkout
         run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
       - name: Build every default target
+        id: ui_build
         run: cmake --build build-ci --parallel 2
       - name: Run registered isolated tests
+        id: ui_tests
         env:
           QT_QPA_PLATFORM: offscreen
           GSETTINGS_BACKEND: memory
         run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
       - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
         run: |
           .ci-python/bin/python -I tests/test_late_cycle_completion.py
           .ci-python/bin/python -I tests/test_audit_reveal_batch.py
@@ -253,6 +268,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Collect exact UI153 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
         run: |
           .ci-python/bin/python - <<'PGN_UI_COLLECTOR'
           
@@ -285,14 +306,15 @@ jobs:
                   shutil.copy2(Path(path).resolve(),target);origins[target.relative_to(STAGE).as_posix()]=str(Path(path).resolve());pending.append(target)
           (STAGE/'qt.conf').write_text('[Paths]\nPlugins=plugins\n')
           files=[dict(path=p.relative_to(STAGE).as_posix(),bytes=p.stat().st_size,sha256=sha(p),origin=origins.get(p.relative_to(STAGE).as_posix()))for p in sorted(STAGE.rglob('*'))if p.is_file()]
-          result=dict(schema='PGN_LINUX_UI_BUILD_V1',source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.15.153',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
+          result=dict(schema='PGN_LINUX_UI_BUILD_V1',qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],qt_version=subprocess.check_output(['qmake6','-query','QT_VERSION'],text=True).strip(),source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.15.153',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
           (ROOT/'LINUX-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n')
           with tarfile.open(ROOT/'ui153-ubuntu.tar.gz','w:gz')as archive:
               archive.add(STAGE,arcname='ui');archive.add(ROOT/'LINUX-UI-BUILD.json',arcname='LINUX-UI-BUILD.json')
           print(json.dumps(dict(PASS=True,source=FROZEN['source'],files=len(files),executable_sha256=sha(STAGE/'PGN-Horizon'))))
           
           PGN_UI_COLLECTOR
-      - name: Preserve qualified UI-only runtime
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui153-ubuntu-${{ github.run_id }}
