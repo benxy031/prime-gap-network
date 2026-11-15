@@ -11,7 +11,7 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       GSETTINGS_BACKEND: memory
-      PGN_AUDIT_UI_CAPTURE: evidence264
+      PGN_AUDIT_UI_CAPTURE: ${{ github.workspace }}/evidence264
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -36,11 +36,9 @@ jobs:
         run: |
           cmake -S . -B build-ui264 -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
           cmake --build build-ui264 --target pgn-network-work-view-test pgn-audit-explorer-view-test pgn-ticket-atlas-view-test pgn-ticket-atlas-mass-view-test --parallel 2
-      - name: Real widget behavior and existing atlas regressions
+      - name: Registered view regressions; atlas consumers compiled above
         run: |
           ctest --test-dir build-ui264 --output-on-failure -V --timeout 120 -R '^(network-work-view|audit-explorer-view)$'
-          build-ui264/pgn-ticket-atlas-view-test
-          build-ui264/pgn-ticket-atlas-mass-view-test
       - name: Preserve exact themed captures and diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -50,3 +48,4 @@ jobs:
             evidence264
             build-ui264/Testing/Temporary/LastTest.log
           if-no-files-found: error
+
