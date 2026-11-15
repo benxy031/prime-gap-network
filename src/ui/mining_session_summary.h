@@ -136,7 +136,7 @@ protected:
         p.setFont(font);p.setPen(QColor("#69efc5"));const auto seconds=network.value("window_seconds").toInteger();const QString networkTitle=network.value("available").toBool()?QString("Network · %1 min").arg(seconds/60.):QString("Network · unavailable");
         p.drawText(QRectF(left,y,usable,18),Qt::AlignVCenter,p.fontMetrics().elidedText(networkTitle,Qt::ElideRight,int(usable)));region("Network",networkTitle,QRectF(left,y,usable,18),font.pixelSize());y+=18;
         QJsonArray networkRegions;auto rows=network.value("rows").toArray();
-        if(rows.isEmpty())for(const auto* label:{"Registered operators","Reporting miners","Reported search","Gold merit","Audits pending"})rows.append(QJsonObject{{"label",label},{"value","—"}});
+        if(rows.isEmpty())for(const auto* label:{"Registered operators","Reporting miners","Reported search","Gold merit","Audit slots pending"})rows.append(QJsonObject{{"label",label},{"value","—"}});
         for(const auto& item:rows){const auto object=item.toObject();const QString label=object.value("label").toString(),text=object.value("value").toString();const double at=y;row(label,text,18);networkRegions.append(QJsonObject{{"label",label},{"value",text},{"y",at-offset},{"height",18},{"font_px",font.pixelSize()}});}
         QJsonArray coverageRegions;
         if(hasCoverage){

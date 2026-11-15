@@ -1,4 +1,5 @@
 #include "ui/audit_animation_view.h"
+#include "ui/audit_activity_presentation.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QDir>
@@ -98,7 +99,7 @@ void AuditAnimationView::refresh(){
   if(!error.isEmpty()){d.status->setText("Audit activity unavailable Â· "+error);guard->setProperty("pgn_audit_animation_error",error);return;}
   d.reset=false;d.last=view;const auto state=view.value("state").toObject();d.height=state.value("height").toInteger();d.hash=state.value("bestblockhash").toString();
   d.watched=d.displayed;QSet<QString> ids;for(const auto& id:d.displayed)ids.insert(id.toString());for(const auto& row:view.value("audits").toArray()){const auto report=row.toObject();bool active=false;for(const auto& j:report.value("jobs").toArray()){const auto job=j.toObject();active|=job.value("state")=="committed"||(job.value("state")=="assigned"&&!job.value("expired").toBool());}if(active&&d.watched.size()<32&&!ids.contains(report.value("request_id").toString())){d.watched.append(report.value("request_id"));ids.insert(report.value("request_id").toString());}}
-  const auto totals=view.value("totals").toObject();const auto jobs=totals.value("active_jobs").toInteger();d.status->setText(jobs?QString("%1 active audits across the network%2").arg(jobs).arg(view.value("truncated").toBool()?" Â· bounded visual sample":""):"No audits currently being processed");
+  const auto totals=view.value("totals").toObject();const auto jobs=totals.value("active_jobs").toInteger();d.status->setText(auditActivityHeadline(view));d.status->setToolTip(auditActivityExplanation(view));d.status->setWordWrap(true);
   guard->setProperty("pgn_audit_animation_global_jobs",jobs);guard->setProperty("pgn_audit_animation_height",d.height);guard->setProperty("pgn_audit_animation_error",QString{});
   const auto projected=d.projection?d.projection(view.value("audits").toArray(),d.surface):QJsonObject{};d.surface->present({{"view",view},{"reset",reset},{"age_ms",0},{"projection",projected}});if(!projected.value("__atlas").toObject().isEmpty())guard->setProperty("pgn_audit_initial_map_queued",true);
  });

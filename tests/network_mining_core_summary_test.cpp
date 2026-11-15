@@ -1,4 +1,5 @@
 #include "ui/mining_session_summary.h"
+#include "ui/audit_activity_presentation.h"
 #include <QApplication>
 #include <QImage>
 #include <QStandardPaths>
@@ -13,7 +14,10 @@ int main(int argc,char** argv){
   QJsonObject metrics{{"schema","PGN_NETWORK_METRICS_V1"},{"genesis",genesis},{"bestblockhash",hash},{"height",42},{"median_time_past",1000000},
    {"rate_scope","reported_search_positions_per_chain_second_excludes_audits"},{"audit_validation_scope","historical_reports_qualified_at_snapshot_tip"},
    {"audit_enabled_operators",3},{"reporting_operators_in_window",2},{"audit_queue",QJsonObject{{"awaiting",4},{"awaiting_seed",1},{"assigned",2},{"committed",2}}},{"points",QJsonArray{point}}};
-  using pgn::ui::networkMiningCoreSummary;const auto ready=networkMiningCoreSummary(metrics,genesis);need(ready.value("available").toBool());const auto rows=ready.value("rows").toArray();need(rows.size()==5);need(rows[0].toObject().value("value")=="3");need(rows[1].toObject().value("value")=="2");need(rows[2].toObject().value("value")=="1 Tpos/s");need(rows[3].toObject().value("value")=="29.0000");need(rows[4].toObject().value("value")=="9");
+  using pgn::ui::networkMiningCoreSummary;const auto ready=networkMiningCoreSummary(metrics,genesis);need(ready.value("available").toBool());const auto rows=ready.value("rows").toArray();need(rows.size()==5);need(rows[0].toObject().value("value")=="3");need(rows[1].toObject().value("value")=="2");need(rows[2].toObject().value("value")=="1 Tpos/s");need(rows[3].toObject().value("value")=="29.0000");need(rows[4].toObject().value("value")=="9");need(rows[4].toObject().value("label")=="Audit slots pending");
+  {auto m=metrics;m.insert("audit_queue",QJsonObject{{"awaiting",1},{"awaiting_seed",0},{"assigned",2},{"committed",1}});const auto pending=networkMiningCoreSummary(m,genesis).value("rows").toArray()[4].toObject();need(pending.value("value")=="4");
+   const QJsonObject activity{{"totals",QJsonObject{{"active_jobs",3},{"active_reports",2}}},{"state",QJsonObject{{"height",42},{"bestblockhash",hash}}}};
+   const auto text=pgn::ui::auditActivityHeadline(activity);need(text.contains("3 assigned/committed audit slots")&&text.contains("2 reports")&&text.contains("block 42"));need(!text.contains("currently being processed"));need(pgn::ui::auditActivityExplanation(activity).contains(hash));}
   {auto m=metrics,p=point;p.insert("reported_positions","600000000000001");p.insert("merit_target_q16",29*65536+137);m.insert("points",QJsonArray{p});const auto r=networkMiningCoreSummary(m,genesis).value("rows").toArray();need(r[2].toObject().value("value")=="≈ 1 Tpos/s");need(r[3].toObject().value("value")=="≈ 29.0021");need(m.value("points").toArray()[0].toObject().value("reported_positions")=="600000000000001");}
   need(networkMiningCoreSummary(metrics,genesis,90000).value("available").toBool());need(!networkMiningCoreSummary(metrics,genesis,90001).value("available").toBool());need(!networkMiningCoreSummary(metrics,genesis,-1).value("available").toBool());need(!networkMiningCoreSummary(metrics,QString(64,'c')).value("available").toBool());need(!networkMiningCoreSummary(metrics,{}).value("available").toBool());
   const auto bad=[&](QJsonObject value){need(!networkMiningCoreSummary(value,genesis).value("available").toBool());};
