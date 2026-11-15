@@ -72,9 +72,15 @@ def mine(raw,target,clock=None):
         struct.pack_into('<Q',b,82,n);identity=sh(b[:112])
         if int.from_bytes(identity,'little')<=target:return bytes(b),identity[::-1].hex()
     raise RuntimeError('Owned coordination work search exhausted')
+def legal_clock(node,parent,salt=0):
+    header=node.rpc('getblockheader',[parent])
+    # Exact Native contextual rules: >MTP and >=previous_time-15. Use the
+    # retained history's valid time range rather than running100 blocks into
+    # the real wall clock's separate15-second future bound. No mock-time.
+    return max(header['mediantime']+1,header['time']-15)+salt
 def append(node,salt=0):
     work=node.rpc('getpgnbootstraptemplate',[[]]);assert work['nonce_offset']==82 and work['nonce_bytes']==8
-    proposed=bytes.fromhex(work['block']);clock=max(struct.unpack_from('<q',proposed,68)[0],int(time.time())+salt)
+    proposed=bytes.fromhex(work['block']);clock=legal_clock(node,work['parent'],salt)
     raw,identity=mine(proposed,int(work['numeric_target'],16),clock)
     reply=node.rpc('submitblock',[raw.hex()]);assert reply is None,(work['height'],reply,clock)
     assert node.rpc('getbestblockhash')==identity
@@ -116,7 +122,7 @@ def main():
             result['phase']='public_prefix_and_watch_wallets_passed'
             b.rpc('addnode',['127.0.0.1:'+str(a.p2p),'onetry'])
             work=a.rpc('getpgnbootstraptemplate',[[]]);assert work['height']==322
-            raw,identity=mine(bytes.fromhex(work['block']),int(work['numeric_target'],16))
+            raw,identity=mine(bytes.fromhex(work['block']),int(work['numeric_target'],16),legal_clock(a,work['parent']))
             invalid=tamper_first_payment(raw,int(work['numeric_target'],16));reject=a.rpc('submitblock',[invalid.hex()]);assert isinstance(reject,str) and reject
             assert a.rpc('getblockcount')==321 and a.rpc('getpgnstate',[0,1])['audit_paid_atomic']=='0'
             assert a.rpc('submitblock',[raw.hex()])is None;await_tip(b,identity)
@@ -152,3 +158,4 @@ def main():
         for node in reversed(nodes):node.close()
         args.receipt.parent.mkdir(parents=True,exist_ok=True);args.receipt.write_text(json.dumps(result,indent=2,default=str)+'\n');print(json.dumps(result,default=str),flush=True)
 if __name__=='__main__':main()
+
