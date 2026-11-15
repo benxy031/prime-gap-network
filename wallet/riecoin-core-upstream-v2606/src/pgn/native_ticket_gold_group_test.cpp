@@ -7,6 +7,11 @@
 #include <pgn/chain_monetary_policy.h>
 #include <common/signmessage.h>
 #include <consensus/merkle.h>
+#include <consensus/tx_check.h>
+#include <consensus/tx_verify.h>
+#include <consensus/validation.h>
+#include <policy/policy.h>
+#include <script/interpreter.h>
 #include <crypto/sha256.h>
 #include <key.h>
 #include <script/sign.h>
@@ -346,7 +351,34 @@ int main(int argc,char** argv){try{
     const auto partial_before=partial;
     need(!ApplyAuditSettlementPage(altered,epochs,1,1008,at.nHeight,at.GetBlockHash(),partial)&&partial==partial_before,
          "Changed payout task set caused a partial mutation");
-    CBlock fee_block=paid;CMutableTransaction fee_cb{*paid.vtx.front()};const CAmount native_fees=1530;
+    // Spend a real signed native UTXO. The candidate's fee input comes only
+    // from inherited native amount/input validation, never from a sender DTO.
+    CCoinsViewCache fee_inputs{&view};uint256 funding=chain;funding.begin()[1]=81;
+    const COutPoint input{Txid::FromUint256(funding),0};const CAmount funding_value=unit;
+    fee_inputs.AddCoin(input,Coin{CTxOut{funding_value,miner},0,false},false);
+    CMutableTransaction transfer;transfer.vin.emplace_back(input);transfer.vout.emplace_back(funding_value-1530,alternate);
+    FillableSigningProvider signer;signer.AddKey(key);SignatureData input_signature;
+    need(ProduceSignature(signer,MutableTransactionSignatureCreator(transfer,0,funding_value,SignOptions{SIGHASH_ALL}),
+                          miner,input_signature),"Native ordinary transaction could not sign");
+    UpdateInput(transfer.vin[0],input_signature);const CTransaction signed_transfer{transfer};
+    TxValidationState tx_state;CAmount native_fees{};
+    need(CheckTransaction(signed_transfer,tx_state,Consensus::AmountRules::ApprovedPgn())&&
+         Consensus::CheckTxInputs(signed_transfer,tx_state,fee_inputs,at.nHeight+1,native_fees)&&native_fees==1530,
+         "Native signed UTXO fee calculation failed");
+    const PrecomputedTransactionData txdata{signed_transfer};ScriptError script_error;
+    need(VerifyScript(signed_transfer.vin[0].scriptSig,miner,&signed_transfer.vin[0].scriptWitness,
+                      STANDARD_SCRIPT_VERIFY_FLAGS,TransactionSignatureChecker(&signed_transfer,0,funding_value,txdata,MissingDataBehavior::FAIL),&script_error),
+         "Native ordinary input script failed");
+    auto wrong_signature=transfer;wrong_signature.vin[0].scriptWitness.stack[0][0]^=1;
+    const CTransaction bad_transfer{wrong_signature};const PrecomputedTransactionData bad_txdata{bad_transfer};
+    need(!VerifyScript(bad_transfer.vin[0].scriptSig,miner,&bad_transfer.vin[0].scriptWitness,
+                       STANDARD_SCRIPT_VERIFY_FLAGS,TransactionSignatureChecker(&bad_transfer,0,funding_value,bad_txdata,MissingDataBehavior::FAIL),&script_error),
+         "Corrupt native ordinary transaction signature accepted");
+    auto overspend=transfer;overspend.vout.front().nValue=funding_value+1;
+    TxValidationState overspend_state;CAmount overspend_fee{};
+    need(!Consensus::CheckTxInputs(CTransaction{overspend},overspend_state,fee_inputs,at.nHeight+1,overspend_fee),
+         "Native ordinary transaction overspend accepted");
+    CBlock fee_block=paid;fee_block.vtx.push_back(MakeTransactionRef(transfer));CMutableTransaction fee_cb{*paid.vtx.front()};
     fee_cb.vout.front().nValue+=native_fees;fee_block.vtx.front()=MakeTransactionRef(fee_cb);fee_block.hashMerkleRoot=BlockMerkleRoot(fee_block);
     const auto fee_science=VerifyNativeTicketGoldBlock(view,at,history,fee_block,body_budget);
     need(fee_science.block.has_value(),"Fee block lost verified science");
