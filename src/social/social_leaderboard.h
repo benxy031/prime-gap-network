@@ -65,6 +65,16 @@ inline QString decodeLeaderboard(const ReadRequest& request,const QJsonObject& v
   }
 
   for(const auto& item:QList<QPair<QString,Counter*>>{{"tickets_reported",&miner.ticketsReported},{"tickets_validated",&miner.ticketsValidated},{"audits_finalized_valid",&miner.validatedAudits},{"validated_search_positions",&miner.validatedSearchPositions}}){const auto raw=row.value(item.first);if(!raw.isString()||!decimal.match(raw.toString()).hasMatch())return "An exact miner counter is unavailable.";*item.second={raw.toString(),provenance};}
+  const bool rosetteScope=value.value("rosette_counting_unit")=="unique_disclosed_gap_records_per_operator"&&value.value("rosette_history_scope")=="qualified_report_disclosures";
+  const auto counts=row.value("rosettes").toObject();const QStringList tiers{"q","g","s","b","r"};
+  for(int tier=0;tier<5;++tier){
+   auto& reason=miner.rosetteReasons[tier];reason=rosetteScope?QString("No complete recorded-discovery count supplied. No zero inferred."):QString("This Core does not supply the supported recorded-discovery scope.");
+   const auto item=counts.value(tiers[tier]);if(!item.isObject())continue;const auto counter=item.toObject();
+   if(counter.value("complete")!=QJsonValue(true)){if(counter.value("reason").isString())reason=counter.value("reason").toString().left(256);continue;}
+   const auto raw=counter.value("count");if(!rosetteScope||!raw.isString()||!decimal.match(raw.toString()).hasMatch()){reason="Malformed or unsupported recorded-discovery count; no zero inferred.";continue;}
+   auto evidence=provenance;evidence.source="Recorded discoveries; not coin payments · block "+QString::number(height)+" · "+tip;
+   miner.rosettes[tier]={raw.toString(),evidence};reason.clear();
+  }
   const auto last=row.value("last_activity_height").toInteger(-1);if(last<0||last>height)return "Invalid last-activity height.";miner.lastActivityHeight={QString::number(last),provenance};decoded.miners.append(miner);
  }
  if(value.value("more").toBool())decoded.nextCursor=tip+":"+QString::number(next)+(request.window==Window::Day?":"+QString::number(*period.utcStart):QString{});

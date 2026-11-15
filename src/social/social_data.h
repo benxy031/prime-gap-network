@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <QDateTime>
 #include <QRegularExpression>
 #include <QSet>
@@ -90,7 +91,7 @@ inline bool publicLabel(const QString& value){
     for(const auto c:value)if(c.isNull()||c.category()==QChar::Other_Control||c.category()==QChar::Other_Format||c.category()==QChar::Separator_Line||c.category()==QChar::Separator_Paragraph)return false;
     return true;
 }
-struct Miner { QString id, name; Counter acceptedGold, validatedAudits; Activity lastActivity;QString socialMemberId;Counter ticketsReported,ticketsValidated,validatedSearchPositions,lastActivityHeight;std::optional<PublicIdentity> publicIdentity; };
+struct Miner { QString id, name; Counter acceptedGold, validatedAudits; Activity lastActivity;QString socialMemberId;Counter ticketsReported,ticketsValidated,validatedSearchPositions,lastActivityHeight;std::optional<PublicIdentity> publicIdentity;std::array<Counter,5> rosettes;std::array<QString,5> rosetteReasons; };
 struct ReadRequest { Section section; Identity identity; Window window{Window::AllTime}; QString cursor; int limit{100};QString channel; };
 struct SendAvailability {bool allowed{};QString reason;};
 struct ConnectionSummary {QString networkLabel;int connectedPeers{};};
@@ -187,7 +188,7 @@ inline QString validate(const Snapshot& v,const ReadRequest& r,QDateTime now=QDa
                 if(p.operatorId!=m.id||(!p.displayName.isEmpty()&&!publicLabel(p.displayName))||p.signingScripts.size()>8||!validProvenance(p.provenance,r.identity,now))return "Public name identity or provenance invalid.";
                 QSet<QString> scripts;for(const auto& script:p.signingScripts){aliasBytes+=script.size();if(aliasBytes>32768||!publicScript(script)||scripts.contains(script))return "Public signing aliases are invalid or unbounded.";scripts.insert(script);}
             }
-            for(const auto* c:{&m.acceptedGold,&m.validatedAudits,&m.ticketsReported,&m.ticketsValidated,&m.validatedSearchPositions,&m.lastActivityHeight})
+            for(const auto* c:{&m.acceptedGold,&m.validatedAudits,&m.ticketsReported,&m.ticketsValidated,&m.validatedSearchPositions,&m.lastActivityHeight,&m.rosettes[0],&m.rosettes[1],&m.rosettes[2],&m.rosettes[3],&m.rosettes[4]})
                 if(c->value&&(!decimal.match(*c->value).hasMatch()||!validProvenance(c->provenance,r.identity,now)))
                     return "A miner counter lacks valid same-genesis provenance.";
             if(m.lastActivity.value&&(!m.lastActivity.value->isValid()||*m.lastActivity.value>now.addSecs(60)

@@ -83,7 +83,7 @@ protected:
     }
     void paintEvent(QPaintEvent* event)override{
         QHeaderView::paintEvent(event);QPainter p(viewport());QFont f("Segoe UI");f.setPixelSize(11);f.setWeight(QFont::DemiBold);p.setFont(f);p.setPen(QColor("#46666e"));
-        for(const auto& group:QList<QPair<QPair<int,int>,QString>>{{{6,10},"AWARDS"},{{2,3},"TICKETS"}}){const int a=group.first.first,b=group.first.second;const QRect r(sectionViewportPosition(a),4,sectionViewportPosition(b)+sectionSize(b)-sectionViewportPosition(a),20);p.drawText(r,Qt::AlignCenter,group.second);}
+        for(const auto& group:QList<QPair<QPair<int,int>,QString>>{{{6,10},"ROSETTES"},{{2,3},"TICKETS"}}){const int a=group.first.first,b=group.first.second;const QRect r(sectionViewportPosition(a),4,sectionViewportPosition(b)+sectionSize(b)-sectionViewportPosition(a),20);p.drawText(r,Qt::AlignCenter,group.second);}
     }
 };
 class LeaderboardTable final:public QTableWidget {

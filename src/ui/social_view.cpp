@@ -130,7 +130,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             // Presentation only: the current authenticated snapshot supplies no
             // exhaustive per-operator tier totals. Never infer zero/medals.
             const MeritTier tiers[]{MeritTier::Gold,MeritTier::Silver,MeritTier::Bronze,MeritTier::NearMiss};
-            for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium — merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->toolTip());item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Verified per-miner total unavailable; no zero inferred.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,44);item->setSizeHint(QSize(44,58));}
+            for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium — merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->toolTip());item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Recorded discoveries from validated reports; not coin payments. Q is independent of G/S/B/R.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,44);item->setSizeHint(QSize(44,58));}
             for(int n=0;n<5;++n)header->moveSection(header->visualIndex(6+n),1+n);
             header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){if(col>=6)return;sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
             p.ranking->verticalHeader()->hide();p.ranking->setEditTriggers(QAbstractItemView::NoEditTriggers);p.ranking->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -486,7 +486,10 @@ void SocialView::renderMiners(){
                 const bool present=bool(counter(m,col).value);
                 info=present?"Exact value: "+raw+"\n"+source.source+"\nObserved: "+stamp(source.observedUtc)+"\nGenesis: "+source.genesis:"Unavailable: no authenticated value supplied. No zero inferred.";}
             item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}
-        for(int col=6;col<11;++col){auto* item=new QTableWidgetItem(QString::fromUtf8("—"));item->setTextAlignment(Qt::AlignCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);item->setToolTip("Unavailable: current authenticated projection has no exhaustive per-miner "+p.ranking->horizontalHeaderItem(col)->text()+" total. No zero or award inferred.");item->setData(Qt::AccessibleDescriptionRole,item->toolTip());p.ranking->setItem(row,col,item);}}
+        for(int col=6;col<11;++col){const auto& counted=m.rosettes[col-6];const auto raw=counted.value.value_or(QString::fromUtf8("—"));auto* item=new QTableWidgetItem(raw);item->setTextAlignment(Qt::AlignCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);
+          const QString scope="Recorded discoveries from validated reports; not coin payments. Unique disclosed gaps per operator; only disclosed records (V1 best list limited to100/report). Q is independent of G/S/B/R.";
+          const QString info=counted.value?("Exact recorded count: "+raw+"\n"+scope+"\n"+counted.provenance.source+"\nGenesis: "+counted.provenance.genesis):("Unavailable: "+m.rosetteReasons[col-6]+"\n"+scope);
+          item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}}
     filter(3);p.ranking->updateGeometry();p.dataSlot->updateGeometry();
 }
 void SocialView::formatChat(QString tag){auto* editor=static_cast<SocialComposeEdit*>(pages_[0].draft);if(editor->isEnabled())editor->toggle(tag);}
