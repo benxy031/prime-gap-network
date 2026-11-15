@@ -1,0 +1,387 @@
+name: UI155 complete source qualification and UI-only runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/horizon-ui155-20261115]
+permissions:
+  contents: read
+concurrency:
+  group: ui155-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: 0e2f6470c66b8b35db75b4be44e3b67b42524c22
+
+      - name: Install the UCRT64 build dependencies
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Install pinned updater test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          if ($LASTEXITCODE -ne 0) { throw "Python test environment creation failed" }
+          & ./.ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned updater test dependencies failed" }
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': '0e2f6470c66b8b35db75b4be44e3b67b42524c22', 'tree': 'b53fb49f22f241bc49e856c99928c22859022e7c', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f26141486f56c3925ce5f2c19ab4a602be33b4f31090a9d7952a758bc420d2e2'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '47aa1d2e0f4bfe0ef22da1b9c18416bdb4d802e090c096d1d15a30709e1b777f'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'ea35daf37a226987a6d2f63655f5a575da21890ec3683afd72fb1a6e874fb5e7'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/component_versions.json', 'patched_sha256': '6d813a3e2ae12b5327ddd0477a05286749d799bed97ff54fc3474853f78c5d03'}]}
+          git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          sdk=Path(os.environ['PGN_UI_SDK'])
+          for tool in ['g++.exe','ninja.exe','objdump.exe','windeployqt.exe']:
+              assert (sdk/'bin'/tool).is_file(),tool
+          qmake=next(p for p in [sdk/'bin/qmake6.exe',sdk/'bin/qmake.exe']if p.is_file())
+          assert subprocess.check_output([str(qmake),'-query','QT_VERSION'],text=True).startswith('6.')
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure a clean Release tree
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+
+      - name: Build every default source target
+        id: ui_build
+        run: |
+          pgn_build_jobs="$(nproc)"
+          if [ "$pgn_build_jobs" -gt 4 ]; then pgn_build_jobs=4; fi
+          printf 'Build workers: %s\n' "$pgn_build_jobs"
+          cmake --build build-ci --parallel "$pgn_build_jobs"
+
+      - name: Collect exact UI155 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_UI_COLLECTOR'
+          """Collect only the compiled UI, matching Qt runtime and native DLL closure."""
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          
+          ROOT=Path(__file__).resolve().parent
+          SDK=Path(os.environ['PGN_UI_SDK'])
+          BUILD=ROOT/'build-ci'
+          SOURCE=ROOT
+          STAGE=ROOT/'ui-stage'
+          sha=lambda path:hashlib.file_digest(path.open('rb'),'sha256').hexdigest()
+          
+          def main():
+              assert shutil.disk_usage(ROOT).free>2*1024**3,'Insufficient disk reserve before collection'
+              frozen={'source': '0e2f6470c66b8b35db75b4be44e3b67b42524c22', 'tree': 'b53fb49f22f241bc49e856c99928c22859022e7c', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f26141486f56c3925ce5f2c19ab4a602be33b4f31090a9d7952a758bc420d2e2'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '47aa1d2e0f4bfe0ef22da1b9c18416bdb4d802e090c096d1d15a30709e1b777f'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'ea35daf37a226987a6d2f63655f5a575da21890ec3683afd72fb1a6e874fb5e7'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/component_versions.json', 'patched_sha256': '6d813a3e2ae12b5327ddd0477a05286749d799bed97ff54fc3474853f78c5d03'}]}
+              git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+              assert Path(git).is_file(), 'Verified Git executable required'
+              assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==frozen['source']
+              for row in frozen['verified_files']:
+                  assert sha(SOURCE/row['path'])==row['patched_sha256'],row['path']
+              STAGE.mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'PGN-Horizon.exe',STAGE/'PGN-Horizon.exe')
+              shutil.copy2(BUILD/'WebView2Loader.dll',STAGE/'WebView2Loader.dll')
+              # This plugin is an explicit dependency of the real application target;
+              # static import scanning alone does not discover Qt's SQL driver loading.
+              (STAGE/'sqldrivers').mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'sqldrivers/qsqlite.dll',STAGE/'sqldrivers/qsqlite.dll')
+              (STAGE/'assets').mkdir(exist_ok=True)
+              resource=BUILD/'assets/audit-animation.rcc';target=STAGE/'assets/audit-animation.rcc'
+              if not target.exists():
+                  # Both aliases are immutable outputs owned by this bounded build.
+                  # Share the 79 MB resource without aliasing any SDK or user file.
+                  try:os.link(resource,target)
+                  except OSError:shutil.copy2(resource,target)
+              else:assert sha(resource)==sha(target),'Staged audit resource changed'
+              environment=dict(os.environ,PATH=str(SDK/'bin')+';'+os.environ['PATH'])
+              command=[str(SDK/'bin/windeployqt.exe'),'--release','--no-translations',
+                       '--compiler-runtime',str(STAGE/'PGN-Horizon.exe')]
+              with (ROOT/'windeployqt.log').open('w',encoding='utf-8')as output:
+                  subprocess.run(command,env=environment,stdout=output,stderr=subprocess.STDOUT,check=True)
+              sdk_names={p.name.casefold():p for p in (SDK/'bin').glob('*.dll')}
+              system=Path(os.environ['SystemRoot'])/'System32'
+              visited=set();imports={};copied={};unresolved=[]
+              while True:
+                  pending=[p for p in STAGE.rglob('*')if p.suffix.lower()in ('.exe','.dll')and p not in visited]
+                  if not pending:break
+                  for image in pending:
+                      visited.add(image)
+                      detail=subprocess.check_output([str(SDK/'bin/objdump.exe'),'-p',str(image)],env=environment,text=True,errors='replace')
+                      names=re.findall(r'^\s*DLL Name:\s*(\S+)\s*$',detail,re.M)
+                      imports[image.relative_to(STAGE).as_posix()]=names
+                      for name in names:
+                          key=name.casefold()
+                          local={p.name.casefold()for folder in (STAGE,image.parent)for p in folder.glob('*.dll')}
+                          if key in local:continue
+                          if key in sdk_names:
+                              origin=sdk_names[key];shutil.copy2(origin,STAGE/origin.name);copied[origin.name]=str(origin)
+                          elif (system/name).is_file()or key.startswith(('api-ms-win-','ext-ms-win-')):continue
+                          else:unresolved.append(dict(image=str(image.relative_to(STAGE)),dependency=name))
+              if unresolved:raise RuntimeError('Unresolved native imports: '+json.dumps(unresolved))
+              assert not(STAGE/'Core').exists()and not(STAGE/'EngineRuntime').exists(),'UI-only artifact required'
+              binaries=[]
+              for path in sorted(STAGE.rglob('*')):
+                  if not path.is_file():continue
+                  relative=path.relative_to(STAGE).as_posix();origin=None
+                  for candidate in (SDK/'bin'/path.name,SDK/'share/qt6/plugins'/relative):
+                      if candidate.is_file()and sha(candidate)==sha(path):origin=str(candidate);break
+                  binaries.append(dict(path=relative,bytes=path.stat().st_size,sha256=sha(path),sdk_origin=origin))
+              inputs=set()
+              process=subprocess.Popen([str(SDK/'bin/ninja.exe'),'-t','deps'],cwd=BUILD,
+                                       env=environment,stdout=subprocess.PIPE,text=True,errors='replace')
+              for line in process.stdout:
+                  if not line.startswith('    '):continue
+                  name=line.strip().replace('\\','/')
+                  dependency=Path(name)
+                  if not dependency.is_absolute():dependency=(BUILD/dependency).resolve()
+                  if dependency.is_relative_to(SOURCE):
+                      relative=dependency.relative_to(SOURCE).as_posix()
+                      if (SOURCE/relative).is_file():inputs.add(relative)
+              if process.wait()!=0:raise RuntimeError('Cannot read observed compilation dependencies')
+              inputs.update(['CMakeLists.txt','tools/component_versions.json','assets/pgn.qrc','assets/audit-animation.qrc'])
+              observed=[dict(path=name,bytes=(SOURCE/name).stat().st_size,sha256=sha(SOURCE/name))for name in sorted(inputs)]
+              result=dict(schema='PGN_WINDOWS_UI_BUILD_V1',source=frozen['source'],
+                          qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),
+                          source_tree=frozen['tree'],
+                          base_product_commit='1ea788c04d55f0bb06810ac8ff8c5961e0f0872d',
+                          ui_version='2026.11.15.155',target='PGN-Horizon',compiler=subprocess.check_output([str(SDK/'bin/g++.exe'),'--version'],text=True).splitlines()[0],qt_version=subprocess.check_output([str(next(p for p in (SDK/'bin/qmake6.exe',SDK/'bin/qmake.exe')if p.is_file())),'-query','QT_VERSION'],text=True).strip(),
+                          flags=next(line for line in (BUILD/'CMakeCache.txt').read_text().splitlines()if line.startswith('CMAKE_CXX_FLAGS_RELEASE:')),parallelism=min(os.cpu_count()or 1,4),
+                          observed_compilation_scope='All default source targets and complete registered ctest suite',
+                          sources=observed,files=binaries,imports=imports,extra_sdk_copies=copied,
+                          unresolved_native_imports=unresolved,stage=str(STAGE),
+                          live_processes_launched=False,network_requested=False,core_built=False,gpu_host_built=False,
+                          disk_free_bytes=shutil.disk_usage(ROOT).free)
+              (ROOT/'WINDOWS-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
+              assert shutil.disk_usage(ROOT).free>=1.5*1024**3,'Disk reserve breached'
+              print(json.dumps(dict(PASS=True,stage=str(STAGE),files=len(binaries),sources=len(observed),
+                                   executable_sha256=sha(STAGE/'PGN-Horizon.exe'),bytes=sum(x['bytes']for x in binaries))))
+          
+          if __name__=='__main__':main()
+          
+          PGN_UI_COLLECTOR
+      - name: Run the isolated registered tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
+
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/Scripts/python.exe -I tests/test_late_cycle_completion.py
+          .ci-python/Scripts/python.exe -I tests/test_audit_reveal_batch.py
+          .ci-python/Scripts/python.exe -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual full-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/Scripts/python.exe - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('WINDOWS-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['full_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success'
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui155-windows.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui155-windows-${{ github.run_id }}
+          path: ui155-windows.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0e2f6470c66b8b35db75b4be44e3b67b42524c22
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv
+      - name: Install pinned updater test dependencies
+        run: |
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Record the actual toolchain
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          dpkg-query -W qt6-base-dev libgmp-dev libsqlite3-dev
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          .ci-python/bin/python - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': '0e2f6470c66b8b35db75b4be44e3b67b42524c22', 'tree': 'b53fb49f22f241bc49e856c99928c22859022e7c', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f26141486f56c3925ce5f2c19ab4a602be33b4f31090a9d7952a758bc420d2e2'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '47aa1d2e0f4bfe0ef22da1b9c18416bdb4d802e090c096d1d15a30709e1b777f'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'ea35daf37a226987a6d2f63655f5a575da21890ec3683afd72fb1a6e874fb5e7'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/component_versions.json', 'patched_sha256': '6d813a3e2ae12b5327ddd0477a05286749d799bed97ff54fc3474853f78c5d03'}]}
+          git='git'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          for tool in ['c++','ninja','ldd','qmake6']:assert shutil.which(tool),tool
+          for plugin in ['platforms/libqxcb.so','sqldrivers/libqsqlite.so']:assert (Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')/plugin).is_file(),plugin
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure from a fresh checkout
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+      - name: Build every default target
+        id: ui_build
+        run: cmake --build build-ci --parallel 2
+      - name: Collect exact UI155 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          .ci-python/bin/python - <<'PGN_UI_COLLECTOR'
+          
+          from pathlib import Path
+          import hashlib,json,os,re,shutil,subprocess,tarfile
+          ROOT=Path.cwd();BUILD=ROOT/'build-ci';STAGE=ROOT/'ui-stage';STAGE.mkdir()
+          FROZEN={'source': '0e2f6470c66b8b35db75b4be44e3b67b42524c22', 'tree': 'b53fb49f22f241bc49e856c99928c22859022e7c', 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'f26141486f56c3925ce5f2c19ab4a602be33b4f31090a9d7952a758bc420d2e2'}, {'path': 'src/ui/component_versions_dialog.cpp', 'patched_sha256': '7dd40e2d61050696e224d376481e12878c09ae45e871f0482e65b575cb7d779d'}, {'path': 'src/ui/quadrigantium_rosette.h', 'patched_sha256': '3ec917f7d0b52e5aea1e392d57a2b13e6b87469371fab585a9f5891d7a89901c'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '47aa1d2e0f4bfe0ef22da1b9c18416bdb4d802e090c096d1d15a30709e1b777f'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '8710cf994d6c906d1a5a088f96dbd6dc570c9e4a8d4023b72defeb3929f1f149'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': 'ac01c0d5486cf7265e12cbf709218063e963a2de19ce365aac4f4e4785f95aa4'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': 'e2844c19a42fc28ea6d039686d444ef6c04209297bd2421ffb1e6fcc0bad6164'}, {'path': 'src/wallet/installed_core_binding.h', 'patched_sha256': '61eb5e6f2e9a544df074fe4f97592b54dbb4acc409cab93307d7f2e83505a58b'}, {'path': 'src/wallet/setup_selection.h', 'patched_sha256': '965a5d12d4a775e1d6238704ea3f76112cb41e383c3859e98eb744715fca77c3'}, {'path': 'tests/installed_core_binding_test.cpp', 'patched_sha256': '34ef003c7082fc8acf558b5492fe17fc39f122e1ca48dc87a2e486eaabc242d2'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': 'ea35daf37a226987a6d2f63655f5a575da21890ec3683afd72fb1a6e874fb5e7'}, {'path': 'tests/wallet_first_run_network_test.cpp', 'patched_sha256': '4efa4b455ee838e7584d7a7b8c3c1aa5ace1c5d7b65446ef9b3deb181887df2c'}, {'path': 'tools/component_versions.json', 'patched_sha256': '6d813a3e2ae12b5327ddd0477a05286749d799bed97ff54fc3474853f78c5d03'}]}
+          def sha(p):
+              with p.open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          for row in FROZEN['verified_files']:assert sha(ROOT/row['path'])==row['patched_sha256'],row['path']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==FROZEN['source']
+          shutil.copy2(BUILD/'PGN-Horizon',STAGE/'PGN-Horizon')
+          # CMake declares this WebView2 deployment on Windows only.
+          assert not (BUILD/'assets/audit-animation.rcc').exists(), 'Unexpected Linux RCC; recheck declared deployment'
+          plugin_root=Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')
+          for group,names in [('platforms',['libqxcb.so']),('sqldrivers',['libqsqlite.so'])]:
+              for name in names:
+                  target=STAGE/'plugins'/group/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(plugin_root/group/name,target)
+          (STAGE/'lib').mkdir();imports={};seen=set();origins={};system={}
+          base_system=re.compile(r'^(ld-linux|libc[.]|libm[.]|libdl[.]|libpthread[.]|librt[.]|libresolv[.]|libutil[.])')
+          pending=[STAGE/'PGN-Horizon',*sorted((STAGE/'plugins').rglob('*.so'))]
+          while pending:
+              image=pending.pop()
+              if image in seen:continue
+              seen.add(image);raw=subprocess.check_output(['ldd',str(image)],text=True);assert 'not found'not in raw,raw
+              imports[image.relative_to(STAGE).as_posix()]=raw
+              for name,path in re.findall(r'\s+(\S+)\s+=>\s+(/\S+)\s+\(',raw):
+                  if base_system.match(name):system[name]=path;continue
+                  target=STAGE/'lib'/name
+                  if target.exists():assert sha(target)==sha(Path(path));continue
+                  shutil.copy2(Path(path).resolve(),target);origins[target.relative_to(STAGE).as_posix()]=str(Path(path).resolve());pending.append(target)
+          (STAGE/'qt.conf').write_text('[Paths]\nPlugins=plugins\n')
+          files=[dict(path=p.relative_to(STAGE).as_posix(),bytes=p.stat().st_size,sha256=sha(p),origin=origins.get(p.relative_to(STAGE).as_posix()))for p in sorted(STAGE.rglob('*'))if p.is_file()]
+          result=dict(schema='PGN_LINUX_UI_BUILD_V1',qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],qt_version=subprocess.check_output(['qmake6','-query','QT_VERSION'],text=True).strip(),source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.15.155',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
+          (ROOT/'LINUX-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(dict(PASS=True,source=FROZEN['source'],files=len(files),executable_sha256=sha(STAGE/'PGN-Horizon'))))
+          
+          PGN_UI_COLLECTOR
+      - name: Run registered isolated tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: ctest --test-dir build-ci --output-on-failure --timeout 180 -j2
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/bin/python -I tests/test_late_cycle_completion.py
+          .ci-python/bin/python -I tests/test_audit_reveal_batch.py
+          .ci-python/bin/python -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ubuntu-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual full-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/bin/python - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('LINUX-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['full_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success'
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui155-ubuntu.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui155-ubuntu-${{ github.run_id }}
+          path: ui155-ubuntu.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
