@@ -14,6 +14,7 @@
 #include <map>
 #include <pgn/component_version.h>
 #include <pgn/social.h>
+#include <pgn/social_access.h>
 #include <pgn/social_storage.h>
 #include <random.h>
 #include <set>
@@ -274,6 +275,7 @@ class Service {
   std::vector<std::thread> workers;
   std::deque<Record> records;
   std::unique_ptr<CDBWrapper> database;
+  std::unique_ptr<AccessStore> access;
   std::map<std::string, std::string> proof_cache;
   std::set<std::string> nonces;
   std::atomic<uint64_t> storage_batches{0}, storage_logical_bytes{0};
@@ -365,6 +367,8 @@ class Service {
     if (loader) {
       try {
         Load();
+        access=std::make_unique<AccessStore>(directory,[this](const std::string& event)->std::optional<moderation::TargetContext>{std::lock_guard guard(data_mutex);for(const auto& record:records)if(record.event==event&&record.message.starts_with("PGN/SOCIAL/EVENT/1\n")){UniValue body;if(body.read(record.message.substr(record.message.find('\n')+1)))return moderation::TargetContext{Genesis(),body["channel"].get_str(),event};}return {};});
+        access->Load();
       } catch (const dbwrapper_error &) {
         {
           std::lock_guard guard(data_mutex);
@@ -471,6 +475,11 @@ class Service {
       return false;
     link->output.push_back(bytes);
     return true;
+  }
+  void AskAccess(const std::shared_ptr<Link>& link) {
+    if(!link->access_capable||!access)return;
+    const auto root=access->Root();if(root.empty())return;
+    auto frame=Frame("access_get");frame.pushKV("root_id",root);frame.pushKV("cursor",link->remote_access_cursor);Output(link,std::move(frame));
   }
   void Ask(const std::shared_ptr<Link> &link) {
     auto frame = Frame("get");
@@ -673,6 +682,7 @@ class Service {
     private_migration_floor_ms = migration;
   }
   void Commit(const std::string &message, const std::string &signature) {
+    if(IsAccessProof(message)){std::lock_guard serial(commit_mutex);if(!access)throw std::runtime_error("Moderation store loading/unavailable");access->Commit(message,signature);return;}
     const auto key = Hash("PGN/SOCIAL/PROOF-ID/1\n" + message),
                context = Hash(message + "\n" + signature);
     bool retained = false;
@@ -772,11 +782,25 @@ class Service {
           String(frame, "genesis") != Genesis())
         return;
       link->capable = true;
-      Ask(link);
+      link->access_capable=frame.exists("moderation_v")&&frame["moderation_v"].isNum()&&frame["moderation_v"].getInt<int>()==1;
+      Ask(link);AskAccess(link);
       return;
     }
     if (!link->capable)
       return;
+    if(op=="access_get"&&link->access_capable&&access){
+      if(String(frame,"root_id")!=access->Root()||access->Root().empty())return;
+      const auto page=access->Read(frame["cursor"].getInt<uint64_t>(),1);
+      if(!page["available"].get_bool())return;
+      if(!page["records"].empty()){auto event=Frame("access_event");event.pushKV("root_id",access->Root());event.pushKV("canonical_message",page["records"][0]["canonical_message"]);event.pushKV("signature",page["records"][0]["signature"]);if(!Output(link,std::move(event)))return;}
+      auto end=Frame("access_end");end.pushKV("root_id",access->Root());for(const char* key:{"next_cursor","more","reset"})end.pushKV(key,page[key]);Output(link,std::move(end));return;
+    }
+    if(op=="access_event"&&link->access_capable&&access){
+      if(String(frame,"root_id")==access->Root()&&!access->Root().empty())Commit(String(frame,"canonical_message"),String(frame,"signature"));return;
+    }
+    if(op=="access_end"&&link->access_capable&&access){
+      if(String(frame,"root_id")!=access->Root()||access->Root().empty())return;link->remote_access_cursor=frame["next_cursor"].getInt<uint64_t>();if(frame["more"].get_bool())AskAccess(link);return;
+    }
     if (op == "get") {
       const auto page = Read(String(frame, "generation"),
                              frame["cursor"].getInt<uint64_t>(), 1);
@@ -841,6 +865,7 @@ public:
     auto cap = Frame("cap");
     cap.pushKV("v", 1);
     cap.pushKV("genesis", Genesis());
+    cap.pushKV("moderation_v",1);
     Output(link, std::move(cap));
     return link;
   }
@@ -857,7 +882,7 @@ public:
     if (!Enqueue(link, [this, link] {
           link->tick_pending = false;
           if (Now() - link->last_request_ms >= 1000)
-            Ask(link);
+            {Ask(link);AskAccess(link);}
         }))
       link->tick_pending = false;
   }
@@ -866,11 +891,12 @@ public:
     if (message.size() > MAX_FRAME || signature.size() > 512)
       return Status("rejected", {}, "Bounded Social proof required");
     const auto proof = Hash(message + "\n" + signature);
+    std::string revision;if(IsAccessProof(message)&&loaded&&access){const auto state=access->Read(0,1);revision=state["policy_id"].isStr()?state["policy_id"].get_str():"unavailable";if(state["conflicted"].isBool()&&state["conflicted"].get_bool())revision+="/conflict";}
     {
       std::lock_guard guard(data_mutex);
       if (!failure.empty())
         return Status("uncertain", proof, failure);
-      if (statuses.contains(proof))
+      if (statuses.contains(proof)&&(!IsAccessProof(message)||(statuses.at(proof)["access_revision"].isStr()&&statuses.at(proof)["access_revision"].get_str()==revision)))
         return statuses.at(proof);
       if (submitting.contains(proof))
         return Status("queued", proof);
@@ -894,6 +920,7 @@ public:
           } catch (const std::exception &error) {
             value = Status("rejected", proof, error.what());
           }
+          if(IsAccessProof(message)&&access){const auto state=access->Read(0,1);std::string revision=state["policy_id"].isStr()?state["policy_id"].get_str():"unavailable";if(state["conflicted"].isBool()&&state["conflicted"].get_bool())revision+="/conflict";value.pushKV("access_revision",revision);}
           std::lock_guard guard(data_mutex);
           submitting.erase(proof);
           if (statuses.size() >= 128)
@@ -910,7 +937,7 @@ public:
   UniValue Read(const std::string &requested, uint64_t cursor, unsigned limit) {
     if (limit < 1 || limit > 50)
       throw std::runtime_error("Social page must contain1through50 records");
-    std::lock_guard guard(data_mutex);
+    std::unique_lock guard(data_mutex);
     auto out = Obj();
     out.pushKV("genesis", Genesis());
     out.pushKV("generation", generation);
@@ -944,7 +971,9 @@ public:
       bytes += r.bytes;
       next = r.seq;
     }
-    out.pushKV("records", array);
+    guard.unlock();
+    UniValue projected(UniValue::VARR);for(auto item:array.getValues()){const auto message=item["canonical_message"].get_str();if(access&&message.starts_with("PGN/SOCIAL/EVENT/1\n")){UniValue body;if(body.read(message.substr(message.find('\n')+1)))item.pushKV("moderation_hidden",access->Hidden(body["channel"].get_str(),body["event_id"].get_str()));}projected.push_back(item);}
+    out.pushKV("records", projected);
     out.pushKV("next_cursor", next);
     out.pushKV("more", more);
     out.pushKV("reset", reset);
@@ -953,6 +982,7 @@ public:
                "bounded16MiB/2000records; oldest records may be pruned");
     return out;
   }
+  UniValue AccessInfo(uint64_t cursor,unsigned limit){if(!loaded||!access)throw std::runtime_error("Moderation store loading");return access->Read(cursor,limit);}
   UniValue PeerInfo() {
     auto out = Obj();
     out.pushKV("genesis", Genesis());
@@ -1047,6 +1077,7 @@ UniValue Events(const std::string &generation, uint64_t cursor,
     throw std::runtime_error("Core Social relay is disabled");
   return Get().Read(generation, cursor, limit);
 }
+UniValue Access(uint64_t cursor,unsigned limit){if(!Enabled())throw std::runtime_error("Core Social relay disabled");return Get().AccessInfo(cursor,limit);}
 UniValue Peers() {
   if (!Enabled()) {
     auto out = Obj();

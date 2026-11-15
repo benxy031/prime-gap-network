@@ -1,0 +1,86 @@
+name: Private Social223 moderation qualification
+on:
+  push:
+    branches: [qualification/social223-private]
+permissions:
+  contents: read
+concurrency:
+  group: social223-private-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-private:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Preserve exact source bytes
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-libevent
+      - name: Configure exact Core20 plus Social-only private overlay
+        run: |
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_BITCOIN_BIN=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF
+      - name: Build at Idle priority, one compiler, bounded2.5GiB
+        id: build
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          qa_python="$(cygpath -u "$PYTHON_EXPLICIT")"
+          qa_cmake="$(cygpath -w "$(command -v cmake)")"
+          qa_cwd="$(cygpath -w "$PWD")"
+          "$qa_python" -B tools/social223_bounded_windows.py --cwd "$qa_cwd" --receipt "$qa_cwd/build-resource.json" --timeout 2300 -- "$qa_cmake" --build build-native --parallel 1 --target riecoind > build-private.log 2>&1
+      - name: Collect executable and actual DLL closure before tests
+        if: steps.build.outcome == 'success'
+        run: |
+          mkdir -p private-social223/Core
+          cp build-native/bin/riecoind.exe private-social223/Core/pgn-core.exe
+          ldd build-native/bin/riecoind.exe > private-social223/dependencies.txt
+          if grep -q 'not found' private-social223/dependencies.txt; then exit 1; fi
+          awk '/=> \/ucrt64\/bin\// {print $3}' private-social223/dependencies.txt | while read -r dep; do cp "$dep" private-social223/Core/; done
+      - name: Two real closed-network peers, BIP322, native CDB and ACL
+        id: test
+        if: steps.build.outcome == 'success'
+        shell: pwsh
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          $env:Path="$env:SystemRoot\System32;$env:SystemRoot"
+          & $env:PYTHON_EXPLICIT -B tools/social223_bounded_windows.py --cwd "$pwd" --receipt "$pwd/test-resource.json" --timeout 300 -- $env:PYTHON_EXPLICIT -B tests/social_moderation_native.py --core private-social223/Core/pgn-core.exe --out private-social223/private-native-test
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+      - name: Compact immutable source/product receipts; never upload wallets
+        if: always()
+        shell: pwsh
+        env:
+          PYTHON_EXPLICIT: ${{ steps.python.outputs.python-path }}
+        run: |
+          & $env:PYTHON_EXPLICIT -B tools/collect_social223.py --build-outcome '${{ steps.build.outcome }}' --test-outcome '${{ steps.test.outcome }}'
+          if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: social223-private-native-windows
+          path: private-social223-delivery
+          if-no-files-found: error
+          retention-days: 7

@@ -22,7 +22,8 @@ struct Link {
   std::deque<std::string> output;
   // Accessed only by the single active Social job for this link.
   std::string remote_generation;
-  uint64_t remote_cursor{};
+  uint64_t remote_cursor{}, remote_access_cursor{};
+  bool access_capable{};
   int64_t last_request_ms{};
 };
 bool Enabled();
@@ -37,5 +38,6 @@ UniValue Submit(const std::string &canonical_message,
                 const std::string &signature);
 UniValue Events(const std::string &generation, uint64_t cursor, unsigned limit);
 UniValue Peers();
+UniValue Access(uint64_t cursor,unsigned limit);
 } // namespace pgn::social
 #endif
