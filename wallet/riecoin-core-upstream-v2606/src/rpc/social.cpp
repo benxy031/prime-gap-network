@@ -1,6 +1,7 @@
 // Copyright (c) 2026 The PGN developers
 // Distributed under the MIT software license; see COPYING.
 #include <pgn/social.h>
+#include <pgn/social_identity_rpc.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
@@ -80,11 +81,14 @@ RPCMethod getsocialpeers() {
         return pgn::social::Peers();
       }};
 }
+RPCMethod getsocialaccess(){return RPCMethod{"getsocialaccess","Read private signed moderator policy proofs and projection. No username grants authority.",{{"cursor",RPCArg::Type::NUM,RPCArg::Default{0},"Last authority-journal sequence"},{"limit",RPCArg::Type::NUM,RPCArg::Default{1},"One through10, also byte bounded"}},RPCResult{RPCResult::Type::OBJ_DYN,"","Signed authority state",{{RPCResult::Type::ANY,"field","Context and exact proofs"}}},RPCExamples{""},[](const RPCMethod&,const JSONRPCRequest& request)->UniValue{const auto cursor=request.params[0].isNull()?0:request.params[0].getInt<int64_t>();const auto limit=request.params[1].isNull()?1:request.params[1].getInt<int>();if(cursor<0||limit<1||limit>10)throw JSONRPCError(RPC_INVALID_PARAMETER,"Bounded moderator page required");try{return pgn::social::Access(uint64_t(cursor),unsigned(limit));}catch(const std::exception& error){throw JSONRPCError(RPC_MISC_ERROR,error.what());}}};}
 } // namespace
 void RegisterPgnSocialRPCCommands(CRPCTable &table) {
+  RegisterPgnSocialIdentityRPCCommands(table);
   static const CRPCCommand commands[]{{"social", &submitsocialevent},
                                       {"social", &getsocialevents},
-                                      {"social", &getsocialpeers}};
+                                      {"social", &getsocialpeers},
+                                      {"social", &getsocialaccess}};
   for (const auto &command : commands)
     table.appendCommand(command.name, &command);
 }

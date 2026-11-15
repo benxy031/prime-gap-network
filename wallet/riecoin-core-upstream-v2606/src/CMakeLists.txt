@@ -219,6 +219,10 @@ add_library(riecoin_node STATIC EXCLUDE_FROM_ALL
   net.cpp
   net_processing.cpp
   pgn/social.cpp
+  pgn/social_moderation.cpp
+  pgn/social_policy.cpp
+  pgn/social_access.cpp
+  pgn/social_identity_rpc.cpp
   netgroup.cpp
   node/abort.cpp
   node/blockmanager_args.cpp
@@ -544,3 +548,25 @@ target_link_libraries(pgn-native-leaderboard-test PRIVATE core_interface riecoin
 
 add_executable(pgn-native-epoch3-reset-test EXCLUDE_FROM_ALL pgn/epoch3_reset_test.cpp)
 target_link_libraries(pgn-native-epoch3-reset-test PRIVATE core_interface riecoin_node univalue)
+
+# Synthetic Social qualification bootstrap absent from production binaries.
+option(PGN_SOCIAL_PRIVATE_QUALIFICATION "Compile closed-loopback Social qualification bootstrap (never ship)" OFF)
+if(PGN_SOCIAL_PRIVATE_QUALIFICATION)
+  set_property(SOURCE pgn/social_access.cpp APPEND PROPERTY COMPILE_DEFINITIONS PGN_SOCIAL_PRIVATE_QUALIFICATION=1)
+endif()
+
+add_executable(pgn-social-committed-identity-test EXCLUDE_FROM_ALL pgn/social_identity_committed_test.cpp)
+target_link_libraries(pgn-social-committed-identity-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-committed-identity-test PRIVATE -UNDEBUG)
+
+add_executable(pgn-social-identity-index-test EXCLUDE_FROM_ALL pgn/social_identity_index_test.cpp)
+target_link_libraries(pgn-social-identity-index-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-identity-index-test PRIVATE -UNDEBUG)
+
+add_executable(pgn-social-identity-target-test EXCLUDE_FROM_ALL pgn/social_identity_target_test.cpp)
+target_link_libraries(pgn-social-identity-target-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-identity-target-test PRIVATE -UNDEBUG)
+
+add_executable(pgn-social-identity-batch-test EXCLUDE_FROM_ALL pgn/social_identity_batch_test.cpp)
+target_link_libraries(pgn-social-identity-batch-test PRIVATE core_interface riecoin_node univalue)
+target_compile_options(pgn-social-identity-batch-test PRIVATE -UNDEBUG)

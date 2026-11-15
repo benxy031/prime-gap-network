@@ -11,6 +11,7 @@
 #include <pgn/rpc_public_attribution.h>
 #include <pgn/native_network_metrics.h>
 #include <pgn/native_leaderboard.h>
+#include <pgn/social_identity_snapshot.h>
 #include <pgn/leaderboard_snapshot_cache.h>
 #include <pgn/audit_activity_selection.h>
 #include <pgn/ticket_atlas_projection.h>
@@ -878,6 +879,11 @@ RPCMethod getpgnnetworkmetrics(){
  }};
 }
 
+}
+std::shared_ptr<const pgn::core::NativeLeaderboardSnapshot>
+pgn::core::ReadNativeSocialIdentitySnapshot(ChainstateManager& manager)
+{
+    return ReadLeaderboardSnapshot(manager, std::nullopt);
 }
 void RegisterPgnNativeRPCCommands(CRPCTable& table){
  static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};

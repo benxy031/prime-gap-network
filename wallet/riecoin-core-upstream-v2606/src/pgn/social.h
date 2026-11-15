@@ -16,19 +16,21 @@ inline constexpr size_t MAX_FRAME = 24576;
 // A PGN transport link is not a wallet identity or moderator capability.
 struct Link {
   const int64_t id;
-  explicit Link(int64_t node) : id(node) {}
+  const bool local_transport;
+  explicit Link(int64_t node,bool local=false) : id(node),local_transport(local) {}
   std::atomic<bool> closed{false}, capable{false}, tick_pending{false};
   std::mutex output_mutex;
   std::deque<std::string> output;
   // Accessed only by the single active Social job for this link.
   std::string remote_generation;
-  uint64_t remote_cursor{};
+  uint64_t remote_cursor{}, remote_access_cursor{};
+  bool access_capable{};
   int64_t last_request_ms{};
 };
 bool Enabled();
 void Start();
 void Shutdown();
-std::shared_ptr<Link> Open(int64_t node);
+std::shared_ptr<Link> Open(int64_t node,bool loopback=false);
 void Close(const std::shared_ptr<Link> &);
 bool Receive(const std::shared_ptr<Link> &, std::string bounded_frame);
 void Tick(const std::shared_ptr<Link> &);
@@ -37,5 +39,6 @@ UniValue Submit(const std::string &canonical_message,
                 const std::string &signature);
 UniValue Events(const std::string &generation, uint64_t cursor, unsigned limit);
 UniValue Peers();
+UniValue Access(uint64_t cursor,unsigned limit);
 } // namespace pgn::social
 #endif
