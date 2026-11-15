@@ -53,9 +53,21 @@ int main(int argc,char** argv){
   render(first,"captures/preparation-first.png");
   check(rail.property("pgn_ticket_progress_scope").toString()=="pre_ticket_audit","Actual widget did not select preparation state");
   check(!rail.property("pgn_ticket_cycle_fraction").isValid(),"Preparation published an overall ticket fraction");
+
+  for(const auto& state:QStringList{"Paused","Stopping","Completing audits","Report ready","Waiting for connection","Waiting for next ticket"}){
+   auto controlled=first;controlled["phase"]=state;rail.present(controlled);app.processEvents();
+   QImage picture(rail.size(),QImage::Format_ARGB32_Premultiplied);picture.fill(QColor("#03151b"));rail.render(&picture);
+   const auto expected=state=="Paused"?QString("Audit paused"):state=="Stopping"?QString("Stopping"):state=="Report ready"?QString("Audit computed"):state;
+   check(rail.property("pgn_ticket_display_phase").toString()==expected,"Cycle caption concealed the real stop/wait/publication state");
+  }
   render(second,"captures/preparation-second.png");
   render(search,"captures/assigned-search.png");
   check(rail.property("pgn_ticket_progress_scope").toString()=="ticket_cycle","Actual widget did not switch to assigned cycle");
+  auto paused=search;paused["phase"]="Paused";rail.present(paused);app.processEvents();
+  QImage pausedImage(rail.size(),QImage::Format_ARGB32_Premultiplied);pausedImage.fill(QColor("#03151b"));rail.render(&pausedImage);
+  check(rail.property("pgn_ticket_display_phase").toString()=="Paused","Assigned search concealed its paused state");
+  check(!rail.property("pgn_ticket_cycle_eta_seconds").isValid(),"Paused work advertised an active cycle ETA");
+
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";
   return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -82,18 +82,18 @@ static social::Snapshot previewData(const social::ReadRequest& request){
     if(request.section==social::Section::Chat){
         s.channel=request.channel.isEmpty()?"preview-general":request.channel;
         s.channels=QVector<social::Channel>{{"preview-general","general","Network discussion"},{"preview-mining","mining","Mining discussions"},{"preview-research","research","Research notes"},{"preview-support","support","Support questions"}};
-        s.participants=QVector<social::Participant>{{"review-mod-a","Review mod A","Online",{"preview-moderator"}},{"review-mod-b","Review mod B","Online",{"preview-moderator"}},{"review-mod-c","Review mod C","Away",{"preview-moderator"}},{"review-a","Review author A","Online",{"preview-member"}},{"review-b","Review author B","Online",{"preview-member"}},{"review-c","Review author C","Away",{"preview-member"}}};
+        s.participants=QVector<social::Participant>{{"review-mod-a","Review mod A",{},{"preview-moderator"}},{"review-mod-b","Review mod B",{},{"preview-moderator"}},{"review-mod-c","Review mod C",{},{"preview-moderator"}},{"review-a","Review author A",{},{"preview-member"}},{"review-b","Review author B",{},{"preview-member"}},{"review-c","Review author C",{},{"preview-member"}}};
         const QStringList messages{
             "Welcome. This channel keeps the discussion tied to the selected network.",
             "Can we include the exact observation window when we discuss a miner's activity?",
             "Yes. The source and observation time matter as much as the displayed count.",
             "I am preparing a short note about reading an audit receipt.\nIt separates the reported observation from a verified result.",
-            "Please include the ticket reference in the publication so the discussion keeps its context.",
+            "Please include the ticket reference in this channel so the discussion keeps its context.",
             "The draft is saved locally. I will review the wording before sharing it.",
             "A missing metric should remain [b]unavailable[/b]. It should not be presented as zero.",
             "[quote]A missing metric should remain unavailable.[/quote]That distinction matters when a snapshot is partial.",
             "The research topic now contains the method and the questions still open.",
-            "Thanks. Let's keep any follow-up in the relevant forum category."
+            "Thanks. Let's keep the exact references with the next network snapshot."
         };
         for(int i=0;i<messages.size();++i){auto e=entry(QString("chat-%1").arg(i),{},(messages.size()-i)*150);e.author=i%2?"Review author B":"Review author A";e.body=messages[i];s.entries.append(e);}
     }else if(request.section==social::Section::Miners){
@@ -207,6 +207,7 @@ int main(int argc,char** argv){
     view->setIdentity(A());auto current=snapshot(pending.last().request);current.miners=miners();pending.last().reply(current,{});
     view->refresh();pending.last().reply({},"Source unavailable");check(table->rowCount()==4&&view->property("pgn_social_state_3")=="error","Error erased known snapshot");
     view->refresh();pending.last().reply(snapshot(pending.last().request),{});check(table->rowCount()==0&&view->property("pgn_social_state_3")=="empty","Empty response confused with offline/error");
+    {for(const auto& name:{"pgn-social-toggle-members","pgn-social-refresh-0","pgn-social-send-0"})check(!find<QPushButton>(*view,name)->icon().isNull(),"Chat action lacks its native vector icon");}
     view->setIdentity({});check(table->rowCount()==0&&messages->count()==0&&view->property("pgn_social_state_3")=="offline","Signout did not clear data/state");
     view->setIdentity(A());const auto late=pending.last();delete view;late.reply(snapshot(late.request),{});
     {
@@ -272,8 +273,9 @@ int main(int argc,char** argv){
                 socialView->selectSection(static_cast<social::Section>(i));app.processEvents();
                 if(i==0){find<QPlainTextEdit>(*socialView,"pgn-social-draft-body-0")->setPlainText("I will keep the exact observation window in the draft before sharing it.");find<QPushButton>(*socialView,"pgn-social-save-0")->click();}
                 if(i==3){auto* table=find<QTableWidget>(*socialView,"pgn-social-miners");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-period-today"),"Today action clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-refresh-3"),"Refresh clipped");check(table->horizontalScrollBar()->maximum()==0,"Leaderboard essential columns require horizontal scrolling");check(table->width()>=shell.width()-60,"Leaderboard imposes empty lateral margins");}
-                if(i==0){fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-send-0"),"Chat Send clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-save-0"),"Chat Save clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-send-reason-0"),"Chat reason clipped");}
+                if(i==0){fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-send-0"),"Chat Send clipped");fullyVisible(shell,find<QPushButton>(*socialView,"pgn-social-save-0"),"Chat Save clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-send-reason-0"),"Chat reason clipped");fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-save-status-0"),"Chat autosave status clipped");check(find<QLabel>(*socialView,"pgn-social-save-status-0")->visibleRegion().contains(find<QLabel>(*socialView,"pgn-social-save-status-0")->rect()),"Autosave status clipped by composer parent");}
                 fullyVisible(shell,find<QLabel>(*socialView,"pgn-social-status"),"Stable status line clipped");app.processEvents();
+                if(i==0){auto* composer=find<QWidget>(*socialView,"pgn-social-composer-0");for(const auto& name:{"pgn-social-send-reason-0","pgn-social-save-status-0"}){auto* label=find<QLabel>(*socialView,name);check(composer->rect().contains(QRect(label->mapTo(composer,QPoint{}),label->size())),"Composer status overflows parent after layout");}auto* saved=find<QLabel>(*socialView,"pgn-social-save-status-0");check(saved->fontMetrics().horizontalAdvance(saved->text())<=saved->contentsRect().width(),"Saved status text clipped");}
                 QImage image(shell.size(),QImage::Format_ARGB32);image.fill(Qt::transparent);shell.render(&image);check(image.save(output+QString("/social-%1-%2.png").arg(size.width()).arg(i)),"Capture not saved");
             }
         }

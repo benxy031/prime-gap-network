@@ -438,7 +438,8 @@ int main(int argc,char** argv) {
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
    networkSummary->setBusy(anchor->synchronizing&&*anchor->synchronizing);
-   networkSummary->setText(QString(testnetMode?"TESTNET QA · TECHNICAL HEIGHT %1 · %2 · %3":"NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
+   if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
+   else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
    networkSummary->setToolTip(QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4").arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height));
   };

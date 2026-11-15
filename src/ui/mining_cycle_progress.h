@@ -68,7 +68,7 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
      ||(!activeValue.isNull()&&(!activeValue.isDouble()||active<0||active>1||activeValue.toDouble()!=active))
      ||(countKnown&&(active<0||active>confirmed))||(!countKnown&&active>=0))return out;
   out.known=true;out.preparing=true;
-  out.title="Next ticket · service audits";out.phase="Audit service";
+  out.title=active>=0?QString("Next ticket · Audit %1/2").arg(active+1):QString("Next ticket · audits");out.phase="Auditing";
   const double local=std::clamp(done/total,0.,1.);
   for(int i=0;i<2;++i){
    const bool committed=countKnown&&i<confirmed;
