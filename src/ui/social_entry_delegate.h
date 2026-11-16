@@ -8,7 +8,7 @@
 #include <QTextBlock>
 #include <QGlyphRun>
 namespace pgn::ui {
-enum SocialItemRole {AuthorRole=Qt::UserRole+1,TimeRole,BodyRole,TitleRole,CategoryRole,AuthorIdRole,RepliesRole,ActivityRole,StateRole,ContributorsRole,LastContributorRole,ActivityTimeRole,MessageDateRole,MessageGroupRole,MessageDayRole};
+enum SocialItemRole {AuthorRole=Qt::UserRole+1,TimeRole,BodyRole,TitleRole,CategoryRole,AuthorIdRole,RepliesRole,ActivityRole,StateRole,ContributorsRole,LastContributorRole,ActivityTimeRole,MessageDateRole,MessageGroupRole,MessageDayRole,PinnedRole};
 inline QString SocialRelativeActivity(QDateTime time,QDateTime now=QDateTime::currentDateTimeUtc()){
     if(!time.isValid())return "unavailable";const auto seconds=qMax<qint64>(0,time.secsTo(now));
     if(seconds<60)return "now";if(seconds<3600)return QString("%1m ago").arg(seconds/60);if(seconds<86400)return QString("%1h ago").arg(seconds/3600);if(seconds<604800)return QString("%1d ago").arg(seconds/86400);return time.toUTC().toString("MMM d");
@@ -48,7 +48,7 @@ public:
             const int x=option.rect.left()+68,y=option.rect.top()+gap+(grouped?12:4);const auto id=index.data(AuthorIdRole).toString(),author=SocialDisplayName(id,index.data(AuthorRole).toString());
             if(grouped){const QRect avatar(option.rect.left()+20,y,32,32);painter->setPen(Qt::NoPen);painter->setBrush(SocialAvatarColor(id));painter->drawEllipse(avatar);font.setPixelSize(12);font.setWeight(QFont::DemiBold);painter->setFont(font);painter->setPen(QColor("#193f48"));painter->drawText(avatar,Qt::AlignCenter,SocialAvatarInitials(id,author));
                 font.setPixelSize(14);font.setWeight(QFont::Bold);painter->setFont(font);if(parent())parent()->setProperty("pgn_actual_author_font",SocialActualFont(painter->font()));painter->setPen(QColor("#163b45"));const auto name=painter->fontMetrics().elidedText(author,Qt::ElideRight,qMax(80,option.rect.width()-190));painter->drawText(x,y+12,name);const int clock=x+painter->fontMetrics().horizontalAdvance(name)+12;
-                font.setPixelSize(11);font.setWeight(QFont::Normal);painter->setFont(font);painter->setPen(QColor("#526e78"));painter->drawText(clock,y+12,index.data(TimeRole).toString());
+                font.setPixelSize(11);font.setWeight(QFont::Normal);painter->setFont(font);painter->setPen(QColor("#526e78"));painter->drawText(clock,y+12,index.data(TimeRole).toString()+(index.data(PinnedRole).toBool()?QString(" · Pinned"):QString{}));
             }else if(option.state&QStyle::State_MouseOver){font.setPixelSize(10);painter->setFont(font);painter->setPen(QColor("#526e78"));painter->drawText(QRect(option.rect.left()+11,y+1,49,18),Qt::AlignCenter,index.data(TimeRole).toString());}
             social::bbcode::Document doc;content(doc,option,index);doc.setTextWidth(qMax(160,option.rect.width()-92));painter->translate(x,y+(grouped?23:0));QAbstractTextDocumentLayout::PaintContext paint;paint.palette.setColor(QPalette::Text,QColor("#172d33"));doc.documentLayout()->draw(painter,paint);
             if(parent()){auto actual=SocialActualFont(doc.defaultFont());QStringList glyphs;for(auto block=doc.begin();block.isValid();block=block.next())if(block.layout())for(const auto& run:block.layout()->glyphRuns())glyphs<<run.rawFont().familyName()+" / "+run.rawFont().styleName();glyphs.removeDuplicates();actual.insert("glyphFonts",glyphs);parent()->setProperty("pgn_actual_body_font",actual);}painter->restore();return;

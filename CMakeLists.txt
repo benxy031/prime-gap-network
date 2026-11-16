@@ -472,7 +472,7 @@ target_include_directories(pgn-exact-rpc-money PUBLIC src "${PGN_NATIVE_CURRENCY
 target_compile_features(pgn-exact-rpc-money PUBLIC cxx_std_20)
 target_compile_definitions(pgn-exact-rpc-money PRIVATE QT_NO_KEYWORDS)
 target_link_libraries(pgn-exact-rpc-money PUBLIC Qt6::Core)
-add_library(pgn-wallet-runtime src/wallet/wallet_manager.cpp src/wallet/core_profile.cpp src/wallet/core_runtime.cpp src/wallet/core_social_display.cpp src/wallet/difficulty_history.cpp)
+add_library(pgn-wallet-runtime src/wallet/wallet_manager.cpp src/wallet/core_profile.cpp src/wallet/core_runtime.cpp src/wallet/core_social_display.cpp src/wallet/core_social_access.cpp src/wallet/difficulty_history.cpp)
 add_executable(pgn-wallet-bootstrap-lifecycle-test tests/wallet_bootstrap_lifecycle_test.cpp)
 target_include_directories(pgn-wallet-bootstrap-lifecycle-test PRIVATE src)
 target_link_libraries(pgn-wallet-bootstrap-lifecycle-test PRIVATE pgn-wallet-runtime Qt6::Core Qt6::Network Qt6::Widgets)

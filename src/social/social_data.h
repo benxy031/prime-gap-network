@@ -46,6 +46,7 @@ struct AccessSnapshot {
     QStringList permissionCatalog,grantablePermissions;QVector<Availability> availability;
     AuthSession session;
 };
+struct AccessReadRequest { Identity identity;QString channel,member,role;QStringList targets; };
 struct AccessRequest {
     Identity identity;QString community,channel,revision,requestId;
     AccessAction action{};QString target,role,name;int position{};QStringList permissions,allow,deny;QString reason;
@@ -69,7 +70,7 @@ struct Entry {
     QString authorId;
     std::optional<QString> replyCount;QDateTime lastActivity;QString state,nextReplyCursor;
     std::optional<QVector<Reaction>> reactions;bool bbcode{};
-    std::optional<QVector<Contributor>> contributors;QString lastContributor;
+    std::optional<QVector<Contributor>> contributors;QString lastContributor;bool pinned{};
 };
 struct Provenance { QString genesis, source; QDateTime observedUtc; bool authenticated{}; };
 struct Counter { std::optional<QString> value; Provenance provenance; };
@@ -123,6 +124,8 @@ struct Snapshot {
     // Existing native relay generation, not a new wire field. When nonempty,
     // entries are a window into one immutable-ID history, not its replacement.
     QString chatHistoryGeneration;
+    // Authenticated community projection; applied after retained-history merge.
+    QStringList removedContent,pinnedContent;
 };
 struct ThreadRequest {Identity identity;QString topic,cursor;int limit{50};};
 struct ThreadSnapshot {Identity identity;QString topic,source;bool authenticated{};QDateTime observedUtc;QVector<Reply> replies;QString nextCursor;};
@@ -137,6 +140,8 @@ struct Services {
     // Adapter owns server authorization. Availability is presentation only.
     // A forged client must not bypass the service's current policy evaluation.
     std::function<void(AccessRequest,std::function<void(AccessResult)>)> manage;
+    // Focused authoritative access page; no Chat history/leaderboard refetch.
+    std::function<void(AccessReadRequest,std::function<void(AccessSnapshot,QString)>)> readAccess;
     // Root's mature identity-provider adapter performs WebAuthn/OIDC ceremonies
     // and server verification. These structs carry public status/references,
     // never assertions, bearer tokens, recovery codes or private key material.

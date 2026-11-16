@@ -106,7 +106,7 @@ static social::Snapshot previewData(const social::ReadRequest& request){
 }
 int main(int argc,char** argv){
  try{
-    if(!test::prepareOffscreen())return 2;QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));
+    if(qEnvironmentVariableIsEmpty("PGN_SOCIAL_NATIVE_TEST")&&!test::prepareOffscreen())return 2;QApplication app(argc,argv);app.setFont(QFont("Segoe UI",10));
     QTemporaryDir temp;check(temp.isValid(),"No temporary draft directory");
     test::v4::run(app,temp.path()+"/v4-contract");
     test::chat::run(temp.path()+"/send-contract/drafts.json");

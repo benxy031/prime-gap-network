@@ -1,0 +1,25 @@
+name: Community306 offline restart and proof boundaries
+on:
+  push:
+    branches: [qualification/community306-startup]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  service:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: /qualification/social278-access/
+      - name: Actual HTTP, SQLite, Core-offline startup and authorization tests
+        working-directory: qualification/social278-access
+        env:
+          PYTHONUTF8: '1'
+        run: python -m unittest test_serve test_authority test_backend test_http test_registry test_content_index -v
