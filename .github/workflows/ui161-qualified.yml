@@ -1,0 +1,391 @@
+name: UI161 complete source qualification and UI-only runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/ui161-social]
+permissions:
+  contents: read
+concurrency:
+  group: ui161-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+
+      - name: Install the UCRT64 build dependencies
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Install pinned updater test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          if ($LASTEXITCODE -ne 0) { throw "Python test environment creation failed" }
+          & ./.ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned updater test dependencies failed" }
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output([shutil.which('git') or 'C:/Program Files/Git/bin/git.exe','rev-parse','HEAD^{tree}'],text=True).strip(), 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'a1a6d84ce3869b845f45459815c8b8c14ae76efa325e7685ccd94dada97dab60'}, {'path': 'qualification/social246-native-display/build_index_test.py', 'patched_sha256': '5338a7035e17edeb83b96c5353db554e1fb54af1de346a32a091a07edb58bf1f'}, {'path': 'qualification/social246-native-display/compile_native_targets.py', 'patched_sha256': 'b2e6efcb2aac525016920d95e0542f6345dfb4c47fd7c5b1ccfd1e4079a160a4'}, {'path': 'qualification/social246-native-display/generate_index_fixture.py', 'patched_sha256': 'a8dd79f9ec7b2cfe43a2aae2bd4fcc1f26f96e5bc6caa45cec71eeaf87c3d960'}, {'path': 'qualification/social246-native-display/index_store_test.cpp', 'patched_sha256': '90c3694d734f0ecfcd30e7b22d21b99bdb0916fa0f791c9815dd2741c17b7abb'}, {'path': 'qualification/social246-native-display/link_offchain_relay.py', 'patched_sha256': '015c870d290920ca3550f75e2fb7eca3fef948bb00acd5dc2fe0e07b548b3937'}, {'path': 'qualification/social246-native-display/native_display_relay_test.py', 'patched_sha256': '1d435b0e8c4a3b47a6b73ef3f51d8275eedf467c26410c1e61ab4e8b4e0164c1'}, {'path': 'qualification/social246-native-display/qt/CMakeLists.txt', 'patched_sha256': 'bf36e093f0f8cff93412b1d94eaf7df087bcf1749b4786cbd86851f2f9bbe9e1'}, {'path': 'qualification/social246-native-display/qt/current_display_consent.h', 'patched_sha256': '8db553b957a252b477f929e5d448e338b57f6b0c048b4bc3dd205c230b34ce3c'}, {'path': 'qualification/social246-native-display/qt/native_display_resolver.h', 'patched_sha256': 'e5cebfa0d497c88068c9955200ca43eb02bc523cb94fc254370c3c817fc3ed5c'}, {'path': 'qualification/social246-native-display/qt/offchain_display_store.h', 'patched_sha256': '38d5af7fbe1d4f6d32a1b75c712a89d6e7204450620e15969aee72e87f106700'}, {'path': 'qualification/social246-native-display/qt/public_display_verifier.h', 'patched_sha256': 'e96873e4e9b028b9d5ee81bb9576ddf270fd094cfd9e63ea33bb2e650e92be66'}, {'path': 'qualification/social246-native-display/qt/relay_name_witness.cpp', 'patched_sha256': '0eb049788e3330887669639c2ff52f84cad9b68b1d5292559dacb8543c404a05'}, {'path': 'qualification/social246-native-display/qt/social_core_service_base.cpp', 'patched_sha256': '613f417a39a14f04b15ddab6dd758cd1483d573a5aa9616868e612d99d007dac'}, {'path': 'qualification/social246-native-display/qt/src/social/social_data.h', 'patched_sha256': '5ed660c16e7d46009d59bccd972324ff36d419848cb263aad92b6b2908315b24'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_name_link_dialog.h', 'patched_sha256': '7272fb49fb7d746170dc11d22da2a6875e36de264e2b2e197f2b64e14872a7e3'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_view.cpp', 'patched_sha256': 'e7acd954388ffe06f110bbfc7ec756f963ac9bbfb02e0081cde3b5840a598602'}, {'path': 'qualification/social246-native-display/qt_native_display_relay_test.py', 'patched_sha256': '94bc783a5071f5acd55092850b77c6a58df60fa32be9e23e00a9e7b6d0245b5f'}, {'path': 'qualification/social246-native-display/qt_native_display_resume_test.py', 'patched_sha256': '40fb470417809051309da1785a3e9e9e70de5af3aa7cb857ddc4383277452569'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_core_service.h', 'patched_sha256': 'e345784e66d96d32ed0da9ed5579d87c0adda09618d6c6307c6f818d73c2c7ff'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/app/main.cpp', 'patched_sha256': '592dfd4d5a9048a1d3dcf40f9e984deddb64c3d540338bc23d42ac6043077ff7'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'd55d4e6ddca217ae74ae72c08792f830e87ebc937453ac61721834c1e9ce58c4'}, {'path': 'src/social/social_display_consent.h', 'patched_sha256': '3835505ce323aa28fbcb086e0a2743c3a6ddff5028dd50228aaa2e4a525bcc51'}, {'path': 'src/social/social_display_resolver.h', 'patched_sha256': '9c5d8ead618e5cbeea946c3290cbf79bc836005b736d43368c03453dbd85cea5'}, {'path': 'src/social/social_display_rpc_contract.h', 'patched_sha256': 'e43ef393867a1401611d834306f06a03c951dce31deb8da07f9a118d7a090722'}, {'path': 'src/social/social_display_verifier.h', 'patched_sha256': '9947630653b604d9d6484a0d0d76ec183938358aeb7e6df62c5c6cb2168584ec'}, {'path': 'src/social/social_leaderboard.h', 'patched_sha256': 'bae4aa583db8d1f20d948d05ff8dbd13ff9556e2935ecd9194b39066dde68d72'}, {'path': 'src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/ui/audit_slot_presentation.h', 'patched_sha256': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532'}, {'path': 'src/ui/audit_status_presentation.h', 'patched_sha256': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5'}, {'path': 'src/ui/network_work_view.h', 'patched_sha256': 'd81c156bf2b2999009dc07dbb21e46445ae760e341e4606fd3ab2a6613217f14'}, {'path': 'src/ui/social_compose_frame.h', 'patched_sha256': 'b41fcbda6958723c49329220a58491cba975d370623b73e7e0d929d92094a2b3'}, {'path': 'src/ui/social_display_session.h', 'patched_sha256': 'b28590ced7a1ee8c790b460654829d851a743ed6153f52592adf5b1c5494c942'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '0e898bf84dbe4ab3fa19922ab85a9b6c6c32a5cc0979ff0e86d041bf3d856016'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': '695b9f2ca5ba4dd724d404361bde62676c47ada362618545cde6b0abba6e121e'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'f66815e88684a592ebb2d83078d31d1af12cdc86a6b4fc893a37b4a3068f618a'}, {'path': 'src/ui/social_name_link_dialog.h', 'patched_sha256': '76499bba159566159c22032d5051d19329e321e601432decec68733ad905ea78'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '386d55fb3c6248efe34d14dde635222c66c5b5fdf46575a566674b30f22625de'}, {'path': 'src/ui/social_workspace_refinement.h', 'patched_sha256': 'c8320a57dc80f148d89a3b884989593ae87870192c99577f97db7683372c6c62'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '1724724054972c7bdd301a7cffd55750a02b18d177f55f278329f1b2166fd3de'}, {'path': 'src/ui/wallet_core_view.h', 'patched_sha256': '69ce1916d45b3b56c03b0a4bc7affd4d2b66264036567dec76a930d9a14e9568'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': '61794a38ce87c07b0a02c703675330be58486696b597bce833f5542feafb0d78'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': '94537066a6e3bc080d72af5be86a633f2b3966b9798d3c13008c2d8c32160ee4'}, {'path': 'src/wallet/core_runtime.cpp', 'patched_sha256': 'c5d9f2d699a07a251bbfb229a721f8245708edee2fab16bfffc6e20a76f1acec'}, {'path': 'src/wallet/core_runtime.h', 'patched_sha256': '50622db8e5f38424aeef4679f30a2e05980dd2674b0a2d90adb094ddc01899cb'}, {'path': 'src/wallet/core_social_display.cpp', 'patched_sha256': 'ace47040d54a2072ca9fb724faabbb5a446786589976bde63b7c6a99fdfb72a0'}, {'path': 'tests/audit_explorer_view_test.cpp', 'patched_sha256': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20'}, {'path': 'tests/network_work_view_test.cpp', 'patched_sha256': 'df2b7961035cbb7fffb8e92fc1ac71bcb9403e0b1746421af6a34c681dc734c2'}, {'path': 'tests/social_available_height_test.cpp', 'patched_sha256': '043d711c163953c60ce3454ce1afce445617515bb68d422174f5d6695a38628f'}, {'path': 'tests/social_display_contract_test.cpp', 'patched_sha256': '4ee29514fc484dd5d130c311d32f16573a5d798e2252b5f1afc50b809dc5457e'}, {'path': 'tests/social_rosette_counts_test.cpp', 'patched_sha256': 'd98411023381116a0dc99f2de2a14f70423c0bb380abc3982153e48dfb9a354f'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '3748287c2fd8bf0006daf0df9ab9e5109b5aa78bb59cf87b81c5de800fe6d1c2'}, {'path': 'tests/ticket_atlas_view_test.cpp', 'patched_sha256': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}, {'path': 'tests/wallet_fresh_setup_view_test.cpp', 'patched_sha256': 'f65a1c31dc418b20254248cc340958e107127ba6b670e0d6d9ed93427102a421'}, {'path': 'tools/component_versions.json', 'patched_sha256': '2a527cf0c68508af6b16b8f77bf53736550904ae2296d5cb6a619b6ceedbdfaf'}, {'path': 'tools/package_core_bundle.py', 'patched_sha256': '17d96927a38103ed33c02c639069d48b166f37636f0c16854f7f75c4e6395845'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/CMakeLists.txt', 'patched_sha256': '8f5e792a1b96bb2d11899b52c7d3855316b9bd048242b60d65b3e2f1e151d9eb'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/init.cpp', 'patched_sha256': '433ba3367ec41f14e4c5b3184ee7630d41061b044c0d7c5759efd035d608be03'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/component_version.h', 'patched_sha256': '4790fdbcf801a098fdd01d2f0f4db7fa9e9466319709287a12abf874e818af5f'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes.h', 'patched_sha256': '0f1c106f5a9ad2a6722e354dcd2c1ade996ec0523d226b63d9abdb220612e63e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt', 'patched_sha256': '7a688cfe039ccf00716e14be1bbbcb5187ac062b77419032f97320eddbf39be7'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt', 'patched_sha256': '428326ac28c8e45737d80d857d87f2cc467f4b5f36478fb13c51d1c8752e3549'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_test.cpp', 'patched_sha256': 'fb40f6e85ad26aa56732abbc789dc5b7d09efeae54ad32b67141f206170849f1'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.cpp', 'patched_sha256': '9b497d9fe683b01d22c89c19e5b91850f86b88efebd0956dda0b93c60c0daed4'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.h', 'patched_sha256': 'd666fcd41aca4c5bf06201a94a42d16c9ecaa6952ede316ad94fde8dfd513839'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.cpp', 'patched_sha256': '4221f0c68aae33e3a0ca62359153bfb570a5e801e8d28cc5c68ae3f8fe43dc87'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.h', 'patched_sha256': 'abfe4104e44697c168914c1a27721bf446056cfac095ebed8390c2656b38bd6e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_store.h', 'patched_sha256': '6442f90212ad36255da4faa615dae27eec4e1fac249aeb2c675b3929709e559c'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_certificate.h', 'patched_sha256': '174f9c70701862910cadef319df58767eadf77fc0c5fc94c54795cf93e05da2d'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_contract.h', 'patched_sha256': 'cd90f6bdffc2f66dbe21a644aab5a396c503f09017c6b4b102fb60298e1f71f8'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_snapshot.h', 'patched_sha256': '4aeb3ea75a0802149a7d25ab90ee103ec40087c688038c985efde688f567b271'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp', 'patched_sha256': '7933a310908536577525224fd550ac6badcbc0093d41df17f666527ce8555f7a'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/social.cpp', 'patched_sha256': 'f5be743e4282aa08bcbab203198e625ac5d6938cdccf3ed3d4119cf0a24085fd'}]}
+          git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          sdk=Path(os.environ['PGN_UI_SDK'])
+          for tool in ['g++.exe','ninja.exe','objdump.exe','windeployqt.exe']:
+              assert (sdk/'bin'/tool).is_file(),tool
+          qmake=next(p for p in [sdk/'bin/qmake6.exe',sdk/'bin/qmake.exe']if p.is_file())
+          assert subprocess.check_output([str(qmake),'-query','QT_VERSION'],text=True).startswith('6.')
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure a clean Release tree
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+
+      - name: Build application and affected wallet and Social targets
+        id: ui_build
+        run: |
+          pgn_build_jobs="$(nproc)"
+          if [ "$pgn_build_jobs" -gt 4 ]; then pgn_build_jobs=4; fi
+          printf 'Build workers: %s\n' "$pgn_build_jobs"
+          cmake --build build-ci --target PGN-Horizon pgn-wallet-fresh-setup-view-test pgn-wallet-management-test pgn-social-view-test pgn-network-work-view-test pgn-audit-explorer-view-test pgn-ticket-atlas-view-test pgn-ticket-atlas-mass-view-test pgn-social-rosette-counts-test pgn-scientific-coverage-presentation-test pgn-social-display-contract-test pgn-social-available-height-test --parallel "$pgn_build_jobs"
+
+      - name: Collect exact UI161 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_UI_COLLECTOR'
+          """Collect only the compiled UI, matching Qt runtime and native DLL closure."""
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          
+          ROOT=Path(__file__).resolve().parent
+          SDK=Path(os.environ['PGN_UI_SDK'])
+          BUILD=ROOT/'build-ci'
+          SOURCE=ROOT
+          STAGE=ROOT/'ui-stage'
+          sha=lambda path:hashlib.file_digest(path.open('rb'),'sha256').hexdigest()
+          
+          def main():
+              assert shutil.disk_usage(ROOT).free>2*1024**3,'Insufficient disk reserve before collection'
+              frozen={'source': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output([shutil.which('git') or 'C:/Program Files/Git/bin/git.exe','rev-parse','HEAD^{tree}'],text=True).strip(), 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'a1a6d84ce3869b845f45459815c8b8c14ae76efa325e7685ccd94dada97dab60'}, {'path': 'qualification/social246-native-display/build_index_test.py', 'patched_sha256': '5338a7035e17edeb83b96c5353db554e1fb54af1de346a32a091a07edb58bf1f'}, {'path': 'qualification/social246-native-display/compile_native_targets.py', 'patched_sha256': 'b2e6efcb2aac525016920d95e0542f6345dfb4c47fd7c5b1ccfd1e4079a160a4'}, {'path': 'qualification/social246-native-display/generate_index_fixture.py', 'patched_sha256': 'a8dd79f9ec7b2cfe43a2aae2bd4fcc1f26f96e5bc6caa45cec71eeaf87c3d960'}, {'path': 'qualification/social246-native-display/index_store_test.cpp', 'patched_sha256': '90c3694d734f0ecfcd30e7b22d21b99bdb0916fa0f791c9815dd2741c17b7abb'}, {'path': 'qualification/social246-native-display/link_offchain_relay.py', 'patched_sha256': '015c870d290920ca3550f75e2fb7eca3fef948bb00acd5dc2fe0e07b548b3937'}, {'path': 'qualification/social246-native-display/native_display_relay_test.py', 'patched_sha256': '1d435b0e8c4a3b47a6b73ef3f51d8275eedf467c26410c1e61ab4e8b4e0164c1'}, {'path': 'qualification/social246-native-display/qt/CMakeLists.txt', 'patched_sha256': 'bf36e093f0f8cff93412b1d94eaf7df087bcf1749b4786cbd86851f2f9bbe9e1'}, {'path': 'qualification/social246-native-display/qt/current_display_consent.h', 'patched_sha256': '8db553b957a252b477f929e5d448e338b57f6b0c048b4bc3dd205c230b34ce3c'}, {'path': 'qualification/social246-native-display/qt/native_display_resolver.h', 'patched_sha256': 'e5cebfa0d497c88068c9955200ca43eb02bc523cb94fc254370c3c817fc3ed5c'}, {'path': 'qualification/social246-native-display/qt/offchain_display_store.h', 'patched_sha256': '38d5af7fbe1d4f6d32a1b75c712a89d6e7204450620e15969aee72e87f106700'}, {'path': 'qualification/social246-native-display/qt/public_display_verifier.h', 'patched_sha256': 'e96873e4e9b028b9d5ee81bb9576ddf270fd094cfd9e63ea33bb2e650e92be66'}, {'path': 'qualification/social246-native-display/qt/relay_name_witness.cpp', 'patched_sha256': '0eb049788e3330887669639c2ff52f84cad9b68b1d5292559dacb8543c404a05'}, {'path': 'qualification/social246-native-display/qt/social_core_service_base.cpp', 'patched_sha256': '613f417a39a14f04b15ddab6dd758cd1483d573a5aa9616868e612d99d007dac'}, {'path': 'qualification/social246-native-display/qt/src/social/social_data.h', 'patched_sha256': '5ed660c16e7d46009d59bccd972324ff36d419848cb263aad92b6b2908315b24'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_name_link_dialog.h', 'patched_sha256': '7272fb49fb7d746170dc11d22da2a6875e36de264e2b2e197f2b64e14872a7e3'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_view.cpp', 'patched_sha256': 'e7acd954388ffe06f110bbfc7ec756f963ac9bbfb02e0081cde3b5840a598602'}, {'path': 'qualification/social246-native-display/qt_native_display_relay_test.py', 'patched_sha256': '94bc783a5071f5acd55092850b77c6a58df60fa32be9e23e00a9e7b6d0245b5f'}, {'path': 'qualification/social246-native-display/qt_native_display_resume_test.py', 'patched_sha256': '40fb470417809051309da1785a3e9e9e70de5af3aa7cb857ddc4383277452569'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_core_service.h', 'patched_sha256': 'e345784e66d96d32ed0da9ed5579d87c0adda09618d6c6307c6f818d73c2c7ff'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/app/main.cpp', 'patched_sha256': '592dfd4d5a9048a1d3dcf40f9e984deddb64c3d540338bc23d42ac6043077ff7'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'd55d4e6ddca217ae74ae72c08792f830e87ebc937453ac61721834c1e9ce58c4'}, {'path': 'src/social/social_display_consent.h', 'patched_sha256': '3835505ce323aa28fbcb086e0a2743c3a6ddff5028dd50228aaa2e4a525bcc51'}, {'path': 'src/social/social_display_resolver.h', 'patched_sha256': '9c5d8ead618e5cbeea946c3290cbf79bc836005b736d43368c03453dbd85cea5'}, {'path': 'src/social/social_display_rpc_contract.h', 'patched_sha256': 'e43ef393867a1401611d834306f06a03c951dce31deb8da07f9a118d7a090722'}, {'path': 'src/social/social_display_verifier.h', 'patched_sha256': '9947630653b604d9d6484a0d0d76ec183938358aeb7e6df62c5c6cb2168584ec'}, {'path': 'src/social/social_leaderboard.h', 'patched_sha256': 'bae4aa583db8d1f20d948d05ff8dbd13ff9556e2935ecd9194b39066dde68d72'}, {'path': 'src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/ui/audit_slot_presentation.h', 'patched_sha256': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532'}, {'path': 'src/ui/audit_status_presentation.h', 'patched_sha256': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5'}, {'path': 'src/ui/network_work_view.h', 'patched_sha256': 'd81c156bf2b2999009dc07dbb21e46445ae760e341e4606fd3ab2a6613217f14'}, {'path': 'src/ui/social_compose_frame.h', 'patched_sha256': 'b41fcbda6958723c49329220a58491cba975d370623b73e7e0d929d92094a2b3'}, {'path': 'src/ui/social_display_session.h', 'patched_sha256': 'b28590ced7a1ee8c790b460654829d851a743ed6153f52592adf5b1c5494c942'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '0e898bf84dbe4ab3fa19922ab85a9b6c6c32a5cc0979ff0e86d041bf3d856016'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': '695b9f2ca5ba4dd724d404361bde62676c47ada362618545cde6b0abba6e121e'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'f66815e88684a592ebb2d83078d31d1af12cdc86a6b4fc893a37b4a3068f618a'}, {'path': 'src/ui/social_name_link_dialog.h', 'patched_sha256': '76499bba159566159c22032d5051d19329e321e601432decec68733ad905ea78'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '386d55fb3c6248efe34d14dde635222c66c5b5fdf46575a566674b30f22625de'}, {'path': 'src/ui/social_workspace_refinement.h', 'patched_sha256': 'c8320a57dc80f148d89a3b884989593ae87870192c99577f97db7683372c6c62'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '1724724054972c7bdd301a7cffd55750a02b18d177f55f278329f1b2166fd3de'}, {'path': 'src/ui/wallet_core_view.h', 'patched_sha256': '69ce1916d45b3b56c03b0a4bc7affd4d2b66264036567dec76a930d9a14e9568'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': '61794a38ce87c07b0a02c703675330be58486696b597bce833f5542feafb0d78'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': '94537066a6e3bc080d72af5be86a633f2b3966b9798d3c13008c2d8c32160ee4'}, {'path': 'src/wallet/core_runtime.cpp', 'patched_sha256': 'c5d9f2d699a07a251bbfb229a721f8245708edee2fab16bfffc6e20a76f1acec'}, {'path': 'src/wallet/core_runtime.h', 'patched_sha256': '50622db8e5f38424aeef4679f30a2e05980dd2674b0a2d90adb094ddc01899cb'}, {'path': 'src/wallet/core_social_display.cpp', 'patched_sha256': 'ace47040d54a2072ca9fb724faabbb5a446786589976bde63b7c6a99fdfb72a0'}, {'path': 'tests/audit_explorer_view_test.cpp', 'patched_sha256': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20'}, {'path': 'tests/network_work_view_test.cpp', 'patched_sha256': 'df2b7961035cbb7fffb8e92fc1ac71bcb9403e0b1746421af6a34c681dc734c2'}, {'path': 'tests/social_available_height_test.cpp', 'patched_sha256': '043d711c163953c60ce3454ce1afce445617515bb68d422174f5d6695a38628f'}, {'path': 'tests/social_display_contract_test.cpp', 'patched_sha256': '4ee29514fc484dd5d130c311d32f16573a5d798e2252b5f1afc50b809dc5457e'}, {'path': 'tests/social_rosette_counts_test.cpp', 'patched_sha256': 'd98411023381116a0dc99f2de2a14f70423c0bb380abc3982153e48dfb9a354f'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '3748287c2fd8bf0006daf0df9ab9e5109b5aa78bb59cf87b81c5de800fe6d1c2'}, {'path': 'tests/ticket_atlas_view_test.cpp', 'patched_sha256': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}, {'path': 'tests/wallet_fresh_setup_view_test.cpp', 'patched_sha256': 'f65a1c31dc418b20254248cc340958e107127ba6b670e0d6d9ed93427102a421'}, {'path': 'tools/component_versions.json', 'patched_sha256': '2a527cf0c68508af6b16b8f77bf53736550904ae2296d5cb6a619b6ceedbdfaf'}, {'path': 'tools/package_core_bundle.py', 'patched_sha256': '17d96927a38103ed33c02c639069d48b166f37636f0c16854f7f75c4e6395845'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/CMakeLists.txt', 'patched_sha256': '8f5e792a1b96bb2d11899b52c7d3855316b9bd048242b60d65b3e2f1e151d9eb'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/init.cpp', 'patched_sha256': '433ba3367ec41f14e4c5b3184ee7630d41061b044c0d7c5759efd035d608be03'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/component_version.h', 'patched_sha256': '4790fdbcf801a098fdd01d2f0f4db7fa9e9466319709287a12abf874e818af5f'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes.h', 'patched_sha256': '0f1c106f5a9ad2a6722e354dcd2c1ade996ec0523d226b63d9abdb220612e63e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt', 'patched_sha256': '7a688cfe039ccf00716e14be1bbbcb5187ac062b77419032f97320eddbf39be7'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt', 'patched_sha256': '428326ac28c8e45737d80d857d87f2cc467f4b5f36478fb13c51d1c8752e3549'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_test.cpp', 'patched_sha256': 'fb40f6e85ad26aa56732abbc789dc5b7d09efeae54ad32b67141f206170849f1'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.cpp', 'patched_sha256': '9b497d9fe683b01d22c89c19e5b91850f86b88efebd0956dda0b93c60c0daed4'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.h', 'patched_sha256': 'd666fcd41aca4c5bf06201a94a42d16c9ecaa6952ede316ad94fde8dfd513839'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.cpp', 'patched_sha256': '4221f0c68aae33e3a0ca62359153bfb570a5e801e8d28cc5c68ae3f8fe43dc87'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.h', 'patched_sha256': 'abfe4104e44697c168914c1a27721bf446056cfac095ebed8390c2656b38bd6e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_store.h', 'patched_sha256': '6442f90212ad36255da4faa615dae27eec4e1fac249aeb2c675b3929709e559c'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_certificate.h', 'patched_sha256': '174f9c70701862910cadef319df58767eadf77fc0c5fc94c54795cf93e05da2d'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_contract.h', 'patched_sha256': 'cd90f6bdffc2f66dbe21a644aab5a396c503f09017c6b4b102fb60298e1f71f8'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_snapshot.h', 'patched_sha256': '4aeb3ea75a0802149a7d25ab90ee103ec40087c688038c985efde688f567b271'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp', 'patched_sha256': '7933a310908536577525224fd550ac6badcbc0093d41df17f666527ce8555f7a'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/social.cpp', 'patched_sha256': 'f5be743e4282aa08bcbab203198e625ac5d6938cdccf3ed3d4119cf0a24085fd'}]}
+              git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+              assert Path(git).is_file(), 'Verified Git executable required'
+              assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==frozen['source']
+              for row in frozen['verified_files']:
+                  assert sha(SOURCE/row['path'])==row['patched_sha256'],row['path']
+              STAGE.mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'PGN-Horizon.exe',STAGE/'PGN-Horizon.exe')
+              shutil.copy2(BUILD/'WebView2Loader.dll',STAGE/'WebView2Loader.dll')
+              # This plugin is an explicit dependency of the real application target;
+              # static import scanning alone does not discover Qt's SQL driver loading.
+              (STAGE/'sqldrivers').mkdir(exist_ok=True)
+              shutil.copy2(BUILD/'sqldrivers/qsqlite.dll',STAGE/'sqldrivers/qsqlite.dll')
+              (STAGE/'assets').mkdir(exist_ok=True)
+              resource=BUILD/'assets/audit-animation.rcc';target=STAGE/'assets/audit-animation.rcc'
+              if not target.exists():
+                  # Both aliases are immutable outputs owned by this bounded build.
+                  # Share the 79 MB resource without aliasing any SDK or user file.
+                  try:os.link(resource,target)
+                  except OSError:shutil.copy2(resource,target)
+              else:assert sha(resource)==sha(target),'Staged audit resource changed'
+              environment=dict(os.environ,PATH=str(SDK/'bin')+';'+os.environ['PATH'])
+              command=[str(SDK/'bin/windeployqt.exe'),'--release','--no-translations',
+                       '--compiler-runtime',str(STAGE/'PGN-Horizon.exe')]
+              with (ROOT/'windeployqt.log').open('w',encoding='utf-8')as output:
+                  subprocess.run(command,env=environment,stdout=output,stderr=subprocess.STDOUT,check=True)
+              sdk_names={p.name.casefold():p for p in (SDK/'bin').glob('*.dll')}
+              system=Path(os.environ['SystemRoot'])/'System32'
+              visited=set();imports={};copied={};unresolved=[]
+              while True:
+                  pending=[p for p in STAGE.rglob('*')if p.suffix.lower()in ('.exe','.dll')and p not in visited]
+                  if not pending:break
+                  for image in pending:
+                      visited.add(image)
+                      detail=subprocess.check_output([str(SDK/'bin/objdump.exe'),'-p',str(image)],env=environment,text=True,errors='replace')
+                      names=re.findall(r'^\s*DLL Name:\s*(\S+)\s*$',detail,re.M)
+                      imports[image.relative_to(STAGE).as_posix()]=names
+                      for name in names:
+                          key=name.casefold()
+                          local={p.name.casefold()for folder in (STAGE,image.parent)for p in folder.glob('*.dll')}
+                          if key in local:continue
+                          if key in sdk_names:
+                              origin=sdk_names[key];shutil.copy2(origin,STAGE/origin.name);copied[origin.name]=str(origin)
+                          elif (system/name).is_file()or key.startswith(('api-ms-win-','ext-ms-win-')):continue
+                          else:unresolved.append(dict(image=str(image.relative_to(STAGE)),dependency=name))
+              if unresolved:raise RuntimeError('Unresolved native imports: '+json.dumps(unresolved))
+              assert not(STAGE/'Core').exists()and not(STAGE/'EngineRuntime').exists(),'UI-only artifact required'
+              binaries=[]
+              for path in sorted(STAGE.rglob('*')):
+                  if not path.is_file():continue
+                  relative=path.relative_to(STAGE).as_posix();origin=None
+                  for candidate in (SDK/'bin'/path.name,SDK/'share/qt6/plugins'/relative):
+                      if candidate.is_file()and sha(candidate)==sha(path):origin=str(candidate);break
+                  binaries.append(dict(path=relative,bytes=path.stat().st_size,sha256=sha(path),sdk_origin=origin))
+              inputs=set()
+              process=subprocess.Popen([str(SDK/'bin/ninja.exe'),'-t','deps'],cwd=BUILD,
+                                       env=environment,stdout=subprocess.PIPE,text=True,errors='replace')
+              for line in process.stdout:
+                  if not line.startswith('    '):continue
+                  name=line.strip().replace('\\','/')
+                  dependency=Path(name)
+                  if not dependency.is_absolute():dependency=(BUILD/dependency).resolve()
+                  if dependency.is_relative_to(SOURCE):
+                      relative=dependency.relative_to(SOURCE).as_posix()
+                      if (SOURCE/relative).is_file():inputs.add(relative)
+              if process.wait()!=0:raise RuntimeError('Cannot read observed compilation dependencies')
+              inputs.update(['CMakeLists.txt','tools/component_versions.json','assets/pgn.qrc','assets/audit-animation.qrc'])
+              observed=[dict(path=name,bytes=(SOURCE/name).stat().st_size,sha256=sha(SOURCE/name))for name in sorted(inputs)]
+              result=dict(schema='PGN_WINDOWS_UI_BUILD_V1',source=frozen['source'],
+                          qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),
+                          source_tree=frozen['tree'],
+                          base_product_commit='1ea788c04d55f0bb06810ac8ff8c5961e0f0872d',
+                          ui_version='2026.11.16.161',target='PGN-Horizon',compiler=subprocess.check_output([str(SDK/'bin/g++.exe'),'--version'],text=True).splitlines()[0],qt_version=subprocess.check_output([str(next(p for p in (SDK/'bin/qmake6.exe',SDK/'bin/qmake.exe')if p.is_file())),'-query','QT_VERSION'],text=True).strip(),
+                          flags=next(line for line in (BUILD/'CMakeCache.txt').read_text().splitlines()if line.startswith('CMAKE_CXX_FLAGS_RELEASE:')),parallelism=min(os.cpu_count()or 1,4),
+                          observed_compilation_scope='Complete PGN-Horizon plus affected Social and wallet targets; explicit fresh setup error recovery' ,
+                          sources=observed,files=binaries,imports=imports,extra_sdk_copies=copied,
+                          unresolved_native_imports=unresolved,stage=str(STAGE),
+                          live_processes_launched=False,network_requested=False,core_built=False,gpu_host_built=False,
+                          disk_free_bytes=shutil.disk_usage(ROOT).free)
+              (ROOT/'WINDOWS-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
+              assert shutil.disk_usage(ROOT).free>=1.5*1024**3,'Disk reserve breached'
+              print(json.dumps(dict(PASS=True,stage=str(STAGE),files=len(binaries),sources=len(observed),
+                                   executable_sha256=sha(STAGE/'PGN-Horizon.exe'),bytes=sum(x['bytes']for x in binaries))))
+          
+          if __name__=='__main__':main()
+          
+          PGN_UI_COLLECTOR
+      - name: Run the isolated registered tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: |
+          ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R "^(social-view|wallet-management|network-work-view|audit-explorer-view|social-rosette-counts|scientific-coverage-presentation|social-display-contract|social-available-height)$"
+          QT_QPA_PLATFORM=offscreen build-ci/pgn-wallet-fresh-setup-view-test
+
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/Scripts/python.exe -I tests/test_late_cycle_completion.py
+          .ci-python/Scripts/python.exe -I tests/test_audit_reveal_batch.py
+          .ci-python/Scripts/python.exe -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual full-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/Scripts/python.exe - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('WINDOWS-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['affected_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success'
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui161-windows.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui161-windows-${{ github.run_id }}
+          path: ui161-windows.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build qt6-base-dev libqt6sql6-sqlite libgmp-dev libsqlite3-dev zlib1g-dev libboost-dev python3-venv
+      - name: Install pinned updater test dependencies
+        run: |
+          python3 -m venv .ci-python
+          .ci-python/bin/python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Record the actual toolchain
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          dpkg-query -W qt6-base-dev libgmp-dev libsqlite3-dev
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          .ci-python/bin/python - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output([shutil.which('git') or 'C:/Program Files/Git/bin/git.exe','rev-parse','HEAD^{tree}'],text=True).strip(), 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'a1a6d84ce3869b845f45459815c8b8c14ae76efa325e7685ccd94dada97dab60'}, {'path': 'qualification/social246-native-display/build_index_test.py', 'patched_sha256': '5338a7035e17edeb83b96c5353db554e1fb54af1de346a32a091a07edb58bf1f'}, {'path': 'qualification/social246-native-display/compile_native_targets.py', 'patched_sha256': 'b2e6efcb2aac525016920d95e0542f6345dfb4c47fd7c5b1ccfd1e4079a160a4'}, {'path': 'qualification/social246-native-display/generate_index_fixture.py', 'patched_sha256': 'a8dd79f9ec7b2cfe43a2aae2bd4fcc1f26f96e5bc6caa45cec71eeaf87c3d960'}, {'path': 'qualification/social246-native-display/index_store_test.cpp', 'patched_sha256': '90c3694d734f0ecfcd30e7b22d21b99bdb0916fa0f791c9815dd2741c17b7abb'}, {'path': 'qualification/social246-native-display/link_offchain_relay.py', 'patched_sha256': '015c870d290920ca3550f75e2fb7eca3fef948bb00acd5dc2fe0e07b548b3937'}, {'path': 'qualification/social246-native-display/native_display_relay_test.py', 'patched_sha256': '1d435b0e8c4a3b47a6b73ef3f51d8275eedf467c26410c1e61ab4e8b4e0164c1'}, {'path': 'qualification/social246-native-display/qt/CMakeLists.txt', 'patched_sha256': 'bf36e093f0f8cff93412b1d94eaf7df087bcf1749b4786cbd86851f2f9bbe9e1'}, {'path': 'qualification/social246-native-display/qt/current_display_consent.h', 'patched_sha256': '8db553b957a252b477f929e5d448e338b57f6b0c048b4bc3dd205c230b34ce3c'}, {'path': 'qualification/social246-native-display/qt/native_display_resolver.h', 'patched_sha256': 'e5cebfa0d497c88068c9955200ca43eb02bc523cb94fc254370c3c817fc3ed5c'}, {'path': 'qualification/social246-native-display/qt/offchain_display_store.h', 'patched_sha256': '38d5af7fbe1d4f6d32a1b75c712a89d6e7204450620e15969aee72e87f106700'}, {'path': 'qualification/social246-native-display/qt/public_display_verifier.h', 'patched_sha256': 'e96873e4e9b028b9d5ee81bb9576ddf270fd094cfd9e63ea33bb2e650e92be66'}, {'path': 'qualification/social246-native-display/qt/relay_name_witness.cpp', 'patched_sha256': '0eb049788e3330887669639c2ff52f84cad9b68b1d5292559dacb8543c404a05'}, {'path': 'qualification/social246-native-display/qt/social_core_service_base.cpp', 'patched_sha256': '613f417a39a14f04b15ddab6dd758cd1483d573a5aa9616868e612d99d007dac'}, {'path': 'qualification/social246-native-display/qt/src/social/social_data.h', 'patched_sha256': '5ed660c16e7d46009d59bccd972324ff36d419848cb263aad92b6b2908315b24'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_name_link_dialog.h', 'patched_sha256': '7272fb49fb7d746170dc11d22da2a6875e36de264e2b2e197f2b64e14872a7e3'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_view.cpp', 'patched_sha256': 'e7acd954388ffe06f110bbfc7ec756f963ac9bbfb02e0081cde3b5840a598602'}, {'path': 'qualification/social246-native-display/qt_native_display_relay_test.py', 'patched_sha256': '94bc783a5071f5acd55092850b77c6a58df60fa32be9e23e00a9e7b6d0245b5f'}, {'path': 'qualification/social246-native-display/qt_native_display_resume_test.py', 'patched_sha256': '40fb470417809051309da1785a3e9e9e70de5af3aa7cb857ddc4383277452569'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_core_service.h', 'patched_sha256': 'e345784e66d96d32ed0da9ed5579d87c0adda09618d6c6307c6f818d73c2c7ff'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/app/main.cpp', 'patched_sha256': '592dfd4d5a9048a1d3dcf40f9e984deddb64c3d540338bc23d42ac6043077ff7'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'd55d4e6ddca217ae74ae72c08792f830e87ebc937453ac61721834c1e9ce58c4'}, {'path': 'src/social/social_display_consent.h', 'patched_sha256': '3835505ce323aa28fbcb086e0a2743c3a6ddff5028dd50228aaa2e4a525bcc51'}, {'path': 'src/social/social_display_resolver.h', 'patched_sha256': '9c5d8ead618e5cbeea946c3290cbf79bc836005b736d43368c03453dbd85cea5'}, {'path': 'src/social/social_display_rpc_contract.h', 'patched_sha256': 'e43ef393867a1401611d834306f06a03c951dce31deb8da07f9a118d7a090722'}, {'path': 'src/social/social_display_verifier.h', 'patched_sha256': '9947630653b604d9d6484a0d0d76ec183938358aeb7e6df62c5c6cb2168584ec'}, {'path': 'src/social/social_leaderboard.h', 'patched_sha256': 'bae4aa583db8d1f20d948d05ff8dbd13ff9556e2935ecd9194b39066dde68d72'}, {'path': 'src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/ui/audit_slot_presentation.h', 'patched_sha256': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532'}, {'path': 'src/ui/audit_status_presentation.h', 'patched_sha256': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5'}, {'path': 'src/ui/network_work_view.h', 'patched_sha256': 'd81c156bf2b2999009dc07dbb21e46445ae760e341e4606fd3ab2a6613217f14'}, {'path': 'src/ui/social_compose_frame.h', 'patched_sha256': 'b41fcbda6958723c49329220a58491cba975d370623b73e7e0d929d92094a2b3'}, {'path': 'src/ui/social_display_session.h', 'patched_sha256': 'b28590ced7a1ee8c790b460654829d851a743ed6153f52592adf5b1c5494c942'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '0e898bf84dbe4ab3fa19922ab85a9b6c6c32a5cc0979ff0e86d041bf3d856016'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': '695b9f2ca5ba4dd724d404361bde62676c47ada362618545cde6b0abba6e121e'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'f66815e88684a592ebb2d83078d31d1af12cdc86a6b4fc893a37b4a3068f618a'}, {'path': 'src/ui/social_name_link_dialog.h', 'patched_sha256': '76499bba159566159c22032d5051d19329e321e601432decec68733ad905ea78'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '386d55fb3c6248efe34d14dde635222c66c5b5fdf46575a566674b30f22625de'}, {'path': 'src/ui/social_workspace_refinement.h', 'patched_sha256': 'c8320a57dc80f148d89a3b884989593ae87870192c99577f97db7683372c6c62'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '1724724054972c7bdd301a7cffd55750a02b18d177f55f278329f1b2166fd3de'}, {'path': 'src/ui/wallet_core_view.h', 'patched_sha256': '69ce1916d45b3b56c03b0a4bc7affd4d2b66264036567dec76a930d9a14e9568'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': '61794a38ce87c07b0a02c703675330be58486696b597bce833f5542feafb0d78'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': '94537066a6e3bc080d72af5be86a633f2b3966b9798d3c13008c2d8c32160ee4'}, {'path': 'src/wallet/core_runtime.cpp', 'patched_sha256': 'c5d9f2d699a07a251bbfb229a721f8245708edee2fab16bfffc6e20a76f1acec'}, {'path': 'src/wallet/core_runtime.h', 'patched_sha256': '50622db8e5f38424aeef4679f30a2e05980dd2674b0a2d90adb094ddc01899cb'}, {'path': 'src/wallet/core_social_display.cpp', 'patched_sha256': 'ace47040d54a2072ca9fb724faabbb5a446786589976bde63b7c6a99fdfb72a0'}, {'path': 'tests/audit_explorer_view_test.cpp', 'patched_sha256': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20'}, {'path': 'tests/network_work_view_test.cpp', 'patched_sha256': 'df2b7961035cbb7fffb8e92fc1ac71bcb9403e0b1746421af6a34c681dc734c2'}, {'path': 'tests/social_available_height_test.cpp', 'patched_sha256': '043d711c163953c60ce3454ce1afce445617515bb68d422174f5d6695a38628f'}, {'path': 'tests/social_display_contract_test.cpp', 'patched_sha256': '4ee29514fc484dd5d130c311d32f16573a5d798e2252b5f1afc50b809dc5457e'}, {'path': 'tests/social_rosette_counts_test.cpp', 'patched_sha256': 'd98411023381116a0dc99f2de2a14f70423c0bb380abc3982153e48dfb9a354f'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '3748287c2fd8bf0006daf0df9ab9e5109b5aa78bb59cf87b81c5de800fe6d1c2'}, {'path': 'tests/ticket_atlas_view_test.cpp', 'patched_sha256': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}, {'path': 'tests/wallet_fresh_setup_view_test.cpp', 'patched_sha256': 'f65a1c31dc418b20254248cc340958e107127ba6b670e0d6d9ed93427102a421'}, {'path': 'tools/component_versions.json', 'patched_sha256': '2a527cf0c68508af6b16b8f77bf53736550904ae2296d5cb6a619b6ceedbdfaf'}, {'path': 'tools/package_core_bundle.py', 'patched_sha256': '17d96927a38103ed33c02c639069d48b166f37636f0c16854f7f75c4e6395845'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/CMakeLists.txt', 'patched_sha256': '8f5e792a1b96bb2d11899b52c7d3855316b9bd048242b60d65b3e2f1e151d9eb'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/init.cpp', 'patched_sha256': '433ba3367ec41f14e4c5b3184ee7630d41061b044c0d7c5759efd035d608be03'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/component_version.h', 'patched_sha256': '4790fdbcf801a098fdd01d2f0f4db7fa9e9466319709287a12abf874e818af5f'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes.h', 'patched_sha256': '0f1c106f5a9ad2a6722e354dcd2c1ade996ec0523d226b63d9abdb220612e63e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt', 'patched_sha256': '7a688cfe039ccf00716e14be1bbbcb5187ac062b77419032f97320eddbf39be7'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt', 'patched_sha256': '428326ac28c8e45737d80d857d87f2cc467f4b5f36478fb13c51d1c8752e3549'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_test.cpp', 'patched_sha256': 'fb40f6e85ad26aa56732abbc789dc5b7d09efeae54ad32b67141f206170849f1'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.cpp', 'patched_sha256': '9b497d9fe683b01d22c89c19e5b91850f86b88efebd0956dda0b93c60c0daed4'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.h', 'patched_sha256': 'd666fcd41aca4c5bf06201a94a42d16c9ecaa6952ede316ad94fde8dfd513839'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.cpp', 'patched_sha256': '4221f0c68aae33e3a0ca62359153bfb570a5e801e8d28cc5c68ae3f8fe43dc87'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.h', 'patched_sha256': 'abfe4104e44697c168914c1a27721bf446056cfac095ebed8390c2656b38bd6e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_store.h', 'patched_sha256': '6442f90212ad36255da4faa615dae27eec4e1fac249aeb2c675b3929709e559c'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_certificate.h', 'patched_sha256': '174f9c70701862910cadef319df58767eadf77fc0c5fc94c54795cf93e05da2d'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_contract.h', 'patched_sha256': 'cd90f6bdffc2f66dbe21a644aab5a396c503f09017c6b4b102fb60298e1f71f8'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_snapshot.h', 'patched_sha256': '4aeb3ea75a0802149a7d25ab90ee103ec40087c688038c985efde688f567b271'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp', 'patched_sha256': '7933a310908536577525224fd550ac6badcbc0093d41df17f666527ce8555f7a'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/social.cpp', 'patched_sha256': 'f5be743e4282aa08bcbab203198e625ac5d6938cdccf3ed3d4119cf0a24085fd'}]}
+          git='git'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          for tool in ['c++','ninja','ldd','qmake6']:assert shutil.which(tool),tool
+          for plugin in ['platforms/libqxcb.so','sqldrivers/libqsqlite.so']:assert (Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')/plugin).is_file(),plugin
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure from a fresh checkout
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/bin/python"
+      - name: Build application and affected wallet and Social targets
+        id: ui_build
+        run: cmake --build build-ci --target PGN-Horizon pgn-wallet-fresh-setup-view-test pgn-wallet-management-test pgn-social-view-test pgn-network-work-view-test pgn-audit-explorer-view-test pgn-ticket-atlas-view-test pgn-ticket-atlas-mass-view-test pgn-social-rosette-counts-test pgn-scientific-coverage-presentation-test pgn-social-display-contract-test pgn-social-available-height-test --parallel 2
+      - name: Collect exact UI161 and matching runtime dependencies only
+        id: ui_collect
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: not_run_at_collection
+          PGN_QUALIFICATION_SHA: ${{ github.sha }}
+          PGN_CI_RUN: ${{ github.run_id }}
+        run: |
+          .ci-python/bin/python - <<'PGN_UI_COLLECTOR'
+          
+          from pathlib import Path
+          import hashlib,json,os,re,shutil,subprocess,tarfile
+          ROOT=Path.cwd();BUILD=ROOT/'build-ci';STAGE=ROOT/'ui-stage';STAGE.mkdir()
+          FROZEN={'source': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output([shutil.which('git') or 'C:/Program Files/Git/bin/git.exe','rev-parse','HEAD^{tree}'],text=True).strip(), 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'a1a6d84ce3869b845f45459815c8b8c14ae76efa325e7685ccd94dada97dab60'}, {'path': 'qualification/social246-native-display/build_index_test.py', 'patched_sha256': '5338a7035e17edeb83b96c5353db554e1fb54af1de346a32a091a07edb58bf1f'}, {'path': 'qualification/social246-native-display/compile_native_targets.py', 'patched_sha256': 'b2e6efcb2aac525016920d95e0542f6345dfb4c47fd7c5b1ccfd1e4079a160a4'}, {'path': 'qualification/social246-native-display/generate_index_fixture.py', 'patched_sha256': 'a8dd79f9ec7b2cfe43a2aae2bd4fcc1f26f96e5bc6caa45cec71eeaf87c3d960'}, {'path': 'qualification/social246-native-display/index_store_test.cpp', 'patched_sha256': '90c3694d734f0ecfcd30e7b22d21b99bdb0916fa0f791c9815dd2741c17b7abb'}, {'path': 'qualification/social246-native-display/link_offchain_relay.py', 'patched_sha256': '015c870d290920ca3550f75e2fb7eca3fef948bb00acd5dc2fe0e07b548b3937'}, {'path': 'qualification/social246-native-display/native_display_relay_test.py', 'patched_sha256': '1d435b0e8c4a3b47a6b73ef3f51d8275eedf467c26410c1e61ab4e8b4e0164c1'}, {'path': 'qualification/social246-native-display/qt/CMakeLists.txt', 'patched_sha256': 'bf36e093f0f8cff93412b1d94eaf7df087bcf1749b4786cbd86851f2f9bbe9e1'}, {'path': 'qualification/social246-native-display/qt/current_display_consent.h', 'patched_sha256': '8db553b957a252b477f929e5d448e338b57f6b0c048b4bc3dd205c230b34ce3c'}, {'path': 'qualification/social246-native-display/qt/native_display_resolver.h', 'patched_sha256': 'e5cebfa0d497c88068c9955200ca43eb02bc523cb94fc254370c3c817fc3ed5c'}, {'path': 'qualification/social246-native-display/qt/offchain_display_store.h', 'patched_sha256': '38d5af7fbe1d4f6d32a1b75c712a89d6e7204450620e15969aee72e87f106700'}, {'path': 'qualification/social246-native-display/qt/public_display_verifier.h', 'patched_sha256': 'e96873e4e9b028b9d5ee81bb9576ddf270fd094cfd9e63ea33bb2e650e92be66'}, {'path': 'qualification/social246-native-display/qt/relay_name_witness.cpp', 'patched_sha256': '0eb049788e3330887669639c2ff52f84cad9b68b1d5292559dacb8543c404a05'}, {'path': 'qualification/social246-native-display/qt/social_core_service_base.cpp', 'patched_sha256': '613f417a39a14f04b15ddab6dd758cd1483d573a5aa9616868e612d99d007dac'}, {'path': 'qualification/social246-native-display/qt/src/social/social_data.h', 'patched_sha256': '5ed660c16e7d46009d59bccd972324ff36d419848cb263aad92b6b2908315b24'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_name_link_dialog.h', 'patched_sha256': '7272fb49fb7d746170dc11d22da2a6875e36de264e2b2e197f2b64e14872a7e3'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_view.cpp', 'patched_sha256': 'e7acd954388ffe06f110bbfc7ec756f963ac9bbfb02e0081cde3b5840a598602'}, {'path': 'qualification/social246-native-display/qt_native_display_relay_test.py', 'patched_sha256': '94bc783a5071f5acd55092850b77c6a58df60fa32be9e23e00a9e7b6d0245b5f'}, {'path': 'qualification/social246-native-display/qt_native_display_resume_test.py', 'patched_sha256': '40fb470417809051309da1785a3e9e9e70de5af3aa7cb857ddc4383277452569'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_core_service.h', 'patched_sha256': 'e345784e66d96d32ed0da9ed5579d87c0adda09618d6c6307c6f818d73c2c7ff'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/app/main.cpp', 'patched_sha256': '592dfd4d5a9048a1d3dcf40f9e984deddb64c3d540338bc23d42ac6043077ff7'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'd55d4e6ddca217ae74ae72c08792f830e87ebc937453ac61721834c1e9ce58c4'}, {'path': 'src/social/social_display_consent.h', 'patched_sha256': '3835505ce323aa28fbcb086e0a2743c3a6ddff5028dd50228aaa2e4a525bcc51'}, {'path': 'src/social/social_display_resolver.h', 'patched_sha256': '9c5d8ead618e5cbeea946c3290cbf79bc836005b736d43368c03453dbd85cea5'}, {'path': 'src/social/social_display_rpc_contract.h', 'patched_sha256': 'e43ef393867a1401611d834306f06a03c951dce31deb8da07f9a118d7a090722'}, {'path': 'src/social/social_display_verifier.h', 'patched_sha256': '9947630653b604d9d6484a0d0d76ec183938358aeb7e6df62c5c6cb2168584ec'}, {'path': 'src/social/social_leaderboard.h', 'patched_sha256': 'bae4aa583db8d1f20d948d05ff8dbd13ff9556e2935ecd9194b39066dde68d72'}, {'path': 'src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/ui/audit_slot_presentation.h', 'patched_sha256': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532'}, {'path': 'src/ui/audit_status_presentation.h', 'patched_sha256': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5'}, {'path': 'src/ui/network_work_view.h', 'patched_sha256': 'd81c156bf2b2999009dc07dbb21e46445ae760e341e4606fd3ab2a6613217f14'}, {'path': 'src/ui/social_compose_frame.h', 'patched_sha256': 'b41fcbda6958723c49329220a58491cba975d370623b73e7e0d929d92094a2b3'}, {'path': 'src/ui/social_display_session.h', 'patched_sha256': 'b28590ced7a1ee8c790b460654829d851a743ed6153f52592adf5b1c5494c942'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '0e898bf84dbe4ab3fa19922ab85a9b6c6c32a5cc0979ff0e86d041bf3d856016'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': '695b9f2ca5ba4dd724d404361bde62676c47ada362618545cde6b0abba6e121e'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'f66815e88684a592ebb2d83078d31d1af12cdc86a6b4fc893a37b4a3068f618a'}, {'path': 'src/ui/social_name_link_dialog.h', 'patched_sha256': '76499bba159566159c22032d5051d19329e321e601432decec68733ad905ea78'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '386d55fb3c6248efe34d14dde635222c66c5b5fdf46575a566674b30f22625de'}, {'path': 'src/ui/social_workspace_refinement.h', 'patched_sha256': 'c8320a57dc80f148d89a3b884989593ae87870192c99577f97db7683372c6c62'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '1724724054972c7bdd301a7cffd55750a02b18d177f55f278329f1b2166fd3de'}, {'path': 'src/ui/wallet_core_view.h', 'patched_sha256': '69ce1916d45b3b56c03b0a4bc7affd4d2b66264036567dec76a930d9a14e9568'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': '61794a38ce87c07b0a02c703675330be58486696b597bce833f5542feafb0d78'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': '94537066a6e3bc080d72af5be86a633f2b3966b9798d3c13008c2d8c32160ee4'}, {'path': 'src/wallet/core_runtime.cpp', 'patched_sha256': 'c5d9f2d699a07a251bbfb229a721f8245708edee2fab16bfffc6e20a76f1acec'}, {'path': 'src/wallet/core_runtime.h', 'patched_sha256': '50622db8e5f38424aeef4679f30a2e05980dd2674b0a2d90adb094ddc01899cb'}, {'path': 'src/wallet/core_social_display.cpp', 'patched_sha256': 'ace47040d54a2072ca9fb724faabbb5a446786589976bde63b7c6a99fdfb72a0'}, {'path': 'tests/audit_explorer_view_test.cpp', 'patched_sha256': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20'}, {'path': 'tests/network_work_view_test.cpp', 'patched_sha256': 'df2b7961035cbb7fffb8e92fc1ac71bcb9403e0b1746421af6a34c681dc734c2'}, {'path': 'tests/social_available_height_test.cpp', 'patched_sha256': '043d711c163953c60ce3454ce1afce445617515bb68d422174f5d6695a38628f'}, {'path': 'tests/social_display_contract_test.cpp', 'patched_sha256': '4ee29514fc484dd5d130c311d32f16573a5d798e2252b5f1afc50b809dc5457e'}, {'path': 'tests/social_rosette_counts_test.cpp', 'patched_sha256': 'd98411023381116a0dc99f2de2a14f70423c0bb380abc3982153e48dfb9a354f'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '3748287c2fd8bf0006daf0df9ab9e5109b5aa78bb59cf87b81c5de800fe6d1c2'}, {'path': 'tests/ticket_atlas_view_test.cpp', 'patched_sha256': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}, {'path': 'tests/wallet_fresh_setup_view_test.cpp', 'patched_sha256': 'f65a1c31dc418b20254248cc340958e107127ba6b670e0d6d9ed93427102a421'}, {'path': 'tools/component_versions.json', 'patched_sha256': '2a527cf0c68508af6b16b8f77bf53736550904ae2296d5cb6a619b6ceedbdfaf'}, {'path': 'tools/package_core_bundle.py', 'patched_sha256': '17d96927a38103ed33c02c639069d48b166f37636f0c16854f7f75c4e6395845'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/CMakeLists.txt', 'patched_sha256': '8f5e792a1b96bb2d11899b52c7d3855316b9bd048242b60d65b3e2f1e151d9eb'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/init.cpp', 'patched_sha256': '433ba3367ec41f14e4c5b3184ee7630d41061b044c0d7c5759efd035d608be03'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/component_version.h', 'patched_sha256': '4790fdbcf801a098fdd01d2f0f4db7fa9e9466319709287a12abf874e818af5f'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes.h', 'patched_sha256': '0f1c106f5a9ad2a6722e354dcd2c1ade996ec0523d226b63d9abdb220612e63e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt', 'patched_sha256': '7a688cfe039ccf00716e14be1bbbcb5187ac062b77419032f97320eddbf39be7'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt', 'patched_sha256': '428326ac28c8e45737d80d857d87f2cc467f4b5f36478fb13c51d1c8752e3549'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_test.cpp', 'patched_sha256': 'fb40f6e85ad26aa56732abbc789dc5b7d09efeae54ad32b67141f206170849f1'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.cpp', 'patched_sha256': '9b497d9fe683b01d22c89c19e5b91850f86b88efebd0956dda0b93c60c0daed4'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.h', 'patched_sha256': 'd666fcd41aca4c5bf06201a94a42d16c9ecaa6952ede316ad94fde8dfd513839'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.cpp', 'patched_sha256': '4221f0c68aae33e3a0ca62359153bfb570a5e801e8d28cc5c68ae3f8fe43dc87'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.h', 'patched_sha256': 'abfe4104e44697c168914c1a27721bf446056cfac095ebed8390c2656b38bd6e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_store.h', 'patched_sha256': '6442f90212ad36255da4faa615dae27eec4e1fac249aeb2c675b3929709e559c'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_certificate.h', 'patched_sha256': '174f9c70701862910cadef319df58767eadf77fc0c5fc94c54795cf93e05da2d'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_contract.h', 'patched_sha256': 'cd90f6bdffc2f66dbe21a644aab5a396c503f09017c6b4b102fb60298e1f71f8'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_snapshot.h', 'patched_sha256': '4aeb3ea75a0802149a7d25ab90ee103ec40087c688038c985efde688f567b271'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp', 'patched_sha256': '7933a310908536577525224fd550ac6badcbc0093d41df17f666527ce8555f7a'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/social.cpp', 'patched_sha256': 'f5be743e4282aa08bcbab203198e625ac5d6938cdccf3ed3d4119cf0a24085fd'}]}
+          def sha(p):
+              with p.open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          for row in FROZEN['verified_files']:assert sha(ROOT/row['path'])==row['patched_sha256'],row['path']
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==FROZEN['source']
+          shutil.copy2(BUILD/'PGN-Horizon',STAGE/'PGN-Horizon')
+          # CMake declares this WebView2 deployment on Windows only.
+          assert not (BUILD/'assets/audit-animation.rcc').exists(), 'Unexpected Linux RCC; recheck declared deployment'
+          plugin_root=Path('/usr/lib/x86_64-linux-gnu/qt6/plugins')
+          for group,names in [('platforms',['libqxcb.so']),('sqldrivers',['libqsqlite.so'])]:
+              for name in names:
+                  target=STAGE/'plugins'/group/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(plugin_root/group/name,target)
+          (STAGE/'lib').mkdir();imports={};seen=set();origins={};system={}
+          base_system=re.compile(r'^(ld-linux|libc[.]|libm[.]|libdl[.]|libpthread[.]|librt[.]|libresolv[.]|libutil[.])')
+          pending=[STAGE/'PGN-Horizon',*sorted((STAGE/'plugins').rglob('*.so'))]
+          while pending:
+              image=pending.pop()
+              if image in seen:continue
+              seen.add(image);raw=subprocess.check_output(['ldd',str(image)],text=True);assert 'not found'not in raw,raw
+              imports[image.relative_to(STAGE).as_posix()]=raw
+              for name,path in re.findall(r'\s+(\S+)\s+=>\s+(/\S+)\s+\(',raw):
+                  if base_system.match(name):system[name]=path;continue
+                  target=STAGE/'lib'/name
+                  if target.exists():assert sha(target)==sha(Path(path));continue
+                  shutil.copy2(Path(path).resolve(),target);origins[target.relative_to(STAGE).as_posix()]=str(Path(path).resolve());pending.append(target)
+          (STAGE/'qt.conf').write_text('[Paths]\nPlugins=plugins\n')
+          files=[dict(path=p.relative_to(STAGE).as_posix(),bytes=p.stat().st_size,sha256=sha(p),origin=origins.get(p.relative_to(STAGE).as_posix()))for p in sorted(STAGE.rglob('*'))if p.is_file()]
+          result=dict(schema='PGN_LINUX_UI_BUILD_V1',qualification=dict(candidate=True,ctest_outcome=os.environ['PGN_CTEST_OUTCOME'],run=int(os.environ['PGN_CI_RUN']),workflow_commit=os.environ['PGN_QUALIFICATION_SHA'],prior_run=43685836028),compiler=subprocess.check_output(['c++','--version'],text=True).splitlines()[0],qt_version=subprocess.check_output(['qmake6','-query','QT_VERSION'],text=True).strip(),source=FROZEN['source'],source_tree=FROZEN['tree'],ui_version='2026.11.16.161',platform='ubuntu-24.04-x86_64',files=files,imports=imports,system_glibc_dependencies=system,live_processes_launched=False,core_built=False,updater_built=False)
+          (ROOT/'LINUX-UI-BUILD.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(dict(PASS=True,source=FROZEN['source'],files=len(files),executable_sha256=sha(STAGE/'PGN-Horizon'))))
+          
+          PGN_UI_COLLECTOR
+      - name: Run registered isolated tests
+        id: ui_tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: |
+          ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R "^(social-view|wallet-management|network-work-view|audit-explorer-view|social-rosette-counts|scientific-coverage-presentation|social-display-contract|social-available-height)$"
+          QT_QPA_PLATFORM=offscreen build-ci/pgn-wallet-fresh-setup-view-test
+      - name: Check audit lifecycle and grouped publication regressions
+        if: ${{ !cancelled() && steps.ui_build.outcome == 'success' }}
+        run: |
+          .ci-python/bin/python -I tests/test_late_cycle_completion.py
+          .ci-python/bin/python -I tests/test_audit_reveal_batch.py
+          .ci-python/bin/python -I tests/test_shared_audit_reveals.py
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ubuntu-source-tests-${{ github.run_id }}
+          path: |
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Finalize candidate with actual full-suite status
+        id: ui_finalize
+        if: ${{ !cancelled() && steps.ui_collect.outcome == 'success' }}
+        env:
+          PGN_CTEST_OUTCOME: ${{ steps.ui_tests.outcome }}
+        run: |
+          .ci-python/bin/python - <<'PGN_FINALIZE'
+          from pathlib import Path
+          import json,os,tarfile
+          p=Path('LINUX-UI-BUILD.json')
+          v=json.loads(p.read_text());v['qualification']['ctest_outcome']=os.environ['PGN_CTEST_OUTCOME'];v['qualification']['affected_suite_pass']=os.environ['PGN_CTEST_OUTCOME']=='success'
+          p.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8')
+          with tarfile.open('ui161-ubuntu.tar.gz','w:gz')as a:
+              a.add('ui-stage',arcname='ui');a.add(p,arcname=p.name)
+          print(json.dumps(v['qualification']))
+          PGN_FINALIZE
+      - name: Preserve candidate UI-only runtime and qualification status
+        if: ${{ !cancelled() && steps.ui_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui161-ubuntu-${{ github.run_id }}
+          path: ui161-ubuntu.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

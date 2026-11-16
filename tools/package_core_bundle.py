@@ -34,7 +34,7 @@ def assemble(executable: Path, runtime_files: list[Path], output: Path, *,
     entries = []
     for source in sources:
         name = source.name
-        if not source.is_file() or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name):
+        if not source.is_file() or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}", name):
             raise ValueError("Only explicit executable/library files may be packaged")
         with source.open("rb") as stream:
             signature = stream.read(4)

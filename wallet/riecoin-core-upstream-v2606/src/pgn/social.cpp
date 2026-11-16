@@ -14,6 +14,7 @@
 #include <map>
 #include <pgn/component_version.h>
 #include <pgn/social.h>
+#include <pgn/social_display_native.h>
 #include <pgn/social_storage.h>
 #include <random.h>
 #include <set>
@@ -266,6 +267,25 @@ class Service {
     std::function<void()> run;
   };
   std::mutex queue_mutex, data_mutex, commit_mutex, links_mutex;
+  std::mutex display_mutex;
+  std::unique_ptr<display::Store> display_store;
+  std::map<std::string, UniValue> display_statuses, display_reads;
+  std::set<std::string> display_submitting, display_reading;
+  std::atomic<uint64_t> display_revision{};
+  display::Store& DisplayStore(){
+    std::lock_guard guard(display_mutex);
+    if(!display_store)display_store=std::make_unique<display::Store>(gArgs.GetDataDirNet()/"social-display",Genesis(),display::NativeContext);
+    return *display_store;
+  }
+  UniValue DisplayStatus(const display::Result& r){
+    auto value=Obj();value.pushKV("schema","PGN_SOCIAL_DISPLAY_SUBMIT_2");value.pushKV("genesis",Genesis());value.pushKV("event_id",r.id);value.pushKV("state",r.state);value.pushKV("reason",r.reason);value.pushKV("permissions_granted",false);return value;
+  }
+  void AskDisplay(const std::shared_ptr<Link>& link){
+    if(!link->display_capable||link->closed)return;
+    auto f=Frame("display_get");f.pushKV("generation",link->display_generation);f.pushKV("cursor",link->display_cursor);
+    if(Output(link,std::move(f)))link->display_last_request_ms=Now();
+  }
+
   std::condition_variable wake;
   std::map<int64_t, std::deque<Job>> pending;
   std::deque<int64_t> turns;
@@ -772,11 +792,43 @@ class Service {
           String(frame, "genesis") != Genesis())
         return;
       link->capable = true;
-      Ask(link);
+      const auto& versions=frame["display_link_versions"];
+      if(versions.isArray()&&versions.size()<=8)for(const auto& v:versions.getValues())if(v.isNum()&&v.getInt<int>()==2)link->display_capable=true;
+      Ask(link);if(link->display_capable)AskDisplay(link);
       return;
     }
     if (!link->capable)
       return;
+    if(op=="display_get"&&link->display_capable){
+      try{
+        auto cursor=frame["cursor"].getInt<uint64_t>();
+        const auto generation=String(frame,"generation");
+        
+        const auto page=DisplayStore().Page(cursor,generation);
+        auto reply=Frame(page.exists("certificate")?"display_event":"display_end");
+        for(const char* key:{"generation","next_cursor","more"})reply.pushKV(key,page[key]);
+        if(page.exists("certificate"))reply.pushKV("certificate",page["certificate"]);
+        Output(link,std::move(reply));
+      }catch(const UniValue&){}catch(const std::exception&){}
+      return;
+    }
+    if(op=="display_event"&&link->display_capable){
+      try{
+        const auto raw=String(frame,"certificate");
+        const auto result=DisplayStore().Admit(raw);
+        // Context/I/O/missing-parent uncertainty MUST NOT acknowledge this cursor.
+        if(result.state=="accepted_local"||result.state=="pending_context"||result.state=="rejected"||result.state=="retention_reset"){
+          if(result.appended)++display_revision;
+          link->display_generation=String(frame,"generation");link->display_cursor=frame["next_cursor"].getInt<uint64_t>();
+          if(frame["more"].get_bool())AskDisplay(link);
+        }
+      }catch(const UniValue&){}catch(const std::exception&){}
+      return;
+    }
+    if(op=="display_end"&&link->display_capable){
+      try{const auto gen=String(frame,"generation");if(Hex(gen,64)){link->display_generation=gen;link->display_cursor=frame["next_cursor"].getInt<uint64_t>();}}catch(const std::exception&){}
+      return;
+    }
     if (op == "get") {
       const auto page = Read(String(frame, "generation"),
                              frame["cursor"].getInt<uint64_t>(), 1);
@@ -841,6 +893,7 @@ public:
     auto cap = Frame("cap");
     cap.pushKV("v", 1);
     cap.pushKV("genesis", Genesis());
+    UniValue display_versions{UniValue::VARR};display_versions.push_back(2);cap.pushKV("display_link_versions",display_versions);
     Output(link, std::move(cap));
     return link;
   }
@@ -858,8 +911,48 @@ public:
           link->tick_pending = false;
           if (Now() - link->last_request_ms >= 1000)
             Ask(link);
+          if(link->display_capable&&Now()-link->display_last_request_ms>=1000)AskDisplay(link);
         }))
       link->tick_pending = false;
+  }
+  UniValue SubmitDisplay(const std::string& raw){
+    if(raw.empty()||raw.size()>MAX_FRAME)return Status("rejected",{},"Bounded display certificate required");
+    const auto key=Hash(raw+":"+display::NativeTip());
+    {
+      std::lock_guard guard(display_mutex);
+      const auto found=display_statuses.find(key);
+      if(found!=display_statuses.end()&&String(found->second,"state")!="uncertain"&&String(found->second,"state")!="pending_parent")return found->second;
+      if(display_submitting.contains(key))return Status("queued",key);
+      if(display_submitting.size()>=8)return Status("uncertain",key,"Display queue busy; keep exact certificate");
+      display_submitting.insert(key);
+    }
+    if(!Enqueue({},[this,raw,key]{
+      display::Result result;
+      try{result=DisplayStore().Admit(raw);}
+      catch(const UniValue&){result={"uncertain","Native display context unavailable"};}
+      catch(const std::exception& e){result={"uncertain",e.what()};}
+      if(result.appended)++display_revision;
+      const auto value=DisplayStatus(result);
+      std::lock_guard guard(display_mutex);display_submitting.erase(key);if(display_statuses.size()>=128)display_statuses.erase(display_statuses.begin());display_statuses[key]=value;
+    })){std::lock_guard guard(display_mutex);display_submitting.erase(key);return Status("uncertain",key,"Display queue busy; keep exact certificate");}
+    return Status("queued",key);
+  }
+  UniValue ReadDisplay(const std::vector<std::string>& scripts){
+    if(scripts.empty()||scripts.size()>100)throw std::runtime_error("One through100 display targets required");
+    std::string combined;for(const auto& s:scripts)combined+=std::to_string(s.size())+":"+s;
+    const auto key=Hash(combined+":"+display::NativeTip()+":"+std::to_string(display_revision.load()));
+    {
+      std::lock_guard guard(display_mutex);const auto cached=display_reads.find(key);if(cached!=display_reads.end())return cached->second;
+      if(!display_reading.contains(key)&&display_reading.size()<8){
+        display_reading.insert(key);
+        if(!Enqueue({},[this,scripts,key]{
+          UniValue value;try{value=DisplayStore().Lookup(scripts);}catch(const UniValue&){}catch(const std::exception&){}
+          std::lock_guard guard(display_mutex);display_reading.erase(key);
+          if(value.isObject()){if(display_reads.size()>=32)display_reads.erase(display_reads.begin());display_reads[key]=std::move(value);}
+        }))display_reading.erase(key);
+      }
+    }
+    auto out=Obj();out.pushKV("schema","PGN_SOCIAL_CURRENT_DISPLAY_1");out.pushKV("genesis",Genesis());out.pushKV("state","loading");out.pushKV("current_display_only",true);out.pushKV("permissions_granted",false);return out;
   }
   UniValue SubmitProof(const std::string &message,
                        const std::string &signature) {
@@ -983,6 +1076,7 @@ public:
           auto item = Obj();
           item.pushKV("node_id", link->id);
           item.pushKV("matching_capability", true);
+          item.pushKV("display_links_v2",link->display_capable.load());
           array.push_back(item);
         }
     }
@@ -1004,7 +1098,8 @@ Service &Get() {
 }
 } // namespace
 bool Enabled() { return gArgs.GetBoolArg("-pgnsocial", true); }
-void Start() {
+void Start(ChainstateManager* manager) {
+  display::SetChainman(manager);
   if (Enabled())
     (void)Get();
 }
@@ -1047,6 +1142,8 @@ UniValue Events(const std::string &generation, uint64_t cursor,
     throw std::runtime_error("Core Social relay is disabled");
   return Get().Read(generation, cursor, limit);
 }
+UniValue SubmitDisplayLink(const std::string& raw){if(!Enabled())return Status("rejected",{},"Social disabled");return Get().SubmitDisplay(raw);}
+UniValue DisplayLinks(const std::vector<std::string>& scripts){if(!Enabled())throw std::runtime_error("Social disabled");return Get().ReadDisplay(scripts);}
 UniValue Peers() {
   if (!Enabled()) {
     auto out = Obj();
