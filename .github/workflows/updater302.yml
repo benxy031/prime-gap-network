@@ -1,0 +1,26 @@
+name: Updater302 single download and Windows status-reader robustness
+on:
+  push:
+    branches: [qualification/updater302-two-phase]
+permissions:
+  contents: read
+jobs:
+  updater:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            src/update
+            tools
+            tests
+      - name: Install pinned updater dependencies
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Authenticated phases and transaction failure checks
+        working-directory: tests
+        run: python -m unittest test_update_cli test_authenticated_updates test_component_install -q

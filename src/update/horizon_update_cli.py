@@ -17,7 +17,7 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.15.28'
+VERSION='2026.11.16.29'
 
 
 def maintain_installation(cache,context,context_sha,result):
@@ -113,7 +113,7 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             from horizon_linux_install import LinuxCohortLifecycle
             native_lifecycle=LinuxCohortLifecycle
         verify_running_base=lambda base:native_lifecycle.verify_running_base(store,base,request['activation'])
-    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),verify_running_base=verify_running_base)
+    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),verify_running_base=verify_running_base,retain_download=action=='prepare_install')
     if action=='install':
         stage.require(context['platform'] in ('windows-x86_64','linux-x86_64'),'Native installation platform is unsupported')
         if lifecycle_factory is None:
@@ -212,7 +212,12 @@ def main():
                 stage.require(args.result_file is None,'A result file requires an owned request file')
                 raw=sys.stdin.buffer.read(stage.MAX_MANIFEST+1);stage.require(len(raw)<=stage.MAX_MANIFEST,'Update request exceeds bound');request=stage._json(raw)
             def emit_progress(value):
-                if result_path:_write(result_path,value)
+                if result_path:
+                    try:_write(result_path,value)
+                    except OSError as error:
+                        # Progress is advisory. A temporarily locked status
+                        # file must not abort authenticated download/staging.
+                        if getattr(error,'winerror',None)not in(5,32,33):raise
                 else:sys.stderr.write(json.dumps(value,separators=(',',':'))+'\n');sys.stderr.flush()
             progress.configure(emit_progress)
             try:result=run(request)

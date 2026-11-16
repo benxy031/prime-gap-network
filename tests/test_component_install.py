@@ -6,7 +6,7 @@ selection, old-version conservation, and lifecycle failure behavior.
 """
 from copy import deepcopy
 from pathlib import Path
-import errno,hashlib,json,sys,tempfile,unittest,zipfile
+import contextlib,errno,hashlib,json,sys,tempfile,unittest,zipfile
 from unittest.mock import patch
 P=Path(__file__).resolve().parents[1];sys.path[:0]=[str(P/'tools'),str(P/'src/update')]
 import stage_component_bundle as stage
@@ -14,6 +14,12 @@ import horizon_component_install as install
 from test_component_staging import pe
 from build_component_bundle import COMPONENT_PREFIX,PRIMARY
 
+
+@contextlib.contextmanager
+def prepared_fixture(client,selected,*,discard_after=False):
+ receipt=client.prepare(selected)
+ lease=Path(receipt['stage']).parent.parent/'authenticated-fixture-lease';lease.mkdir(exist_ok=True)
+ with stage.owned_lock(lease):yield receipt
 
 class InstallTests(unittest.TestCase):
  def setUp(self):
@@ -34,7 +40,7 @@ class InstallTests(unittest.TestCase):
   self.cache=stage.init_cache(self.root/'staging',self.context)
   folder,plan=stage.stage_bundle(archive,stage.sha(archive.read_bytes()),self.context,self.context_sha,self.cache,['cpu'])
   self.receipt=dict(publisher_authenticated=True,context_sha256=self.context_sha,stage=str(folder),manifest_sha256=plan['manifest_sha256'],selection=['cpu'])
-  self.client=type('PreparedClient',(),dict(context=self.context,context_sha256=self.context_sha,prepare=lambda ignored,selected:deepcopy(self.receipt)))()
+  self.client=type('PreparedClient',(),dict(context=self.context,context_sha256=self.context_sha,prepared=prepared_fixture,prepare=lambda ignored,selected:deepcopy(self.receipt)))()
   self.original=install.inventory(self.base)[2]
  def tearDown(self):
   self.assertEqual(self.sentinel.read_bytes(),b'NEVER TOUCHED');self.assertEqual(install.inventory(self.base)[2],self.original);self.temp.cleanup()
@@ -63,7 +69,7 @@ class InstallTests(unittest.TestCase):
   cache=stage.init_cache(self.root/'second-staging',context);archive=self.root/'update.zip'
   folder,plan=stage.stage_bundle(archive,stage.sha(archive.read_bytes()),context,context_sha,cache,['cpu'])
   receipt=dict(publisher_authenticated=True,context_sha256=context_sha,stage=str(folder),manifest_sha256=plan['manifest_sha256'],selection=['cpu'])
-  client=type('SecondPreparedClient',(),dict(context=context,context_sha256=context_sha,prepare=lambda ignored,selected:deepcopy(receipt)))()
+  client=type('SecondPreparedClient',(),dict(context=context,context_sha256=context_sha,prepared=prepared_fixture,prepare=lambda ignored,selected:deepcopy(receipt)))()
   return Path(first['cohort']),install.CohortStore(self.store.root,context,context_sha),client
  def test_only_owned_immutable_cohorts_share_identical_code_across_updates(self):
   first,store,client=self.second_generation();second=Path(store.prepare(client,['cpu'])['cohort'])
@@ -82,9 +88,11 @@ class InstallTests(unittest.TestCase):
   for path in paths:
    info=path.stat();unique[(info.st_dev,info.st_ino)]=info.st_size
   physical=sum(unique.values());self.assertLess(physical,logical)
-  with patch.object(install,'MAX_STORE',physical):store._quota()
-  with patch.object(install,'MAX_STORE',physical-1):
-   with self.assertRaisesRegex(ValueError,'quota'):store._quota()
+  from types import SimpleNamespace
+  additional=4096;reserve=16*1024*1024
+  with patch.object(install.shutil,'disk_usage',return_value=SimpleNamespace(free=reserve+additional)):store._quota(additional)
+  with patch.object(install.shutil,'disk_usage',return_value=SimpleNamespace(free=reserve+additional-1)):
+   with self.assertRaisesRegex(ValueError,'disk space'):store._quota(additional)
  def test_inconclusive_link_creation_never_overwrites_an_existing_code_alias(self):
   first,store,client=self.second_generation();real=install.os.link
   def uncertain(source,target):real(source,target);raise OSError('Ambiguous filesystem result')

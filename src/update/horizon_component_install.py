@@ -144,7 +144,16 @@ def _write(path, value):
     try:
         with temporary.open('xb') as stream:
             stream.write(raw);stream.flush();os.fsync(stream.fileno())
-        os.replace(temporary,path)
+        # Readers (including the Qt status poller) can briefly hold a Windows
+        # file without delete sharing. Keep each receipt atomic and bounded.
+        import time
+        delays=(.01,.02,.04,.08,.16)
+        for attempt in range(len(delays)+1):
+            try:
+                os.replace(temporary,path);break
+            except OSError as error:
+                if os.name!='nt' or getattr(error,'winerror',None)not in(5,32,33) or attempt==len(delays):raise
+                time.sleep(delays[attempt])
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -414,13 +423,13 @@ class CohortStore:
             previous={k:v for k,v in before.items()if k!='previous'})
         return current==expected
 
-    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None):
+    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False):
         # Never accept a caller-created boolean "authenticated" receipt.
         stage.require(client.context==self.context and client.context_sha256==self.context_sha256,'Authentication client context differs')
         with locked_cache(self.root):self.require_resolved_transaction()
         # Hold the download-cache lock through every stage read/copy. A second
         # helper must not reclaim our authenticated source after prepare returns.
-        with client.prepared(selected,discard_after=True) as receipt:
+        with client.prepared(selected,discard_after=not retain_download) as receipt:
             return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base)
 
     def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None):

@@ -19,6 +19,53 @@ class CliTests(unittest.TestCase):
  def test_authenticated_available_version_and_preparation(self):
   result=self.call();self.assertTrue(result['publisher_authenticated']);self.assertEqual(result['components'][0]['version'],'1.0.0')
   self.request['action']='prepare';result=self.call();self.assertTrue(result['publisher_authenticated']);self.assertFalse(result['installation_performed'])
+ def test_download_then_install_fetches_authenticated_bundle_only_once(self):
+  base=InstallTests();base.setUp();calls=[];fetch=self.fixture.transport._fetch
+  def counted(url):
+   if url.endswith('.zip'):calls.append(url)
+   yield from fetch(url)
+  self.fixture.transport._fetch=counted
+  try:
+   self.request.update(action='prepare_install',base_cohort=str(base.base),installation_store=str(self.fixture.root/'two-phase-install'))
+   self.request['context']=deepcopy(self.request['context']);self.request['context']['installed']=deepcopy(base.context['installed'])
+   component=self.fixture.manifest['components'][0];component['primary']='payload/cpu/EngineRuntime/cpu/horizon-cpu-controller.exe';component['files'][0]['path']=component['primary'];component['abi']='qa.1';self.fixture.publish()
+   first=self.call();self.assertTrue(first['publisher_authenticated']);self.assertEqual(len(calls),1)
+   self.request.update(action='install',activation={'fixture':'owned-lifecycle'})
+   class Lifecycle:
+    def __init__(self,*args):pass
+    def drain(self):return True
+    def start_and_verify(self,path):return True
+    def restore_previous(self,*args):raise AssertionError('Unexpected restore')
+    def close(self):pass
+   final=cli.run(self.request,repositories=self.repositories,fetcher=self.fixture.transport,lifecycle_factory=Lifecycle)
+   self.assertTrue(final['installation_committed']);self.assertEqual(len(calls),1,'Restart/install fetched the prepared bundle again')
+  finally:base.tearDown()
+ def test_locked_progress_file_cannot_abort_the_authenticated_operation(self):
+  folder=Path(self.request['cache'])/'sessions'/('3'*32);folder.mkdir(parents=True);source=folder/'request.json';source.write_text(json.dumps(dict(self.request,action='install')));target=folder/'result.json';output=io.StringIO();write=cli._write
+  def locked(path,value):
+   if value.get('schema')=='PGN_UPDATE_PROGRESS_V1':
+    error=PermissionError('Simulated Windows reader sharing violation');error.winerror=32;raise error
+   return write(path,value)
+  def run(request):
+   cli.progress.report('download',completed=1,total=2,force=True)
+   return dict(schema='PGN_UPDATE_INSTALL_RESULT_V1',publisher_authenticated=True,installation_performed=True,installation_committed=True)
+  with patch.object(sys,'argv',['horizon-updater','--request-file',str(source),'--result-file',str(target)]),patch.object(cli,'run',side_effect=run),patch.object(cli,'_write',side_effect=locked),contextlib.redirect_stdout(output):code=cli.main()
+  self.assertEqual(code,0);self.assertTrue(json.loads(output.getvalue())['installation_committed']);self.assertTrue(json.loads(target.read_bytes())['installation_committed'])
+ @unittest.skipUnless(sys.platform=='win32','Windows file sharing semantics')
+ def test_atomic_receipt_survives_a_temporary_windows_status_reader(self):
+  import ctypes,threading,time
+  import horizon_component_install as install
+  from ctypes import wintypes
+  path=self.fixture.root/'reader-result.json';install._write(path,{'old':True})
+  kernel=ctypes.WinDLL('kernel32',use_last_error=True);kernel.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE];kernel.CreateFileW.restype=wintypes.HANDLE;kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+  handle=kernel.CreateFileW(str(path),0x80000000,1,None,3,0,None);self.assertNotEqual(handle,ctypes.c_void_p(-1).value)
+  probe=path.with_name('replacement-probe.json');probe.write_text('{}')
+  try:
+   with self.assertRaises(PermissionError):probe.replace(path)
+   owned_handle=handle;thread=threading.Thread(target=lambda:(time.sleep(.06),kernel.CloseHandle(owned_handle)));thread.start();handle=None
+   install._write(path,{'new':True});thread.join(timeout=1);self.assertFalse(thread.is_alive());self.assertEqual(json.loads(path.read_bytes()),{'new':True})
+  finally:
+   if handle is not None:kernel.CloseHandle(handle)
  def test_request_cannot_inject_another_repository_or_trust_key(self):
   for key in ('metadata_url','root','command'):
    self.request[key]='attacker'
