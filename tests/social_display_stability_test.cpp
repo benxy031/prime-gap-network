@@ -3,12 +3,12 @@
 #include <iostream>
 #include <vector>
 using namespace pgn::social;
-using Reply=std::function<void(QJsonValue,QString)>;
+using DisplayTestReply=std::function<void(QJsonValue,QString)>;
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);const QString genesis(64,'a'),subject="0014"+QString(40,'1'),anchor(64,'b');
  Identity identity{genesis,subject};Snapshot input;input.identity=identity;input.section=Section::Chat;input.entries.resize(1);input.entries[0].authorId=subject;input.entries[0].author="Miner fallback";
- enum Mode{Linked,Loading,Unavailable,Withdrawn,WrongNetwork};Mode mode=Linked;QString label="Alpha";bool held=false;std::vector<Reply> anchors;
- PublicDisplayRpc rpc=[&](QString method,QJsonArray,Reply done){
+ enum Mode{Linked,Loading,Unavailable,Withdrawn,WrongNetwork};Mode mode=Linked;QString label="Alpha";bool held=false;std::vector<DisplayTestReply> anchors;
+ PublicDisplayRpc rpc=[&](QString method,QJsonArray,DisplayTestReply done){
   if(method=="getblockhash"){if(held)anchors.push_back(std::move(done));else done(anchor,{});return;}
   if(method!="getsocialdisplaylinks"){done({},"Unexpected RPC");return;}
   if(mode==Unavailable){done({},"Transient Core queue unavailable");return;}
