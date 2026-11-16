@@ -55,6 +55,13 @@ class InstallTests(unittest.TestCase):
   reopened=install.CohortStore(self.store.root,context,'unused-at-this-read-boundary')
   self.assertEqual(reopened.current()['cohort'],candidate['cohort'])
   with self.assertRaisesRegex(ValueError,'overlaps'):stage._cache_path(self.store.root,context)
+ @unittest.skipUnless(sys.platform=='win32','Windows short path aliases')
+ def test_short_and_long_windows_paths_share_the_protected_boundary(self):
+  import ctypes
+  get_short=ctypes.windll.kernel32.GetShortPathNameW;get_short.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_uint];get_short.restype=ctypes.c_uint
+  buffer=ctypes.create_unicode_buffer(32768);count=get_short(str(self.root),buffer,len(buffer));self.assertGreater(count,0);self.assertLess(count,len(buffer));short=Path(buffer.value)
+  self.assertEqual(short.resolve(),self.root.resolve())
+  with self.assertRaisesRegex(ValueError,'overlaps'):stage._cache_path(short,{'protected_roots':[str(self.user.resolve())]})
  def test_wallet_or_unselected_code_nested_in_install_store_remains_forbidden(self):
   candidate=self.store.prepare(self.client,['cpu'])
   for path in (self.store.root,self.store.root/'wallets',Path(candidate['cohort'])):
