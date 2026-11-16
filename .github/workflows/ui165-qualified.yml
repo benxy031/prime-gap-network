@@ -96,7 +96,7 @@ jobs:
           cp build-social278/qt_roles_test.exe build-social278/social_view_test.exe social278-qa/
           qmake6 -query QT_VERSION > social278-qa/QT_VERSION.txt
           g++ -dumpversion > social278-qa/GCC_VERSION.txt
-          git rev-parse HEAD > social278-qa/SOURCE.txt
+          printf '%s\n' "$GITHUB_SHA" > social278-qa/SOURCE.txt
           sha256sum social278-qa/*.exe > social278-qa/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
