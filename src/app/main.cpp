@@ -14,6 +14,7 @@
 #include "ui/vanity_view.h"
 #include "ui/social_view.h"
 #include "ui/social_display_session.h"
+#include "social/social_configured_mining_identity.h"
 #include "ui/social_remote_name_signer.h"
 #include "social/social_core_service.h"
 #include "social/social_leaderboard.h"
@@ -644,6 +645,15 @@ int main(int argc,char** argv) {
  if(testnetMode){
   QFile identityFile(pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/mining-address.json");
   if(identityFile.open(QIODevice::ReadOnly)&&identityFile.size()<=8192)attachAuditIdentity(QJsonDocument::fromJson(identityFile.readAll()).object());
+  // Legacy remote profiles already contain the selected mining identity.
+  if(toolsButton->property("pgn_public_audit_address").toString().isEmpty()){
+   QFile profile(pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/worker-stream.json");
+   const auto genesis=pgn::wallet::installedCoreGenesis(root);
+   if(profile.open(QIODevice::ReadOnly)&&profile.size()<=65536){
+    const auto address=pgn::social::configuredMiningAddress(QJsonDocument::fromJson(profile.readAll()).object(),genesis);
+    if(!address.isEmpty())attachAuditIdentity(QJsonObject{{"address",address},{"genesis",genesis}});
+   }
+  }
  }
  if(testnetMode){
   const auto exporter=QCoreApplication::applicationDirPath()+"/EngineRuntime/network/horizon-engine-host"
