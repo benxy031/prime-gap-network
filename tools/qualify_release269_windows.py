@@ -66,7 +66,9 @@ try:
     process.wait(timeout=20);assert process.returncode==0 and life.ui.exited()
     assert store.current()['cohort']==str(new)
     live=owned_ipc(life.new_ui,'--inspect-owned')
-    assert live['pgn_update_genesis']==GENESIS and live['pgn_update_data_root']==str(data)
+    (E/'before.json').write_text(json.dumps(state,indent=2)+'\n')
+    (E/'after.json').write_text(json.dumps(live,indent=2)+'\n')
+    assert live['pgn_update_genesis']==GENESIS and Path(live['pgn_update_data_root']).resolve()==data.resolve(), 'Updated Windows data-root identity differs'
     assert sha(sentinel)==saved
     seen=[]
     for section in ('Wallet','Social','SocialMiners','Mining'):
