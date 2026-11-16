@@ -13,18 +13,18 @@
 
 namespace pgn::ui {
 namespace access_client {
-inline QStringList strings(const QJsonValue& value){
+inline QStringList accessStringList(const QJsonValue& value){
  if(!value.isArray()||value.toArray().size()>128)throw std::runtime_error("Invalid access list");
  QStringList out;for(const auto& x:value.toArray()){if(!x.isString())throw std::runtime_error("Invalid access text");out<<x.toString();}return out;
 }
 inline social::AccessSnapshot decode(const QJsonObject& v,const social::Identity& identity,const social::AccessNativeContext& native){
  using namespace social;
  if(v["identity"]!=identity.subject||v["genesis"]!=identity.genesis||v["community"]!=native.community||v["authenticated"]!=true)throw std::runtime_error("Access response belongs to another account or network");
- AccessSnapshot s;s.identity=identity;s.authenticated=true;s.community=native.community;s.revision=v["revision"].toString();s.source=v["source"].toString();s.observedUtc=QDateTime::fromMSecsSinceEpoch(v["observed_ms"].toInteger(),Qt::UTC);s.moderatorRoleId=v["moderator_role_id"].toString();s.permissionCatalog=strings(v["permissions"]);s.grantablePermissions=strings(v["grantable"]);
+ AccessSnapshot s;s.identity=identity;s.authenticated=true;s.community=native.community;s.revision=v["revision"].toString();s.source=v["source"].toString();s.observedUtc=QDateTime::fromMSecsSinceEpoch(v["observed_ms"].toInteger(),Qt::UTC);s.moderatorRoleId=v["moderator_role_id"].toString();s.permissionCatalog=accessStringList(v["permissions"]);s.grantablePermissions=accessStringList(v["grantable"]);
  if(!v["roles"].isArray()||v["roles"].toArray().size()>100||!v["members"].isArray()||v["members"].toArray().size()>200||!v["overwrites"].isArray()||v["overwrites"].toArray().size()>500||!v["availability"].isArray()||v["availability"].toArray().size()>1000)throw std::runtime_error("Access page exceeds its limits");
- for(const auto& x:v["roles"].toArray()){const auto o=x.toObject();s.roles<<AccessRole{o["id"].toString(),o["name"].toString(),o["position"].toInt(-1),strings(o["permissions"]),o["managed"].toBool()};}
- for(const auto& x:v["members"].toArray()){const auto o=x.toObject();s.members<<AccessMember{o["id"].toString(),o["name"].toString(),strings(o["roles"])};}
- for(const auto& x:v["overwrites"].toArray()){const auto o=x.toObject();s.overwrites<<ChannelOverwrite{o["channel"].toString(),o["target"].toString(),o["member"].toBool(),strings(o["allow"]),strings(o["deny"])};}
+ for(const auto& x:v["roles"].toArray()){const auto o=x.toObject();s.roles<<AccessRole{o["id"].toString(),o["name"].toString(),o["position"].toInt(-1),accessStringList(o["permissions"]),o["managed"].toBool()};}
+ for(const auto& x:v["members"].toArray()){const auto o=x.toObject();s.members<<AccessMember{o["id"].toString(),o["name"].toString(),accessStringList(o["roles"])};}
+ for(const auto& x:v["overwrites"].toArray()){const auto o=x.toObject();s.overwrites<<ChannelOverwrite{o["channel"].toString(),o["target"].toString(),o["member"].toBool(),accessStringList(o["allow"]),accessStringList(o["deny"])};}
  const QStringList actions{"create_role","edit_role","delete_role","move_role","assign_role","remove_role","kick_member","ban_member","set_overwrite","remove_content","pin_content","react_content"};
  for(const auto& x:v["availability"].toArray()){const auto o=x.toObject();const auto at=actions.indexOf(o["action"].toString());if(at<0||!o["allowed"].isBool())throw std::runtime_error("Unknown access action");Availability a;a.action=static_cast<AccessAction>(at);a.target=o["target"].toString();a.role=o["role"].toString();a.channel=o["channel"].toString();a.allowed=o["allowed"].toBool();a.reason=o["reason"].toString();s.availability<<a;}
  const auto a=v["session"].toObject();if(a["identity"]!=identity.subject||a["state"]!="verified"||a["device"]!=native.script||!a["devices"].isArray()||a["devices"].toArray().size()>20)throw std::runtime_error("The verified wallet session changed");
