@@ -1,12 +1,12 @@
-name: UI168 wallet CPU and readable updater MB
+name: UI168 stable chat names wallet CPU and MB
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/progress300-runtime]
+    branches: [qualification/names303-stable-refresh]
 permissions:
   contents: read
 concurrency:
-  group: progress300-runtime-${{ github.ref }}
+  group: names303-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
@@ -36,6 +36,7 @@ jobs:
             /tools/
             /data/
             /qualification/names286/
+            /qualification/names303/
             /qualification/wallet285/
             /qualification/cpu296/
             /wallet/riecoin-core-upstream-v2606/src/
@@ -114,6 +115,7 @@ jobs:
         run: |
           mkdir -p names286-qa
           cp build-wallet285/baseline.exe build-wallet285/candidate.exe build-wallet285/defaultwallet.exe names286-qa/
+          cp build-names286/stable-display.exe build-names286/original-display.exe names286-qa/
           cp build-names286/configured-identity.exe build-names286/automatic-name.exe build-names286/actual-name.exe build-app286/PGN-Horizon.exe names286-qa/
           printf '%s\n' "$GITHUB_SHA" > names286-qa/SOURCE.txt
           qmake6 -query QT_VERSION > names286-qa/QT_VERSION.txt
