@@ -115,13 +115,17 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  QJsonObject cov{{"genesis",QString(64,'1')},{"bestblockhash",QString(64,'a')},{"height",200},
   {"origin","150000000000000000000"},{"range_width","200000000000000"},
   {"contiguous_end","150000400000000000000"},{"first_missing_index","2"},
-  {"first_missing_end","150000600000000000000"},{"validated_ranges",3},
-  {"last_validated_end","150000800000000000000"}};
+  {"first_missing_end","150000600000000000000"},{"validated_ranges",11324},
+  {"last_validated_end","152265000000000000000"}};
  covFrame.insert("scientific_coverage",cov);
  NetworkWorkView covered([&](int,NetworkWorkView::Result done){done(covFrame,{});},[](const QString&,NetworkWorkView::Result done){done({},"No additional details");});
  covered.resize(1366,900);covered.show();app.processEvents();
- auto* covLabel=covered.findChild<QLabel*>("pgn-scientific-coverage");need(covLabel&&covLabel->text().contains("First unvalidated range: 3"),"actual widget shows first scientific hole, not random ticket ID");
+ auto* covLabel=covered.findChild<QLabel*>("pgn-scientific-coverage");need(covLabel&&covLabel->accessibleDescription().contains("First unvalidated range: 3"),"actual widget shows first scientific hole, not random ticket ID");
  need(covLabel->toolTip().contains("150000400000000000000"),"exact range boundary available in tooltip");
+ if(!captures.isEmpty()){
+  covered.setStyleSheet("QWidget{background:#010b10;color:#c9eee7;}"+HorizonWorkspaceControlStyle());
+  for(int width:{800,1920,1366}){covered.resize(width,900);for(int n=0;n<8;++n)app.processEvents();covered.resize(width,900);for(int n=0;n<8;++n)app.processEvents();const auto image=covered.grab();need(image.width()==width,"capture must have the advertised actual width");need(image.save(QDir(captures).filePath(QString("coverage-%1.png").arg(width))),"qualified coverage widget capture");}
+ }
  QPushButton* covRefresh=nullptr;for(auto* button:covered.findChildren<QPushButton*>())if(button->text()=="Refresh work")covRefresh=button;
  need(covRefresh,"coverage refresh action exists");covFrame.insert("bestblockhash",QString(64,'b'));covRefresh->click();app.processEvents();
  need(covLabel->text()=="Scientific coverage unavailable","new branch never keeps stale coverage or invents zero");

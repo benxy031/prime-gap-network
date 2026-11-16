@@ -43,6 +43,15 @@ ScientificCoveragePresentation scientificCoveragePresentation(const QJsonObject&
  result.available=true;
  result.text=QStringLiteral("Validated ranges: %1 · Consecutive from origin: %2 · First unvalidated range: %3")
   .arg(QLocale(QLocale::English).toString(count),decimal(*index),decimal(firstHuman));
+ result.richText=QStringLiteral(
+  "<table width='100%' cellspacing='0' cellpadding='3'><tr>"
+  "<td width='33%'><span style='font-size:12px;color:#a8c8cb'>Validated ranges</span><br>"
+  "<span style='font-size:22px;font-weight:600;color:#d8f3ee'>%1</span></td>"
+  "<td width='33%'><span style='font-size:12px;color:#a8c8cb'>Consecutive from origin</span><br>"
+  "<span style='font-size:22px;font-weight:600;color:#d8f3ee'>%2</span></td>"
+  "<td width='34%'><span style='font-size:12px;color:#f3d49a'>First unvalidated range</span><br>"
+  "<span style='font-size:22px;font-weight:600;color:#f3d49a'>%3</span></td></tr></table>")
+  .arg(QLocale(QLocale::English).toString(count),decimal(*index),decimal(firstHuman));
  result.tooltip=QStringLiteral("Verified snapshot %1 at height %2.\nConsecutive coverage: [%3, %4).\nFirst unvalidated interval: [%4, %5).\nRange numbering starts at 1 in scientific order, independently of random ticket IDs.")
   .arg(value.value("bestblockhash").toString(),QString::number(value.value("height").toInteger()),
        decimal(*origin),decimal(*end),decimal(*missingEnd));

@@ -1,4 +1,5 @@
 #include "ui/network_metrics_view.h"
+#include "ui/network_metrics_caption.h"
 #include "ui/rational_formats.h"
 #include <QDateTime>
 #include <QEvent>
@@ -88,9 +89,9 @@ public:
             if(guard->snapshot_!=value)guard->clearHover();
             guard->snapshot_=value;guard->error_=error;
             for(const auto& choice:guard->buttons_)choice.second->setChecked(choice.first==guard->hub_->span());
-            QString caption=error.isEmpty()?QString("Network · ledger %1 · 10-minute chain-time estimate").arg(value.value("height").toInteger()):
-                QString("Network metrics unavailable · %1%2").arg(error,value.isEmpty()?QString{}:QString(" · last verified snapshot retained"));
+            const auto caption=networkMetricsCaption(value,error);
             if(guard->status_->text()!=caption)guard->status_->setText(caption);
+            guard->status_->setToolTip(networkMetricsTechnicalTip(value));
             const QString style=error.isEmpty()?"color:#9bdacf":"color:#ffbd69";if(guard->status_->styleSheet()!=style)guard->status_->setStyleSheet(style);
             guard->setProperty("pgn_network_metrics_snapshot",value);guard->setProperty("pgn_network_metrics_error",error);
             if(changed)guard->update();

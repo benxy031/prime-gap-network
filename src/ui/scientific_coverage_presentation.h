@@ -2,6 +2,6 @@
 #include <QJsonObject>
 #include <QString>
 namespace pgn::ui {
-struct ScientificCoveragePresentation { QString text, tooltip; bool available{}; };
+struct ScientificCoveragePresentation { QString text, tooltip; bool available{}; QString richText; };
 ScientificCoveragePresentation scientificCoveragePresentation(const QJsonObject& snapshot);
 }

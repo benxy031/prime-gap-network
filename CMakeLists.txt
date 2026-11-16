@@ -1932,3 +1932,7 @@ add_executable(pgn-scientific-coverage-presentation-test tests/scientific_covera
 target_include_directories(pgn-scientific-coverage-presentation-test PRIVATE src/ui)
 target_link_libraries(pgn-scientific-coverage-presentation-test PRIVATE Qt6::Core)
 add_test(NAME scientific-coverage-presentation COMMAND pgn-scientific-coverage-presentation-test)
+
+add_test(NAME network-metrics-view COMMAND pgn-network-metrics-view-test)
+set_tests_properties(network-metrics-view PROPERTIES TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_test(NAME network-metrics-snapshot COMMAND pgn-network-metrics-snapshot-test)

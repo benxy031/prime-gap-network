@@ -1,4 +1,8 @@
 #include "ui/network_metrics_view.h"
+#include "ui/network_metrics_caption.h"
+#include "ui/panel_style.h"
+#include "ui/render/horizon_workspace_style.h"
+#include <QLabel>
 #include <QApplication>
 #include <QDir>
 #include <QImage>
@@ -12,17 +16,29 @@
 using namespace pgn::ui;
 static void require(bool okay,const char* message){if(!okay)throw std::runtime_error(message);}
 int main(int argc,char** argv){
-    QApplication app(argc,argv);std::deque<std::pair<int,std::function<void(QJsonObject,QString)>>> pending;
+    QApplication app(argc,argv);app.setStyleSheet(dataPanelStyle()+HorizonWorkspaceControlStyle());std::deque<std::pair<int,std::function<void(QJsonObject,QString)>>> pending;
     NetworkMetricsHub hub([&](int span,auto callback){pending.push_back({span,std::move(callback)});});
     auto* home=createNetworkMetricsView(&hub,true);auto* history=createNetworkMetricsView(&hub,false);
     home->resize(700,260);history->resize(1100,600);home->show();history->show();app.processEvents();
     require(pending.size()==1,"Two views opened duplicate parallel requests");
     QJsonArray points;for(int i=0;i<3;++i)points.append(QJsonObject{{"time",1793550000+i*300},{"height",i+1},
-        {"merit_target_q16",28*65536+i*137},{"window_seconds",600},{"reported_positions","600000000000000"},{"audited_positions","200000000000000"}});
-    QJsonObject snapshot{{"height",3},{"points",points}};
+        {"gold_count",i},{"hash",QString(64,QChar(u'a'+i))},{"merit_target_q16",28*65536+i*137},{"window_seconds",600},{"reported_positions","600000000000000"},{"audited_positions","200000000000000"}});
+    QJsonObject snapshot{{"height",3},{"bestblockhash",QString(64,'c')},{"points",points}};
     auto answer=[&](QJsonObject value,QString error={}){auto callback=std::move(pending.front().second);pending.pop_front();callback(value,error);app.processEvents();};
     answer(snapshot);if(!pending.empty())answer(snapshot);
+    require(networkGoldCount(snapshot)==2,"Primary Gold count must not be the coordination ledger height");
+    require(networkMetricsCaption(snapshot,{}).contains("Gold blocks 2"),"Primary caption does not show Gold blocks");
+    auto malformed=snapshot;auto badPoints=points;auto bad=badPoints.last().toObject();bad.remove("gold_count");badPoints.replace(2,bad);malformed.insert("points",badPoints);
+    require(!networkGoldCount(malformed)&&networkMetricsCaption(malformed,{}).contains("unavailable"),"Absent Gold data invented a count");
+    bad.insert("gold_count",0);badPoints.replace(2,bad);malformed.insert("points",badPoints);require(networkGoldCount(malformed)==0,"Verified zero Gold count was hidden");
+    bad.insert("gold_count",4);badPoints.replace(2,bad);malformed.insert("points",badPoints);require(!networkGoldCount(malformed),"Gold count exceeded ledger height");
+    bad.insert("gold_count",1.5);badPoints.replace(2,bad);malformed.insert("points",badPoints);require(!networkGoldCount(malformed),"Fractional Gold count accepted");
+    malformed=snapshot;malformed.insert("bestblockhash",QString(64,'d'));require(!networkGoldCount(malformed),"Mixed branch Gold count accepted");
+    malformed=snapshot;malformed.insert("height",4);require(!networkGoldCount(malformed),"Mixed height Gold count accepted");
+    require(networkMetricsCaption(snapshot,"Connection lost").contains("unavailable")&&!networkMetricsCaption(snapshot,"Connection lost").contains("Gold blocks 2"),"Stale count presented as current after transport failure");
+    require(networkMetricsTechnicalTip(snapshot).contains("3"),"Technical ledger height was lost");
     require(home->property("pgn_network_metrics_snapshot").toJsonObject()==snapshot&&history->property("pgn_network_metrics_snapshot").toJsonObject()==snapshot,"Views do not share one exact snapshot");
+    for(auto* view:{home,history}){bool caption=false;for(auto* label:view->findChildren<QLabel*>())if(label->text().contains("Gold blocks 2")){caption=true;require(label->toolTip().contains("3"),"Actual caption lost technical ledger tooltip");}require(caption,"Actual graph widget does not show the verified Gold count");}
     for(auto* view:{home,history})for(const auto width:{520,800,1400}){
         view->resize(width,view==home?260:600);app.processEvents();QImage image(view->size(),QImage::Format_ARGB32);image.fill(Qt::transparent);view->render(&image);
         const auto merit=view->property("pgn_merit_plot_bounds").toList(),rate=view->property("pgn_rate_plot_bounds").toList();

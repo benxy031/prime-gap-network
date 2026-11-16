@@ -141,7 +141,7 @@ private:
     }
     void refresh(){if(busy_)return;busy_=true;const int page=offset_;const QPointer<NetworkWorkView> guard(this);pageReader_(page,[guard,page](QJsonObject state,QString error){
         if(!guard)return;guard->busy_=false;if(page!=guard->offset_){guard->refresh();return;}if(!error.isEmpty()){if(guard->snapshot_.isEmpty())guard->timer_.setInterval(500);guard->presentStatus(error,true);return;}
-        guard->timer_.setInterval(5000);const bool changed=guard->snapshot_.value("bestblockhash")!=state.value("bestblockhash")||guard->renderedOffset_!=page;guard->snapshot_=state;guard->renderedOffset_=page;const auto coverage=scientificCoveragePresentation(state);guard->coverage_->setText(coverage.text);guard->coverage_->setToolTip(coverage.tooltip);
+        guard->timer_.setInterval(5000);const bool changed=guard->snapshot_.value("bestblockhash")!=state.value("bestblockhash")||guard->renderedOffset_!=page;guard->snapshot_=state;guard->renderedOffset_=page;const auto coverage=scientificCoveragePresentation(state);guard->coverage_->setText(coverage.available?coverage.richText:coverage.text);guard->coverage_->setAccessibleDescription(coverage.text);guard->coverage_->setToolTip(coverage.tooltip);
         if(changed)guard->render();guard->previous_->setEnabled(page>0);guard->next_->setEnabled(state.value("leases").toArray().size()==100);
         if(guard->selectedId_.isEmpty()&&guard->table_->rowCount()){guard->table_->selectRow(0);}else if(changed&&!guard->selectedId_.isEmpty())guard->inspect(guard->selectedId_);
         guard->prefetchVisible();

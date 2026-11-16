@@ -1010,7 +1010,7 @@ void CoreRuntime::inspect(){
       const auto publish=[this,ownerEpoch](const ChainObservation& value){
        if(!ownerEpoch.matches(epoch())||!processAlive())return;checking_=false;setLinkState(CoreLinkState::Ready);
        if(onObservation)onObservation(value);
-       report("PGN CORE · height "+QString::number(value.height)+
+       report(QStringLiteral("PGN CORE")+
         (!value.synchronizing?" · SYNC STATUS UNAVAILABLE":*value.synchronizing?" · SYNCHRONIZING":value.oldTipAt(QDateTime::currentDateTimeUtc())?" · CONNECTED · CHAIN IDLE":" · CONNECTED"));
       };
       if(!peerBootstrap_){publish(observation);return;}
