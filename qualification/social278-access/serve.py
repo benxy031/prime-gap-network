@@ -29,7 +29,9 @@ def main():
  parser=argparse.ArgumentParser();parser.add_argument('--config',required=True,type=Path);args=parser.parse_args();raw=args.config.read_bytes()
  if len(raw)>16384:raise ValueError('Bounded explicit community configuration required')
  config=json.loads(raw);database=Path(config['database']);database.parent.mkdir(parents=True,exist_ok=True);rpc=CoreReader(config)
- if rpc('getblockhash',[0])!=config['genesis']:raise ValueError('Core genesis mismatch')
+ # Core may start later than this service or restart during a normal update.
+ # Each fresh proof independently checks block zero; the content reader also
+ # rejects another genesis. An offline wallet must not prevent service startup.
  registry=CommunityKeys(rpc,config['genesis']);bootstrap=Store(database,config['genesis'],config['moderators'],create=True,account_registry=registry.resolve);community=bootstrap.community;bootstrap.close()
  index=ContentIndex(database,config['genesis'],rpc);stopping=threading.Event()
  def backend():
@@ -41,7 +43,7 @@ def main():
    stopping.wait(15)
  worker=threading.Thread(target=index_loop,daemon=True);worker.start()
  server=AccessServer(('127.0.0.1',config['listen_port']),backend,projection=lambda q:projection(database,config['genesis'],community,q));server.authorization_slots=threading.BoundedSemaphore(1)
- print(json.dumps(dict(ready=True,community=community,genesis=config['genesis'],loopback_port=config['listen_port'])),flush=True)
+ print(json.dumps(dict(ready=True,community=community,genesis=config['genesis'],loopback_port=server.server_port)),flush=True)
  try:server.serve_forever(poll_interval=.5)
  finally:stopping.set();server.server_close();worker.join(timeout=4)
 if __name__=='__main__':main()
