@@ -1,12 +1,12 @@
-name: UI168 existing wallet names and CPU routing
+name: UI168 wallet CPU and readable updater MB
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/cpu296-runtime]
+    branches: [qualification/progress300-runtime]
 permissions:
   contents: read
 concurrency:
-  group: cpu296-runtime-${{ github.ref }}
+  group: progress300-runtime-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
