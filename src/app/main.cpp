@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include "ui/vanity_view.h"
 #include "ui/social_view.h"
+#include "ui/social_display_session.h"
 #include "social/social_core_service.h"
 #include "social/social_leaderboard.h"
 #include "ui/mining_canvas.h"
@@ -580,20 +581,22 @@ int main(int argc,char** argv) {
   if(!startup.diagnostic.isEmpty()){auto* notice=new QLabel(startup.diagnostic,inspectWallet);notice->setObjectName("pgn-startup-network-notice");notice->setTextFormat(Qt::PlainText);notice->setWordWrap(true);if(auto* box=qobject_cast<QBoxLayout*>(inspectWallet->layout()))box->insertWidget(0,notice);}
   major->addWidget(inspectWallet);ticketProgressRail->bindTicketLookup([&inspectWallet](const QString& request,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,request,std::move(consume));});
  auto socialConnection=std::make_shared<QPointer<pgn::social::CoreSocialService>>();
+ auto displayConnection=std::make_shared<QPointer<pgn::ui::SocialDisplaySession>>();
  pgn::social::Services socialServices;
- socialServices.read=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().read(std::move(request),std::move(done));else done({},"Waiting for the verified wallet connection.");};
+ socialServices.read=[socialConnection,displayConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().read(std::move(request),[displayConnection,done](auto snapshot,QString error){if(!error.isEmpty()||!*displayConnection){done(std::move(snapshot),error);return;}(*displayConnection)->decorate(std::move(snapshot),done);});else done({},"Waiting for the verified wallet connection.");};
+ socialServices.publicNameLink=[displayConnection](pgn::social::Identity,QStringList keys){if(*displayConnection)(*displayConnection)->open(keys.value(0));};
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
  auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
- *syncSocial=[socialConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode]{
+ *syncSocial=[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode]{
   if(!socialWeak)return;const auto binding=pgn::ui::walletSocialBinding(inspectWallet);const auto wanted=binding;
-  if(binding.isEmpty()){
+  if(binding.isEmpty()){displayConnection->clear();
    if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});socialBinding->clear();++*socialEpoch;}return;
   }
-  if(*socialBinding==wanted&&*socialConnection)return;if(*socialPreparing)return;*socialPreparing=true;const auto e=++*socialEpoch;
+  if(*socialBinding==wanted&&*socialConnection)return;if(*socialPreparing)return;displayConnection->clear();*socialPreparing=true;const auto e=++*socialEpoch;
   if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});}
-  pgn::ui::readWalletSocialContext(inspectWallet,{},[socialConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,wanted,binding,e,testnetMode](QJsonObject verified,QString error){
+  pgn::ui::readWalletSocialContext(inspectWallet,{},[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,wanted,binding,e,testnetMode](QJsonObject verified,QString error){
    *socialPreparing=false;if(!socialWeak||e!=*socialEpoch||pgn::ui::walletSocialBinding(inspectWallet)!=binding||!error.isEmpty())return;
    const auto address=verified.value("address").toString(),genesis=verified.value("genesis").toString();
    const auto script=verified.value("script").toString();pgn::social::CoreSocialContext context{{genesis,script},address,QString::fromLatin1(QUuid::createUuid().toRfc4122().toHex()),"global",testnetMode?QString("PGN Testnet"):QString("PGN Mainnet")};
@@ -604,6 +607,9 @@ int main(int argc,char** argv) {
    const auto outbox=pgn::app::mutableDataRoot(root)+"/social/"+genesis+"/"+script+"/outbox.json";
    auto* service=new pgn::social::CoreSocialService(std::move(context),std::move(crypto),std::move(rpc),outbox,socialWeak.data());*socialConnection=service;*socialBinding=wanted;
    service->leaderboard=[inspectWallet](pgn::social::ReadRequest request,pgn::social::Services::Reply done){QJsonArray args;if(!pgn::social::leaderboardArguments(request,args)){done({},"Choose all recorded activity and a valid leaderboard page.");return;}pgn::ui::requestWalletSocial(inspectWallet,"getpgnleaderboard",args,[request,done](QJsonValue value,QString error){if(!error.isEmpty()){done({},error);return;}pgn::social::Snapshot snapshot;const auto failure=pgn::social::decodeLeaderboard(request,value.toObject(),snapshot);done(std::move(snapshot),failure);});};
+   pgn::social::PublicDisplayRpc displayRpc=[inspectWallet](QString method,QJsonArray args,auto done){pgn::ui::requestWalletDisplayLink(inspectWallet,method,args,std::move(done));};
+   pgn::social::NameLinkWalletSigner displaySigner=[inspectWallet](pgn::social::Identity identity,pgn::social::NameLinkSide side,QString script,QByteArray source,auto done){pgn::ui::signWalletDisplayLink(inspectWallet,identity.subject,identity.genesis,side,script,source,std::move(done));};
+   *displayConnection=new pgn::ui::SocialDisplaySession(std::move(displayRpc),std::move(displaySigner),service->identity(),pgn::app::mutableDataRoot(root)+"/social/"+genesis+"/"+script+"/public-consent.json",socialWeak.data(),service);
    service->changed=[socialWeak]{if(socialWeak)socialWeak->refresh();};service->diagnostic=[socialWeak](QString error){if(socialWeak)socialWeak->setProperty("pgn_social_service_error",error);};
    socialWeak->setProperty("pgn_social_identity",QJsonObject{{"genesis",genesis},{"script",script}});socialWeak->setIdentity(service->identity());service->start();
   });

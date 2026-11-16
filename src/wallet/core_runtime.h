@@ -16,7 +16,7 @@
 #include <QLockFile>
 #include <memory>
 #include <functional>
-namespace pgn::social {class RpcQueue;}
+namespace pgn::social {class RpcQueue;enum class NameLinkSide;}
 namespace pgn::wallet {
 // No mining headers, candidate subscriptions, per-gap hash or wallet calls.
 // Only this owned child may be stopped; the GPU process is never an input.
@@ -46,6 +46,9 @@ public:
  void signSocialEnvelope(const QString& address,const QString& genesis,const QString& signingScript,const QByteArray& canonicalMessage,std::function<void(QJsonValue,QString)>);
  void readSocialIdentity(std::function<void(QJsonObject,QString)>);
  void verifySocialEnvelope(const QString& genesis,const QString& signingScript,const QByteArray& canonicalMessage,const QString& signature,std::function<void(bool,QString)>);
+ // Scoped display-link consent, independent of the audit/message signer.
+ void socialDisplayRequest(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
+ void signSocialDisplayConsent(const QString& sessionScript,const QString& genesis,social::NameLinkSide,const QString& script,const QByteArray& certificate,std::function<void(QString,QString)>);
  void socialRequest(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
  void readLocalConnection(std::function<void(QJsonObject,QString)>);
  void readNetworkSnapshot(std::function<void(QJsonObject,QString)>);
