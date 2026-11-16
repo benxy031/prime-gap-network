@@ -37,13 +37,8 @@ jobs:
             /data/
             /qualification/names286/
             /wallet/riecoin-core-upstream-v2606/src/
-            /assets/pgn.qrc
-            /assets/pgn-horizon.rc.in
-            /assets/*.ico
-            /assets/pgn-mark.png
-            /assets/chevron-down.svg
-            /assets/chevron-up.svg
-            /assets/checkbox-tick.svg
+            /assets/
+            /third_party/
 
 
       - name: Bootstrap MSYS2 without the failing geo-mirror update
