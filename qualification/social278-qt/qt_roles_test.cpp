@@ -1,5 +1,6 @@
 #include "ui/social_access_dialog.h"
 #include "social/social_access_wire.h"
+#include "ui/social_remote_access_signer.h"
 #include <QApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -9,6 +10,7 @@
 #include <QDir>
 #include <QTabWidget>
 #include <QUuid>
+#include <QTemporaryDir>
 #include <iostream>
 using namespace pgn;using namespace pgn::social;
 static int checks=0;
@@ -42,9 +44,21 @@ struct Bridge{
 static QPushButton* button(QWidget& w,const char* id){auto* b=w.findChild<QPushButton*>(id);require(b!=nullptr,"Find button");return b;}
 static void click(QWidget& w,const char* id){auto* b=button(w,id);if(!b->isEnabled())std::cerr<<id<<": "<<b->toolTip().toStdString()<<"\n";require(b->isEnabled(),"Action enabled by service");b->click();QApplication::processEvents();}
 static void select(QListWidget* list,QString name){int found=-1;for(int i=0;i<list->count();++i)if(list->item(i)->text()==name)found=i;require(found>=0,"Named item visible");list->setCurrentRow(found);QApplication::processEvents();}
+static void signerScope(const Bridge& bridge){
+ const auto wire=accessReadWire({bridge.identity,"global",{},{}},bridge.native);require(accessSigningError(wire,bridge.identity,bridge.native.script,bridge.native.community).isEmpty(),"Exact Native access signing context");
+ require(!accessSigningError("PGN/SOCIAL/IDENTITY-LINK/OPERATOR-CONSENT/2\n{}",bridge.identity,bridge.native.script,bridge.native.community).isEmpty(),"Name consent cannot use access signer");
+ auto other=bridge.identity;other.subject="0014"+QString(40,'0');require(!accessSigningError(wire,other,bridge.native.script,bridge.native.community).isEmpty(),"Another Social context cannot use access signer");
+ require(!accessSigningError(wire,bridge.identity,bridge.native.script,QString(64,'0')).isEmpty(),"Another community cannot use access signer");
+ auto body=QJsonDocument::fromJson(wire.mid(wire.indexOf('\n')+1)).object();body["created_ms"]=QDateTime::currentMSecsSinceEpoch()-180000;require(!accessSigningError(QByteArray("PGN/SOCIAL/ACCESS/1\n")+QJsonDocument(body).toJson(QJsonDocument::Compact),bridge.identity,bridge.native.script,bridge.native.community).isEmpty(),"Expired command is not re-signed");
+ QTemporaryDir temp;require(temp.isValid(),"Private signer-plan fixtures");auto path=[&](QString n){return temp.path()+"/"+n;};for(const auto& n:{"ssh.exe","key"}){QFile f(path(n));require(f.open(QIODevice::WriteOnly),"Create inert profile fixture");f.write("fixture");}
+ QJsonArray args{"C:/QA/host.exe","--network","--genesis",bridge.identity.genesis,"--wallet","qa-wallet","--cookie","C:/QA/node/testnet/.cookie","--rpc-port","58639","--miner",bridge.native.address};
+ const QJsonObject profile{{"program",path("ssh.exe")},{"hardware_endpoint",QJsonObject{{"host","127.0.0.1"},{"user","qa"},{"key_file",path("key")},{"host_key_alias","pgn-qa"},{"port",22}}},{"network_arguments",args},{"miner_address",bridge.native.address}};
+ const auto plan=ui::remoteAccessConsentPlan(QJsonDocument(profile).toJson(QJsonDocument::Compact),bridge.identity,bridge.native.community,bridge.native.script,wire);if(!plan.error.isEmpty())std::cerr<<plan.error.toStdString()<<std::endl;require(plan.error.isEmpty(),"Scoped access SSH plan");require(plan.arguments.contains("StrictHostKeyChecking=yes")&&plan.arguments.contains("HostKeyAlias=pgn-qa"),"Pinned SSH host verification");require(plan.input.contains("PGN/SOCIAL/ACCESS/1"),"Only access purpose in signer input");
+ require(!ui::remoteAccessConsentPlan(QJsonDocument(profile).toJson(QJsonDocument::Compact),bridge.identity,QString(64,'0'),bridge.native.script,wire).error.isEmpty(),"Wrong community refused before process start");
+}
 int main(int argc,char** argv){QApplication app(argc,argv);try{
- require(argc==6,"QA args python driver config captures actor");Bridge bridge{QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]),QString::fromLocal8Bit(argv[3])};bridge.actor=argv[5];QFile config(bridge.config);require(config.open(QIODevice::ReadOnly),"Read QA config");auto cfg=QJsonDocument::fromJson(config.readAll()).object();bridge.identity={cfg["genesis"].toString(),cfg["actors"].toObject()[bridge.actor].toObject()["client"].toString()};auto native=cfg["actors"].toObject()[bridge.actor].toObject();bridge.native={native["script"].toString(),native["address"].toString(),cfg["community"].toString()};QString captures=argv[4];QDir().mkpath(captures);
- auto initial=bridge.read({bridge.identity,"global",{}, {}});ui::SocialAccessDialog dialog(bridge.identity,initial,bridge.services(),"global",{});dialog.show();app.processEvents();
+ if(argc==3&&QString::fromLocal8Bit(argv[1])=="--signer-powershell"){QFile out(QString::fromLocal8Bit(argv[2]));require(out.open(QIODevice::WriteOnly),"Signer source output");out.write(ui::nativeAccessSignerPowerShell());return 0;} require(argc==6,"QA args python driver config captures actor");Bridge bridge{QString::fromLocal8Bit(argv[1]),QString::fromLocal8Bit(argv[2]),QString::fromLocal8Bit(argv[3])};bridge.actor=argv[5];QFile config(bridge.config);require(config.open(QIODevice::ReadOnly),"Read QA config");auto cfg=QJsonDocument::fromJson(config.readAll()).object();bridge.identity={cfg["genesis"].toString(),cfg["actors"].toObject()[bridge.actor].toObject()["client"].toString()};auto native=cfg["actors"].toObject()[bridge.actor].toObject();bridge.native={native["script"].toString(),native["address"].toString(),cfg["community"].toString()};QString captures=argv[4];QDir().mkpath(captures);
+ signerScope(bridge);auto initial=bridge.read({bridge.identity,"global",{}, {}});ui::SocialAccessDialog dialog(bridge.identity,initial,bridge.services(),"global",{});dialog.show();app.processEvents();
  auto* roles=dialog.findChild<QListWidget*>("pgn-social-role-list");auto* members=dialog.findChild<QListWidget*>("pgn-social-member-list");auto* permissions=dialog.findChild<QListWidget*>("pgn-social-role-permissions");auto* name=dialog.findChild<QLineEdit*>("pgn-social-role-name");auto* position=dialog.findChild<QSpinBox*>();require(roles&&members&&permissions&&name&&position,"Real Roles dialog controls");
  if(bridge.actor=="guest"){
   require(!button(dialog,"pgn-social-new-role")->isEnabled(),"Guest cannot create role");require(!button(dialog,"pgn-social-delete-role")->isEnabled(),"Guest cannot delete role");require(!name->isEnabled(),"Guest read-only role editor");dialog.grab().save(captures+"/guest-read-only.png");
