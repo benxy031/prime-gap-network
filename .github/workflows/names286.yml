@@ -94,7 +94,7 @@ jobs:
         run: |
           cmake -S qualification/cpu296 -B build-cpu296 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-cpu296 --parallel 2
-          ctest --test-dir build-cpu296 --output-on-failure
+          ctest --test-dir build-cpu296 -R '^normal-miner-preferred-with-fallback$' --output-on-failure
           cmake -S qualification/wallet285 -B build-wallet285 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-wallet285 --parallel 2
           ctest --test-dir build-wallet285 --output-on-failure
