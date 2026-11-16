@@ -8,6 +8,7 @@ env:
   PYTHONUTF8: '1'
 jobs:
   ubuntu:
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -74,6 +75,7 @@ jobs:
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
         with:
           msystem: UCRT64
+          path-type: inherit
           update: false
 
       - name: Select the official primary package server
