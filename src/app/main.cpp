@@ -13,6 +13,8 @@
 #include <QElapsedTimer>
 #include "ui/vanity_view.h"
 #include "ui/social_view.h"
+#include "ui/social_access_session.h"
+#include "ui/social_remote_access_signer.h"
 #include "ui/social_display_session.h"
 #include "social/social_configured_mining_identity.h"
 #include "ui/social_remote_name_signer.h"
@@ -584,8 +586,17 @@ int main(int argc,char** argv) {
   major->addWidget(inspectWallet);ticketProgressRail->bindTicketLookup([&inspectWallet](const QString& request,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,request,std::move(consume));});
  auto socialConnection=std::make_shared<QPointer<pgn::social::CoreSocialService>>();
  auto displayConnection=std::make_shared<QPointer<pgn::ui::SocialDisplaySession>>();
+ auto accessConnection=std::make_shared<QPointer<pgn::ui::SocialAccessSession>>();
  pgn::social::Services socialServices;
- socialServices.read=[socialConnection,displayConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().read(std::move(request),[displayConnection,done](auto snapshot,QString error){if(!error.isEmpty()||!*displayConnection){done(std::move(snapshot),error);return;}(*displayConnection)->decorate(std::move(snapshot),done);});else done({},"Waiting for the verified wallet connection.");};
+ socialServices.read=[socialConnection,displayConnection,accessConnection](auto request,auto done){
+  if(!*socialConnection){done({},"Waiting for the verified wallet connection.");return;}
+  (*socialConnection)->services().read(std::move(request),[displayConnection,accessConnection,done](auto snapshot,QString error){
+   const auto decorated=[accessConnection,done](auto snapshot,QString error){if(error.isEmpty()&&*accessConnection)(*accessConnection)->decorate(snapshot);done(std::move(snapshot),error);};
+   if(!error.isEmpty()||!*displayConnection){decorated(std::move(snapshot),error);return;}(*displayConnection)->decorate(std::move(snapshot),decorated);
+  });
+ };
+ socialServices.readAccess=[accessConnection](auto request,auto done){if(*accessConnection)(*accessConnection)->read(std::move(request),std::move(done));else done({},"Waiting for the verified community account.");};
+ socialServices.manage=[accessConnection](auto request,auto done){if(*accessConnection)(*accessConnection)->manage(request,std::move(done));else done({request.identity,request.community,request.channel,request.requestId,pgn::social::AccessOutcome::Unavailable,"Wallet connection changed; action retained.",{}});};
  socialServices.publicNameLink=[displayConnection,inspectWallet,toolsButton](pgn::social::Identity identity,QStringList keys){
   if(!*displayConnection)return;
   if(!keys.value(0).isEmpty()){(*displayConnection)->open(keys.value(0));return;}
@@ -600,14 +611,14 @@ int main(int argc,char** argv) {
  auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
- *syncSocial=[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{
+ *syncSocial=[socialConnection,displayConnection,accessConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{
   if(!socialWeak)return;const auto binding=pgn::ui::walletSocialBinding(inspectWallet);const auto wanted=binding;
-  if(binding.isEmpty()){displayConnection->clear();
+  if(binding.isEmpty()){displayConnection->clear();accessConnection->clear();
    if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});socialBinding->clear();++*socialEpoch;}return;
   }
-  if(*socialBinding==wanted&&*socialConnection){if(*displayConnection&&toolsButton->property("pgn_public_mining_genesis").toString()==(*socialConnection)->identity().genesis)(*displayConnection)->ensureMiningName(toolsButton->property("pgn_public_audit_address").toString());return;}if(*socialPreparing)return;displayConnection->clear();*socialPreparing=true;const auto e=++*socialEpoch;
+  if(*socialBinding==wanted&&*socialConnection){if(*accessConnection&&toolsButton->property("pgn_public_mining_genesis").toString()==(*socialConnection)->identity().genesis)(*accessConnection)->ensureNative(toolsButton->property("pgn_public_audit_address").toString());if(*displayConnection&&toolsButton->property("pgn_public_mining_genesis").toString()==(*socialConnection)->identity().genesis)(*displayConnection)->ensureMiningName(toolsButton->property("pgn_public_audit_address").toString());return;}if(*socialPreparing)return;displayConnection->clear();accessConnection->clear();*socialPreparing=true;const auto e=++*socialEpoch;
   if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});}
-  pgn::ui::readWalletSocialContext(inspectWallet,{},[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,wanted,binding,e,testnetMode](QJsonObject verified,QString error){
+  pgn::ui::readWalletSocialContext(inspectWallet,{},[socialConnection,displayConnection,accessConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,wanted,binding,e,testnetMode](QJsonObject verified,QString error){
    *socialPreparing=false;if(!socialWeak||e!=*socialEpoch||pgn::ui::walletSocialBinding(inspectWallet)!=binding||!error.isEmpty())return;
    const auto address=verified.value("address").toString(),genesis=verified.value("genesis").toString();
    const auto script=verified.value("script").toString();pgn::social::CoreSocialContext context{{genesis,script},address,QString::fromLatin1(QUuid::createUuid().toRfc4122().toHex()),"global",testnetMode?QString("PGN Testnet"):QString("PGN Mainnet")};
@@ -631,6 +642,22 @@ int main(int argc,char** argv) {
      });
     };
    *displayConnection=new pgn::ui::SocialDisplaySession(std::move(displayRpc),std::move(displaySigner),service->identity(),pgn::app::mutableDataRoot(root)+"/social/"+genesis+"/"+script+"/public-consent.json",socialWeak.data(),service);
+   // Community service is optional and independent of Chat/Core availability.
+   // These bootstrap account pins are the two explicitly requested moderators;
+   // no permission follows a displayed nickname or a name-link certificate.
+   if(genesis=="710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314"){
+    const QString community="b4895f1d46e938c9447e51557a8e7826afbf9ebc269b42f96d42505e75eb84d6";
+    pgn::ui::SocialAccessSession::Signer accessSigner=[inspectWallet,root,socialConnection,owner=QPointer<pgn::social::CoreSocialService>(service),identity=service->identity(),community](QString actor,QByteArray command,auto done){
+     const auto binding=pgn::ui::walletSocialBinding(inspectWallet);const auto current=[inspectWallet,socialConnection,owner,identity,binding]{return owner&&*socialConnection==owner&&owner->identity()==identity&&pgn::ui::walletSocialBinding(inspectWallet)==binding;};
+     pgn::ui::signWalletSocialAccess(inspectWallet,identity.subject,identity.genesis,actor,community,command,[current,owner,root,identity,community,actor,command,done](QString signature,QString error){
+      if(!current()){done({},"Wallet changed; access confirmation discarded.");return;}
+      if(error=="PGN_ACCESS_OTHER_WALLET"&&actor!=identity.subject){pgn::ui::requestRemoteAccessConsent(owner.data(),pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/worker-stream.json",identity,community,actor,command,current,done);return;}
+      done(signature,error=="PGN_ACCESS_OTHER_WALLET"?QString("The current wallet does not own this community key."):error);
+     });
+    };
+    auto* access=new pgn::ui::SocialAccessSession(service->identity(),address,community,QUrl("https://alex.tail6acec6.ts.net/pgn-social/v1/access"),pgn::app::mutableDataRoot(root)+"/social/"+genesis+"/"+script+"/community",[inspectWallet](QString method,QJsonArray args,auto done){pgn::ui::requestWalletDisplayLink(inspectWallet,method,args,std::move(done));},std::move(accessSigner),service);
+    access->changed=[socialWeak]{if(socialWeak)socialWeak->refresh();};*accessConnection=access;
+   }
    service->changed=[socialWeak]{if(socialWeak)socialWeak->refresh();};service->diagnostic=[socialWeak](QString error){if(socialWeak)socialWeak->setProperty("pgn_social_service_error",error);};
    socialWeak->setProperty("pgn_social_identity",QJsonObject{{"genesis",genesis},{"script",script}});socialWeak->setIdentity(service->identity());service->start();
   });

@@ -49,6 +49,7 @@ public:
  // Scoped display-link consent, independent of the audit/message signer.
  void socialDisplayRequest(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
  void signSocialDisplayConsent(const QString& sessionScript,const QString& genesis,social::NameLinkSide,const QString& script,const QByteArray& certificate,std::function<void(QString,QString)>);
+ void signSocialAccessConsent(const QString& sessionScript,const QString& genesis,const QString& script,const QString& community,const QByteArray& command,std::function<void(QString,QString)>);
  void socialRequest(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
  void readLocalConnection(std::function<void(QJsonObject,QString)>);
  void readNetworkSnapshot(std::function<void(QJsonObject,QString)>);

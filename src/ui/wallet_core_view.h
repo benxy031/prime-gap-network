@@ -24,6 +24,7 @@ QString walletSocialBinding(QWidget*);
 void readWalletSocialContext(QWidget*,const QString&,std::function<void(QJsonObject,QString)>);
 void requestWalletDisplayLink(QWidget*,const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
 void signWalletDisplayLink(QWidget*,const QString&,const QString&,pgn::social::NameLinkSide,const QString&,const QByteArray&,std::function<void(QString,QString)>);
+void signWalletSocialAccess(QWidget*,const QString&,const QString&,const QString&,const QString&,const QByteArray&,std::function<void(QString,QString)>);
 void requestWalletSocial(QWidget*,const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
 void signWalletSocial(QWidget*,const QString&,const QString&,const QString&,const QByteArray&,std::function<void(QJsonValue,QString)>);
 void verifyWalletSocial(QWidget*,const QString&,const QString&,const QByteArray&,const QString&,std::function<void(bool,QString)>);
