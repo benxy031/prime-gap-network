@@ -45,7 +45,7 @@ try:
         try:state=owned_ipc(own,'--inspect-owned');break
         except (RuntimeError,OSError,ValueError):time.sleep(.25)
     assert state and state['pgn_update_genesis']==GENESIS
-    data=Path(state['pgn_update_data_root']);assert not data.is_relative_to(base)
+    data=Path(state['pgn_update_data_root']);assert data.resolve()==(base/'data/testnet').resolve(), 'Portable Windows data root differs from explicit application root'
     sentinel=data/'wallet-preservation-sentinel.dat';sentinel.parent.mkdir(parents=True,exist_ok=True);sentinel.write_bytes(b'ISOLATED TEST: KEEP EXACT BYTES')
     saved=sha(sentinel)
     context,context_hash=stage.context_from_bytes(json.dumps(dict(schema='PGN_COMPONENT_STAGE_CONTEXT_V1',network='testnet',genesis_hash=GENESIS,platform='windows-x86_64',compatibility_set='pgn.epoch3.2026.11',minimum_sequence=1,installed=[],protected_roots=[str(base),str(data)])).encode())
