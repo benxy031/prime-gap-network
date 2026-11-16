@@ -1,0 +1,144 @@
+name: UI161 Windows corrected contract with native Python artifact retrieval
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/ui161-runtime-windows]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ui161-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+
+      - name: Install the UCRT64 build dependencies
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-gmp
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Install pinned updater test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .ci-python
+          if ($LASTEXITCODE -ne 0) { throw "Python test environment creation failed" }
+          & ./.ci-python/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw "Pinned updater test dependencies failed" }
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+      - name: Preflight exact product and collector prerequisites
+        run: |
+          export PGN_UI_SDK="$(cygpath -m "$MINGW_PREFIX")"
+          .ci-python/Scripts/python.exe - <<'PGN_PREFLIGHT'
+          from pathlib import Path
+          import os,shutil,subprocess,hashlib,json
+          expected={'source': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output([shutil.which('git') or 'C:/Program Files/Git/bin/git.exe','rev-parse','HEAD^{tree}'],text=True).strip(), 'verified_files': [{'path': 'CMakeLists.txt', 'patched_sha256': 'a1a6d84ce3869b845f45459815c8b8c14ae76efa325e7685ccd94dada97dab60'}, {'path': 'qualification/social246-native-display/build_index_test.py', 'patched_sha256': '5338a7035e17edeb83b96c5353db554e1fb54af1de346a32a091a07edb58bf1f'}, {'path': 'qualification/social246-native-display/compile_native_targets.py', 'patched_sha256': 'b2e6efcb2aac525016920d95e0542f6345dfb4c47fd7c5b1ccfd1e4079a160a4'}, {'path': 'qualification/social246-native-display/generate_index_fixture.py', 'patched_sha256': 'a8dd79f9ec7b2cfe43a2aae2bd4fcc1f26f96e5bc6caa45cec71eeaf87c3d960'}, {'path': 'qualification/social246-native-display/index_store_test.cpp', 'patched_sha256': '90c3694d734f0ecfcd30e7b22d21b99bdb0916fa0f791c9815dd2741c17b7abb'}, {'path': 'qualification/social246-native-display/link_offchain_relay.py', 'patched_sha256': '015c870d290920ca3550f75e2fb7eca3fef948bb00acd5dc2fe0e07b548b3937'}, {'path': 'qualification/social246-native-display/native_display_relay_test.py', 'patched_sha256': '1d435b0e8c4a3b47a6b73ef3f51d8275eedf467c26410c1e61ab4e8b4e0164c1'}, {'path': 'qualification/social246-native-display/qt/CMakeLists.txt', 'patched_sha256': 'bf36e093f0f8cff93412b1d94eaf7df087bcf1749b4786cbd86851f2f9bbe9e1'}, {'path': 'qualification/social246-native-display/qt/current_display_consent.h', 'patched_sha256': '8db553b957a252b477f929e5d448e338b57f6b0c048b4bc3dd205c230b34ce3c'}, {'path': 'qualification/social246-native-display/qt/native_display_resolver.h', 'patched_sha256': 'e5cebfa0d497c88068c9955200ca43eb02bc523cb94fc254370c3c817fc3ed5c'}, {'path': 'qualification/social246-native-display/qt/offchain_display_store.h', 'patched_sha256': '38d5af7fbe1d4f6d32a1b75c712a89d6e7204450620e15969aee72e87f106700'}, {'path': 'qualification/social246-native-display/qt/public_display_verifier.h', 'patched_sha256': 'e96873e4e9b028b9d5ee81bb9576ddf270fd094cfd9e63ea33bb2e650e92be66'}, {'path': 'qualification/social246-native-display/qt/relay_name_witness.cpp', 'patched_sha256': '0eb049788e3330887669639c2ff52f84cad9b68b1d5292559dacb8543c404a05'}, {'path': 'qualification/social246-native-display/qt/social_core_service_base.cpp', 'patched_sha256': '613f417a39a14f04b15ddab6dd758cd1483d573a5aa9616868e612d99d007dac'}, {'path': 'qualification/social246-native-display/qt/src/social/social_data.h', 'patched_sha256': '5ed660c16e7d46009d59bccd972324ff36d419848cb263aad92b6b2908315b24'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_name_link_dialog.h', 'patched_sha256': '7272fb49fb7d746170dc11d22da2a6875e36de264e2b2e197f2b64e14872a7e3'}, {'path': 'qualification/social246-native-display/qt/src/ui/social_view.cpp', 'patched_sha256': 'e7acd954388ffe06f110bbfc7ec756f963ac9bbfb02e0081cde3b5840a598602'}, {'path': 'qualification/social246-native-display/qt_native_display_relay_test.py', 'patched_sha256': '94bc783a5071f5acd55092850b77c6a58df60fa32be9e23e00a9e7b6d0245b5f'}, {'path': 'qualification/social246-native-display/qt_native_display_resume_test.py', 'patched_sha256': '40fb470417809051309da1785a3e9e9e70de5af3aa7cb857ddc4383277452569'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_core_service.h', 'patched_sha256': 'e345784e66d96d32ed0da9ed5579d87c0adda09618d6c6307c6f818d73c2c7ff'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'qualification/social246-native-display/support/src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/app/main.cpp', 'patched_sha256': '592dfd4d5a9048a1d3dcf40f9e984deddb64c3d540338bc23d42ac6043077ff7'}, {'path': 'src/social/social_data.h', 'patched_sha256': 'd55d4e6ddca217ae74ae72c08792f830e87ebc937453ac61721834c1e9ce58c4'}, {'path': 'src/social/social_display_consent.h', 'patched_sha256': '3835505ce323aa28fbcb086e0a2743c3a6ddff5028dd50228aaa2e4a525bcc51'}, {'path': 'src/social/social_display_resolver.h', 'patched_sha256': '9c5d8ead618e5cbeea946c3290cbf79bc836005b736d43368c03453dbd85cea5'}, {'path': 'src/social/social_display_rpc_contract.h', 'patched_sha256': 'e43ef393867a1401611d834306f06a03c951dce31deb8da07f9a118d7a090722'}, {'path': 'src/social/social_display_verifier.h', 'patched_sha256': '9947630653b604d9d6484a0d0d76ec183938358aeb7e6df62c5c6cb2168584ec'}, {'path': 'src/social/social_leaderboard.h', 'patched_sha256': 'bae4aa583db8d1f20d948d05ff8dbd13ff9556e2935ecd9194b39066dde68d72'}, {'path': 'src/social/social_link_flow.h', 'patched_sha256': 'f58cde80c21328145d2425784414cc9648d3d6c8328bc7d07f3e2ef852996aaf'}, {'path': 'src/social/social_link_packet.h', 'patched_sha256': 'a702b1f0831f403ba0d8b634fbb921bf4606a5e1f5f1a9909cf3851be3e15d64'}, {'path': 'src/social/social_link_packet_store.h', 'patched_sha256': 'c8255b4befd7b260481f3bff99d50b00b5db4d68b73b3a5e01f160e5beb6ffee'}, {'path': 'src/ui/audit_slot_presentation.h', 'patched_sha256': '830bf15b35b29903a835028536e4b320021959de8e775d1a4d25a5bc66992532'}, {'path': 'src/ui/audit_status_presentation.h', 'patched_sha256': 'ae9d6a8b16725012ec5a6c17df3d3d44c69b10f4eb0deb2b27d3854943bceeb5'}, {'path': 'src/ui/network_work_view.h', 'patched_sha256': 'd81c156bf2b2999009dc07dbb21e46445ae760e341e4606fd3ab2a6613217f14'}, {'path': 'src/ui/social_compose_frame.h', 'patched_sha256': 'b41fcbda6958723c49329220a58491cba975d370623b73e7e0d929d92094a2b3'}, {'path': 'src/ui/social_display_session.h', 'patched_sha256': 'b28590ced7a1ee8c790b460654829d851a743ed6153f52592adf5b1c5494c942'}, {'path': 'src/ui/social_entry_delegate.h', 'patched_sha256': '0e898bf84dbe4ab3fa19922ab85a9b6c6c32a5cc0979ff0e86d041bf3d856016'}, {'path': 'src/ui/social_icons.h', 'patched_sha256': '695b9f2ca5ba4dd724d404361bde62676c47ada362618545cde6b0abba6e121e'}, {'path': 'src/ui/social_leaderboard_table.h', 'patched_sha256': 'f66815e88684a592ebb2d83078d31d1af12cdc86a6b4fc893a37b4a3068f618a'}, {'path': 'src/ui/social_name_link_dialog.h', 'patched_sha256': '76499bba159566159c22032d5051d19329e321e601432decec68733ad905ea78'}, {'path': 'src/ui/social_view.cpp', 'patched_sha256': '386d55fb3c6248efe34d14dde635222c66c5b5fdf46575a566674b30f22625de'}, {'path': 'src/ui/social_workspace_refinement.h', 'patched_sha256': 'c8320a57dc80f148d89a3b884989593ae87870192c99577f97db7683372c6c62'}, {'path': 'src/ui/wallet_core_view.cpp', 'patched_sha256': '1724724054972c7bdd301a7cffd55750a02b18d177f55f278329f1b2166fd3de'}, {'path': 'src/ui/wallet_core_view.h', 'patched_sha256': '69ce1916d45b3b56c03b0a4bc7affd4d2b66264036567dec76a930d9a14e9568'}, {'path': 'src/ui/wallet_management_panel.cpp', 'patched_sha256': '61794a38ce87c07b0a02c703675330be58486696b597bce833f5542feafb0d78'}, {'path': 'src/ui/wallet_management_panel.h', 'patched_sha256': '94537066a6e3bc080d72af5be86a633f2b3966b9798d3c13008c2d8c32160ee4'}, {'path': 'src/wallet/core_runtime.cpp', 'patched_sha256': 'c5d9f2d699a07a251bbfb229a721f8245708edee2fab16bfffc6e20a76f1acec'}, {'path': 'src/wallet/core_runtime.h', 'patched_sha256': '50622db8e5f38424aeef4679f30a2e05980dd2674b0a2d90adb094ddc01899cb'}, {'path': 'src/wallet/core_social_display.cpp', 'patched_sha256': 'ace47040d54a2072ca9fb724faabbb5a446786589976bde63b7c6a99fdfb72a0'}, {'path': 'tests/audit_explorer_view_test.cpp', 'patched_sha256': '98fe7b27b32028fdb842826b29028590dc2b3d15a40014383f585c0093054b20'}, {'path': 'tests/network_work_view_test.cpp', 'patched_sha256': 'df2b7961035cbb7fffb8e92fc1ac71bcb9403e0b1746421af6a34c681dc734c2'}, {'path': 'tests/social_available_height_test.cpp', 'patched_sha256': '043d711c163953c60ce3454ce1afce445617515bb68d422174f5d6695a38628f'}, {'path': 'tests/social_display_contract_test.cpp', 'patched_sha256': '4ee29514fc484dd5d130c311d32f16573a5d798e2252b5f1afc50b809dc5457e'}, {'path': 'tests/social_rosette_counts_test.cpp', 'patched_sha256': 'd98411023381116a0dc99f2de2a14f70423c0bb380abc3982153e48dfb9a354f'}, {'path': 'tests/ticket_atlas_view_test.cpp', 'patched_sha256': '77cb51737476fd8f28f5df99d1d7526ce35def9ff8ae4d01fdb003e62b18de91'}, {'path': 'tests/wallet_fresh_setup_view_test.cpp', 'patched_sha256': 'f65a1c31dc418b20254248cc340958e107127ba6b670e0d6d9ed93427102a421'}, {'path': 'tools/component_versions.json', 'patched_sha256': '2a527cf0c68508af6b16b8f77bf53736550904ae2296d5cb6a619b6ceedbdfaf'}, {'path': 'tools/package_core_bundle.py', 'patched_sha256': '17d96927a38103ed33c02c639069d48b166f37636f0c16854f7f75c4e6395845'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/CMakeLists.txt', 'patched_sha256': '8f5e792a1b96bb2d11899b52c7d3855316b9bd048242b60d65b3e2f1e151d9eb'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/init.cpp', 'patched_sha256': '433ba3367ec41f14e4c5b3184ee7630d41061b044c0d7c5759efd035d608be03'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/component_version.h', 'patched_sha256': '4790fdbcf801a098fdd01d2f0f4db7fa9e9466319709287a12abf874e818af5f'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes.h', 'patched_sha256': '0f1c106f5a9ad2a6722e354dcd2c1ade996ec0523d226b63d9abdb220612e63e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_batch_oracle.txt', 'patched_sha256': '7a688cfe039ccf00716e14be1bbbcb5187ac062b77419032f97320eddbf39be7'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_oracle.txt', 'patched_sha256': '428326ac28c8e45737d80d857d87f2cc467f4b5f36478fb13c51d1c8752e3549'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/leaderboard_rosettes_test.cpp', 'patched_sha256': 'fb40f6e85ad26aa56732abbc789dc5b7d09efeae54ad32b67141f206170849f1'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.cpp', 'patched_sha256': '9b497d9fe683b01d22c89c19e5b91850f86b88efebd0956dda0b93c60c0daed4'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social.h', 'patched_sha256': 'd666fcd41aca4c5bf06201a94a42d16c9ecaa6952ede316ad94fde8dfd513839'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.cpp', 'patched_sha256': '4221f0c68aae33e3a0ca62359153bfb570a5e801e8d28cc5c68ae3f8fe43dc87'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_native.h', 'patched_sha256': 'abfe4104e44697c168914c1a27721bf446056cfac095ebed8390c2656b38bd6e'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_display_store.h', 'patched_sha256': '6442f90212ad36255da4faa615dae27eec4e1fac249aeb2c675b3929709e559c'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_certificate.h', 'patched_sha256': '174f9c70701862910cadef319df58767eadf77fc0c5fc94c54795cf93e05da2d'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_contract.h', 'patched_sha256': 'cd90f6bdffc2f66dbe21a644aab5a396c503f09017c6b4b102fb60298e1f71f8'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/pgn/social_identity_snapshot.h', 'patched_sha256': '4aeb3ea75a0802149a7d25ab90ee103ec40087c688038c985efde688f567b271'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp', 'patched_sha256': '7933a310908536577525224fd550ac6badcbc0093d41df17f666527ce8555f7a'}, {'path': 'wallet/riecoin-core-upstream-v2606/src/rpc/social.cpp', 'patched_sha256': 'f5be743e4282aa08bcbab203198e625ac5d6938cdccf3ed3d4119cf0a24085fd'}, {'path': 'tests/social_view_test.cpp', 'patched_sha256': '76c1f41b1f5486201e734dd5ce8893f19dfa0046aec4f75bca8b901acafe1712'}]}
+          git=shutil.which('git') or 'C:/Program Files/Git/bin/git.exe'
+          assert subprocess.check_output([git,'rev-parse','HEAD'],text=True).strip()==expected['source']
+          for row in expected['verified_files']:
+              assert hashlib.sha256(Path(row['path']).read_bytes()).hexdigest()==row['patched_sha256'],row['path']
+          sdk=Path(os.environ['PGN_UI_SDK'])
+          for tool in ['g++.exe','ninja.exe','objdump.exe','windeployqt.exe']:
+              assert (sdk/'bin'/tool).is_file(),tool
+          qmake=next(p for p in [sdk/'bin/qmake6.exe',sdk/'bin/qmake.exe']if p.is_file())
+          assert subprocess.check_output([str(qmake),'-query','QT_VERSION'],text=True).startswith('6.')
+          print(json.dumps(dict(preflight=True,product=expected['source'],files=len(expected['verified_files']))))
+          PGN_PREFLIGHT
+      - name: Configure a clean Release tree
+        run: cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PWD/.ci-python/Scripts/python.exe"
+
+      - name: Verify the one obsolete original failure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          .ci-python/Scripts/python.exe - <<'FETCH'
+          from pathlib import Path
+          import hashlib,os,urllib.request,urllib.error
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args):return None
+          request=urllib.request.Request('https://api.github.com/repos/wizz13150/prime-gap-network/actions/artifacts/14191878024/zip',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+          try:urllib.request.build_opener(NoRedirect()).open(request,timeout=30);raise RuntimeError('Expected artifact redirect')
+          except urllib.error.HTTPError as error:
+            if error.code!=302:raise
+            location=error.headers['Location'];assert location.startswith('https://')
+          with urllib.request.urlopen(location,timeout=30)as response:data=response.read(1048577)
+          assert len(data)<=1048576 and hashlib.sha256(data).hexdigest()=='a80f15aff5415061a28098fb52d38657fa48394327b5c2f91788fefa491d4aa0'
+          Path('original-test-log.zip').write_bytes(data)
+          FETCH
+          .ci-python/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('original-test-log.zip') as z:
+            names=[n for n in z.namelist() if Path(n).name=='LastTestsFailed.log']
+            assert len(names)==1
+            assert z.read(names[0]).decode().strip()=='8:social-view'
+          PY
+      - name: Build affected test programs only
+        run: cmake --build build-ci --target pgn-social-view-test pgn-social-display-contract-test pgn-social-available-height-test pgn-wallet-fresh-setup-view-test --parallel 4
+      - name: Verify updated contract and first-run controls
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GSETTINGS_BACKEND: memory
+        run: |
+          ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R "^(social-view|social-display-contract|social-available-height)$"
+          build-ci/pgn-wallet-fresh-setup-view-test
+      - name: Preserve exact qualification
+        env:
+          PGN_QA_SOURCE: ${{ github.sha }}
+          PGN_QA_RUN: ${{ github.run_id }}
+        run: |
+          .ci-python/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,subprocess
+          allowed={'tests/social_view_test.cpp','.github/workflows/ui161-runtime-qualified.yml','.github/workflows/ui161-runtime-windows.yml'}
+          changed=set(subprocess.check_output(['git','diff','--name-only','fdb4c7f18c66bb8995253a905287882ba9c5a60a','HEAD'],text=True).splitlines())
+          assert changed==allowed,changed
+          assert hashlib.sha256(Path('tests/social_view_test.cpp').read_bytes()).hexdigest()=='76c1f41b1f5486201e734dd5ce8893f19dfa0046aec4f75bca8b901acafe1712'
+          Path('UI161-RUNTIME-QA.json').write_text(json.dumps(dict(PASS=True,compiled_source='fdb4c7f18c66bb8995253a905287882ba9c5a60a',compiled_run=43789281036,test_source=os.environ['PGN_QA_SOURCE'],run=int(os.environ['PGN_QA_RUN']),platform='windows',product_source_unchanged=True,updated_social_contract=True,fresh_wallet_controls=True),indent=2)+chr(10))
+          PY
+      - name: Preserve targeted qualification receipts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui161-qualified-windows-${{ github.run_id }}
+          path: |
+            UI161-RUNTIME-QA.json
+            build-ci/Testing/Temporary/LastTest.log
+          if-no-files-found: error
+          retention-days: 7
