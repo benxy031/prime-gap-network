@@ -12,6 +12,8 @@
 #include <QEventLoop>
 #include <QUuid>
 #include <QListWidget>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <iostream>
 using namespace pgn;
 using Reply=std::function<void(QJsonValue,QString)>;
