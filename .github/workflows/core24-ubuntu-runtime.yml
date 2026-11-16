@@ -1,0 +1,54 @@
+name: Qualify unchanged Core24 Linux binary after executable-mode packaging fix
+on:
+  push:
+    branches: [qualification/core24-ubuntu-runtime]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libgmp10 libsqlite3-0 libevent-2.1-7t64
+      - name: Retrieve exact compiled production binary and golden fixtures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/wizz13150/prime-gap-network/actions/artifacts/14218310957/zip > core24-build.zip
+          gh api repos/wizz13150/prime-gap-network/releases/assets/754436598 -H 'Accept: application/octet-stream' > legacy20.zip
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history249.blocks
+          python - <<'PY'
+          import zipfile,json,hashlib
+          from pathlib import Path
+          with zipfile.ZipFile('core24-build.zip')as z:
+              meta=json.loads(z.read('evidence24/BUILD.json'));raw=z.read('core24/Core/pgn-core')
+          assert meta['source']=='2aaec24c0a3973a01c2b909987d79d896c722953'
+          assert hashlib.sha256(raw).hexdigest()==meta['files']['pgn-core']['sha256']
+          p=Path('core24/Core/pgn-core');p.parent.mkdir(parents=True);p.write_bytes(raw);p.chmod(0o755)
+          Path('evidence24').mkdir();Path('evidence24/BUILD.json').write_text(json.dumps(meta,indent=2)+'\n')
+          assert hashlib.sha256(Path('legacy20.zip').read_bytes()).hexdigest()=='33f5d5a206786715725ffbed770bfeba3b014898bf6c0e734419fbbb62a050c6'
+          assert hashlib.sha256(Path('public-history249.blocks').read_bytes()).hexdigest()=='09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4'
+          PY
+      - name: Actual Core20 database normal migration and healthy cold restart
+        run: python tests/native_core24_migration_actual.py --core core24/Core/pgn-core --fixture legacy20.zip --work legacy24 --receipt evidence24/MIGRATION.json
+      - name: Actual monetary, watch-wallet, replay and reorg regressions
+        run: python tests/native_grouped249_actual.py --core core24/Core/pgn-core --history public-history249.blocks --legacy --receipt evidence24/ACTUAL.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() }}
+        with:
+          name: core24-ubuntu-qualified-${{ github.run_id }}
+          path: |
+            core24
+            evidence24
+            legacy24/*.stdout
+            legacy24/*.stderr
+            legacy24/testnet/debug.log
+          if-no-files-found: error
+          retention-days: 7
