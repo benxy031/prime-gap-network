@@ -33,10 +33,7 @@ std::shared_ptr<const NativeLeaderboardSnapshot> ReadLeaderboardSnapshot(Chainst
   previous=cache.BeginBuild(state,genesis,manager.ActiveChain());
  }
  LeaderboardBindings bindings=previous?previous->bindings:LeaderboardBindings{};
- if(!previous&&!ledger->authority.empty()){
-  NativeAuditLedger empty;
-  LeaderboardBind(bindings,Bytes{ledger->authority.begin(),ledger->authority.end()},NativeAuditOperator(empty,ledger->authority),ledger->authority_height);
- }
+ LeaderboardBindAuthority(bindings,*ledger);
  const int32_t first=previous?previous->height+1:1;
  // Copy at most sixteen authenticated immutable coinbases while locked;
  // release cs_main before decoding enrollment JSON or allocating projection

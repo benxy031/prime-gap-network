@@ -96,9 +96,19 @@ int main(int argc,char** argv){try{
  const MonetaryPolicyDefinition money{99000000*unit,1000000*unit,{200*unit,1},100,70,25,5,FeeRoutingDefinition{100,100}};
  const auto range=BuildCandidateRangePolicyEnvelope(pool,f.policy),science=BuildCandidateSciencePolicyEnvelope(ScienceVerificationDefinition{1,evidence,encoding},f.policy),monetary=BuildCandidateMonetaryPolicyEnvelope(money,f.policy);
  need(range&&science&&monetary,"Native policies");f.Append({CTxOut{0,*range},CTxOut{0,*science},CTxOut{0,*monetary}});
+ const auto unadmitted=f.Ledger();CChain membership_chain;membership_chain.SetTip(*f.tip);
+ LeaderboardSnapshotCache membership_cache;auto empty_membership=std::make_shared<const NativeLeaderboardSnapshot>(f.Snapshot(unadmitted));
+ membership_cache.Publish(empty_membership,membership_chain);
  std::vector<VerifiedTicketRequestEnvelope> envelopes;
  for(unsigned scalar=1;scalar<=2;++scalar){TicketRequest request{f.chain,f.tip->GetBlockHash(),0,script(scalar),script(scalar)};const auto id=TicketRequestIdentity(request,f.request);need(bool(id),"Ticket identity");const auto challenge=ScriptWorkChallenge({f.chain,*id,request.anchor},request.miner,f.signature);auto envelope=BuildTicketRequestEnvelope(request,sign(*challenge,known(scalar)),f.request);need(bool(envelope.envelope),"Signed ticket");envelopes.push_back(*envelope.envelope);}
  f.Append({CTxOut{0,envelopes[0].Script()},CTxOut{0,envelopes[1].Script()}});f.Append({CTxOut{0,CScript{}<<OP_RETURN}});f.Append({CTxOut{0,CScript{}<<OP_RETURN}});
+ auto authority_ledger=f.Ledger();membership_chain.SetTip(*f.tip);
+ auto prior_membership=membership_cache.BeginBuild(&f,f.chain,membership_chain);
+ need(bool(prior_membership),"Pre-admission leaderboard snapshot retained for incremental projection");
+ auto incremental_bindings=prior_membership->bindings;LeaderboardBindAuthority(incremental_bindings,authority_ledger);
+ auto admitted_authority=BuildNativeLeaderboard(authority_ledger,*f.tip,f.chain,&f,std::move(incremental_bindings));
+ check(admitted_authority.bindings.size()==1&&admitted_authority.bindings.begin()->second.operator_id==authority_ledger.participants.begin()->second.operator_id,
+       "authority membership is bound when it first appears after an empty cached snapshot");
  const auto policy=ReadChainRangePolicy(*f.view,*f.tip,f.archive,f.schedule.archive,f.policy);need(bool(policy.policy),"Authenticated range policy");
  std::map<uint256,std::string> disclosures;std::vector<CTxOut> reports;
  for(const auto& envelope:envelopes){auto reservation=DeriveNativeCandidateReservation(*f.view,*f.tip,*policy.policy,f.archive,f.schedule,envelope.Request().Id());need(bool(reservation.reservation),"Authentic lease");const auto& lease=reservation.reservation->Lease();
