@@ -37,7 +37,7 @@ for name in ('QT_PLUGIN_PATH','QT_QPA_PLATFORM','QT_QPA_PLATFORM_PLUGIN_PATH'):o
 start=time.monotonic();process=None;life=None;own=None;result=None
 out=(E/'stdout.log').open('wb');err=(E/'stderr.log').open('wb')
 try:
-    process=subprocess.Popen([str(exe),str(base),'--testnet','--start-minimized','--update-healthcheck'],cwd=base,stdout=out,stderr=err,creationflags=0x08000000)
+    process=subprocess.Popen([str(exe),'--testnet','--start-minimized','--update-healthcheck'],cwd=base,stdout=out,stderr=err,creationflags=0x08000000)
     own=OwnedWindowsProcess(process.pid,exe,files['pgn-horizon.exe']['sha256'])
     state=None
     for _ in range(40):
@@ -45,7 +45,7 @@ try:
         try:state=owned_ipc(own,'--inspect-owned');break
         except (RuntimeError,OSError,ValueError):time.sleep(.25)
     assert state and state['pgn_update_genesis']==GENESIS
-    data=Path(state['pgn_update_data_root']);assert data.resolve()==(base/'data/testnet').resolve(), 'Portable Windows data root differs from explicit application root'
+    data=Path(state['pgn_update_data_root']);assert not data.resolve().is_relative_to(base), 'Standard Windows data must be outside its executable cohort'
     sentinel=data/'wallet-preservation-sentinel.dat';sentinel.parent.mkdir(parents=True,exist_ok=True);sentinel.write_bytes(b'ISOLATED TEST: KEEP EXACT BYTES')
     saved=sha(sentinel)
     context,context_hash=stage.context_from_bytes(json.dumps(dict(schema='PGN_COMPONENT_STAGE_CONTEXT_V1',network='testnet',genesis_hash=GENESIS,platform='windows-x86_64',compatibility_set='pgn.epoch3.2026.11',minimum_sequence=1,installed=[],protected_roots=[str(base),str(data)])).encode())
@@ -79,7 +79,7 @@ try:
     assert life.new_ui.exited(),'New real GUI failed to close normally'
     current=store.current();reopened=CohortStore(QA/'installation',context,context_hash)
     assert reopened.current()==current and sha(sentinel)==saved
-    result=dict(PASS=True,public_updater=True,legacy_packaging_annotation_relocated=True,unrepaired_legacy_archive_refused=True,metadata_sequence=22,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Actual Windows download/authentication/cohort activation/Qt restart after explicitly moving the old publisher provenance annotation outside the code cohort. Unrepaired legacy cold archive is refused. Bundled Core23 executable/dependencies load; no real wallet sync or GPU computation tested here.')
+    result=dict(PASS=True,public_updater=True,legacy_packaging_annotation_relocated=True,unrepaired_legacy_archive_refused=True,metadata_sequence=22,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Standard per-user Windows layout: actual download/authentication/cohort activation/Qt restart after explicitly moving the old publisher provenance annotation outside the code cohort. Unrepaired legacy cold archive is refused. Bundled Core23 executable/dependencies load; no real wallet sync or GPU computation tested here.')
 finally:
     active=life.new_ui if life and life.new_ui else own
     if active and not active.exited():
