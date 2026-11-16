@@ -15,6 +15,7 @@
 #include <pgn/component_version.h>
 #include <pgn/social.h>
 #include <pgn/social_display_native.h>
+#include <pgn/social_display_admission.h>
 #include <pgn/social_storage.h>
 #include <random.h>
 #include <set>
@@ -816,9 +817,9 @@ class Service {
       try{
         const auto raw=String(frame,"certificate");
         const auto result=DisplayStore().Admit(raw);
+        if(DisplayAdmissionInvalidates(result.appended,result.state))++display_revision;
         // Context/I/O/missing-parent uncertainty MUST NOT acknowledge this cursor.
         if(result.state=="accepted_local"||result.state=="pending_context"||result.state=="rejected"||result.state=="retention_reset"){
-          if(result.appended)++display_revision;
           link->display_generation=String(frame,"generation");link->display_cursor=frame["next_cursor"].getInt<uint64_t>();
           if(frame["more"].get_bool())AskDisplay(link);
         }
@@ -931,7 +932,7 @@ public:
       try{result=DisplayStore().Admit(raw);}
       catch(const UniValue&){result={"uncertain","Native display context unavailable"};}
       catch(const std::exception& e){result={"uncertain",e.what()};}
-      if(result.appended)++display_revision;
+      if(DisplayAdmissionInvalidates(result.appended,result.state))++display_revision;
       const auto value=DisplayStatus(result);
       std::lock_guard guard(display_mutex);display_submitting.erase(key);if(display_statuses.size()>=128)display_statuses.erase(display_statuses.begin());display_statuses[key]=value;
     })){std::lock_guard guard(display_mutex);display_submitting.erase(key);return Status("uncertain",key,"Display queue busy; keep exact certificate");}
