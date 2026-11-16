@@ -5,6 +5,7 @@
 #include "wallet/chain_observation.h"
 #include <functional>
 class QWidget;
+namespace pgn::social {enum class NameLinkSide;}
 namespace pgn::ui {
 using WalletObservationSink=std::function<void(const std::optional<pgn::wallet::ChainObservation>&)>;
 QWidget* createWalletCoreView(const QString& productRoot,WalletObservationSink observe={},bool testnet=false);
@@ -20,6 +21,8 @@ void requestWalletAudit(QWidget*,const QString&,const QJsonArray&,std::function<
 void signWalletAudit(QWidget*,const QString&,const QString&,std::function<void(QJsonValue,QString)>);
 QString walletSocialBinding(QWidget*);
 void readWalletSocialContext(QWidget*,const QString&,std::function<void(QJsonObject,QString)>);
+void requestWalletDisplayLink(QWidget*,const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
+void signWalletDisplayLink(QWidget*,const QString&,const QString&,pgn::social::NameLinkSide,const QString&,const QByteArray&,std::function<void(QString,QString)>);
 void requestWalletSocial(QWidget*,const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
 void signWalletSocial(QWidget*,const QString&,const QString&,const QString&,const QByteArray&,std::function<void(QJsonValue,QString)>);
 void verifyWalletSocial(QWidget*,const QString&,const QString&,const QByteArray&,const QString&,std::function<void(bool,QString)>);

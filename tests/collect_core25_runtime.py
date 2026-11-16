@@ -1,6 +1,6 @@
 from pathlib import Path
 import argparse,hashlib,json,os,re,shutil,subprocess
-p=argparse.ArgumentParser();p.add_argument('--core',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--sdk',type=Path);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True);shutil.copyfile(a.core,a.out/a.core.name)
+p=argparse.ArgumentParser();p.add_argument('--core',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--sdk',type=Path);a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True);shutil.copyfile(a.core,a.out/a.core.name);(a.out/a.core.name).chmod(a.core.stat().st_mode)
 if os.name=='nt':
  assert a.sdk and a.sdk.is_dir();pending=[a.out/a.core.name];seen=set()
  while pending:
