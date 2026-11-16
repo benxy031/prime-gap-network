@@ -36,15 +36,9 @@ jobs:
             /tools/
             /data/
             /qualification/wallet285/
-            /wallet/riecoin-core-upstream-v2606/src/pgn/currency_constants.h
-            /assets/pgn.qrc
-            /assets/pgn-horizon.rc.in
-            /assets/*.ico
-            /assets/pgn-mark.png
-            /assets/chevron-down.svg
-            /assets/chevron-up.svg
-            /assets/checkbox-tick.svg
-
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
 
       - name: Bootstrap MSYS2 without the failing geo-mirror update
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
@@ -103,7 +97,7 @@ jobs:
         run: |
           ctest --test-dir build-wallet285 --output-on-failure
           build-wallet285-app/pgn-core-profile-test.exe
-          build-wallet285-app/pgn-wallet-fresh-setup-view-test.exe
+          ctest --test-dir build-wallet285-app -R wallet-fresh-setup-view --output-on-failure
       - name: Collect exact test binaries
         run: |
           mkdir -p wallet285-qa
