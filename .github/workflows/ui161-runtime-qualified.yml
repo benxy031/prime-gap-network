@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
 
 
       - name: Install the UCRT64 build dependencies
@@ -100,7 +101,7 @@ jobs:
         run: cmake --build build-ci --target pgn-social-view-test pgn-social-display-contract-test pgn-social-available-height-test pgn-wallet-fresh-setup-view-test --parallel 4
       - name: Verify updated contract and first-run controls
         env:
-          QT_QPA_windows: offscreen
+          QT_QPA_PLATFORM: offscreen
           GSETTINGS_BACKEND: memory
         run: |
           ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R "^(social-view|social-display-contract|social-available-height)$"
@@ -117,8 +118,7 @@ jobs:
           changed=set(subprocess.check_output(['git','diff','--name-only','fdb4c7f18c66bb8995253a905287882ba9c5a60a','HEAD'],text=True).splitlines())
           assert changed==allowed,changed
           assert hashlib.sha256(Path('tests/social_view_test.cpp').read_bytes()).hexdigest()=='76c1f41b1f5486201e734dd5ce8893f19dfa0046aec4f75bca8b901acafe1712'
-          Path('UI161-RUNTIME-QA.json').write_text(json.dumps(dict(PASS=True,compiled_source='fdb4c7f18c66bb8995253a905287882ba9c5a60a',compiled_run=43789281036,test_source=os.environ['PGN_QA_SOURCE'],run=int(os.environ['PGN_QA_RUN']),platform='windows',product_source_unchanged=True,updated_social_contract=True,fresh_wallet_controls=True),indent=2)+'
-')
+          Path('UI161-RUNTIME-QA.json').write_text(json.dumps(dict(PASS=True,compiled_source='fdb4c7f18c66bb8995253a905287882ba9c5a60a',compiled_run=43789281036,test_source=os.environ['PGN_QA_SOURCE'],run=int(os.environ['PGN_QA_RUN']),platform='windows',product_source_unchanged=True,updated_social_contract=True,fresh_wallet_controls=True),indent=2)+chr(10))
           PY
       - name: Preserve targeted qualification receipts
         if: ${{ !cancelled() }}
@@ -139,6 +139,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       - name: Install build dependencies
         run: |
@@ -189,7 +190,7 @@ jobs:
         run: cmake --build build-ci --target pgn-social-view-test pgn-social-display-contract-test pgn-social-available-height-test pgn-wallet-fresh-setup-view-test --parallel 4
       - name: Verify updated contract and first-run controls
         env:
-          QT_QPA_ubuntu: offscreen
+          QT_QPA_PLATFORM: offscreen
           GSETTINGS_BACKEND: memory
         run: |
           ctest --test-dir build-ci --output-on-failure --timeout 180 -j2 -R "^(social-view|social-display-contract|social-available-height)$"
@@ -206,8 +207,7 @@ jobs:
           changed=set(subprocess.check_output(['git','diff','--name-only','fdb4c7f18c66bb8995253a905287882ba9c5a60a','HEAD'],text=True).splitlines())
           assert changed==allowed,changed
           assert hashlib.sha256(Path('tests/social_view_test.cpp').read_bytes()).hexdigest()=='76c1f41b1f5486201e734dd5ce8893f19dfa0046aec4f75bca8b901acafe1712'
-          Path('UI161-RUNTIME-QA.json').write_text(json.dumps(dict(PASS=True,compiled_source='fdb4c7f18c66bb8995253a905287882ba9c5a60a',compiled_run=43789281036,test_source=os.environ['PGN_QA_SOURCE'],run=int(os.environ['PGN_QA_RUN']),platform='ubuntu',product_source_unchanged=True,updated_social_contract=True,fresh_wallet_controls=True),indent=2)+'
-')
+          Path('UI161-RUNTIME-QA.json').write_text(json.dumps(dict(PASS=True,compiled_source='fdb4c7f18c66bb8995253a905287882ba9c5a60a',compiled_run=43789281036,test_source=os.environ['PGN_QA_SOURCE'],run=int(os.environ['PGN_QA_RUN']),platform='ubuntu',product_source_unchanged=True,updated_social_contract=True,fresh_wallet_controls=True),indent=2)+chr(10))
           PY
       - name: Preserve targeted qualification receipts
         if: ${{ !cancelled() }}
