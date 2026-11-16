@@ -46,10 +46,16 @@ class ContentTests(unittest.TestCase):
   calls=[]
   def rpc(method,args):
    calls.append(method)
+   if method=='getblockhash':return self.genesis
    if method=='validateaddress':return dict(isvalid=True,scriptPubKey=self.moderator)
    if method=='verifymessage':return True
    raise AssertionError('Community authorization must not depend on the mining index')
   keys=CommunityKeys(rpc,self.genesis)
   with self.assertRaises(Denied):keys.resolve(self.moderator)
-  self.assertTrue(keys.verify_and_bind(self.moderator,'fixture-address','scoped-message','fixture-proof'));self.assertEqual(keys.resolve(self.moderator),self.account(self.moderator));self.assertEqual(calls,['validateaddress','verifymessage'])
+  self.assertTrue(keys.verify_and_bind(self.moderator,'fixture-address','scoped-message','fixture-proof'));self.assertEqual(keys.resolve(self.moderator),self.account(self.moderator));self.assertEqual(calls,['getblockhash','validateaddress','verifymessage'])
+ def test_changed_core_network_cannot_verify_community_proof(self):
+  calls=[]
+  def rpc(method,args):calls.append(method);return '8'*64
+  keys=CommunityKeys(rpc,self.genesis)
+  self.assertFalse(keys.verify_and_bind(self.moderator,'fixture-address','scoped-message','fixture-proof'));self.assertEqual(calls,['getblockhash'])
 if __name__=='__main__':unittest.main()

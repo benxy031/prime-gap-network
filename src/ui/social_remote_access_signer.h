@@ -19,7 +19,7 @@ struct RemoteAccessConsentPlan {
 inline QByteArray nativeAccessSignerPowerShell(){return QByteArray(R"PS(
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
+if([Console]::InputEncoding.CodePage -ne 65001){[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)}
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $pgnReason='The mining wallet connection is unavailable.'
 try {
@@ -90,11 +90,14 @@ inline RemoteAccessConsentPlan remoteAccessConsentPlan(const QByteArray& profile
   return refuse("The configured mining wallet does not match this access confirmation.");
  if(command["address"]!=miner)return refuse("The access confirmation does not match the configured mining wallet.");
  for(const auto& s:{wallet,cookie})for(const auto ch:s)if(ch.unicode()<32||ch.unicode()==127)return refuse("The mining wallet configuration contains an invalid character.");
- const auto source=QString::fromUtf8(nativeAccessSignerPowerShell());QByteArray utf16;
+ // Windows OpenSSH invokes a command shell with an 8191-character limit.
+ // Keep its command fixed and tiny; carry the compiled scoped program and its
+ // public request as two bounded stdin frames, without a temporary remote file.
+ const auto source=QString::fromUtf8(QByteArray("[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$pgnCode=[Console]::In.ReadLine();if($null -eq $pgnCode -or $pgnCode.Length -gt 20000){exit 1};&([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($pgnCode))))"));QByteArray utf16;
  for(const auto ch:source){utf16.append(char(ch.unicode()&255));utf16.append(char(ch.unicode()>>8));}
  p.arguments={"-T","-i",key,"-p",QString::number(port),"-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias="+alias,"-o","ConnectTimeout=8","-o","ServerAliveInterval=5","-o","ServerAliveCountMax=2",user+"@"+host,"powershell.exe","-NoProfile","-NonInteractive","-EncodedCommand",QString::fromLatin1(utf16.toBase64())};
  const QJsonObject request{{"genesis",identity.genesis},{"script",script},{"client",identity.subject},{"community",community},{"rpc_port",rpcPort},{"cookie",cookie},{"wallet",wallet},{"miner_address",miner},{"challenge",QString::fromUtf8(certificate)}};
- p.input=QJsonDocument(request).toJson(QJsonDocument::Compact)+'\n';
+ p.input=nativeAccessSignerPowerShell().toBase64()+'\n'+QJsonDocument(request).toJson(QJsonDocument::Compact)+'\n';
  if(p.input.size()>16000)return refuse("The access confirmation exceeds its supported size.");
  p.profileHash=QCryptographicHash::hash(profileBytes,QCryptographicHash::Sha256);return p;
 }

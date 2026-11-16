@@ -125,6 +125,8 @@ jobs:
         if: always()
         run: |
           mkdir -p names286-qa
+          cp "$(qmake6 -query QT_INSTALL_PLUGINS)/platforms/qoffscreen.dll" names286-qa/
+          cp build-social306/access_transport_plan_test.exe names286-qa/
           cp build-social306/moderation_projection_test.exe build-social306/qt_roles_test.exe names286-qa/
           cp build-wallet285/baseline.exe build-wallet285/candidate.exe build-wallet285/defaultwallet.exe names286-qa/
           cp build-names286/stable-display.exe build-names286/original-display.exe names286-qa/

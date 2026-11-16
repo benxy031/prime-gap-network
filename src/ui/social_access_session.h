@@ -14,7 +14,7 @@ public:
 private:
  social::Identity identity_;QString community_,directory_,address_;QUrl endpoint_;Rpc rpc_;Signer signer_;
  SocialAccessClient* own_{};QPointer<SocialAccessClient> native_;
- std::optional<social::AccessSnapshot> access_;QMap<QString,QString> owners_;QSet<QString> removed_,pinned_;
+ std::optional<social::AccessSnapshot> access_;QMap<QString,QString> owners_,channels_;QSet<QString> removed_,pinned_;
  QString channel_,nativeAddress_;QStringList targetPage_;QByteArray etag_;bool resolving_{},projecting_{};qint64 lastRead_{},lastProjection_{};int rotation_{},reading_{};
  SocialAccessClient* client()const{return native_?native_.data():own_;}
  SocialAccessClient* makeClient(QString script,QString address){
@@ -45,8 +45,8 @@ public:
   // Chat members are Social keys; role-editor members are verified community
   // account IDs. Never invent an association between the two key namespaces.
   if(!request.member.isEmpty()&&!QRegularExpression("^[0-9a-f]{64}$").match(request.member).hasMatch())request.member.clear();
-  ++reading_;lastRead_=QDateTime::currentMSecsSinceEpoch();const QPointer<SocialAccessSession> weak(this);
-  client()->read(request,[weak,done](social::AccessSnapshot snapshot,QString error){if(!weak)return;--weak->reading_;if(error.isEmpty())weak->access_=snapshot;done(std::move(snapshot),error);});
+  ++reading_;lastRead_=QDateTime::currentMSecsSinceEpoch();const QPointer<SocialAccessSession> weak(this);const QPointer<SocialAccessClient> selected(client());
+  selected->read(request,[weak,selected,done](social::AccessSnapshot snapshot,QString error){if(!weak)return;--weak->reading_;if(weak->client()!=selected){done({},"The selected community account changed.");return;}if(error.isEmpty())weak->access_=snapshot;done(std::move(snapshot),error);});
  }
  void manage(social::AccessRequest request,std::function<void(social::AccessResult)> done){
   const bool ownRemoval=request.action==social::AccessAction::RemoveContent&&owners_.value(request.target)==identity_.subject;
@@ -57,10 +57,10 @@ public:
  }
  void decorate(social::Snapshot& snapshot){
   if(snapshot.identity!=identity_||snapshot.section!=social::Section::Chat)return;
-  for(const auto& e:snapshot.entries)owners_.insert(e.id,e.authorId);
-  while(owners_.size()>500){const auto id=owners_.firstKey();owners_.remove(id);removed_.remove(id);pinned_.remove(id);}
+  for(const auto& e:snapshot.entries){owners_.insert(e.id,e.authorId);channels_.insert(e.id,snapshot.channel);}
+  while(owners_.size()>500){const auto id=owners_.firstKey();owners_.remove(id);channels_.remove(id);removed_.remove(id);pinned_.remove(id);}
   // Rotate through retained IDs with a constant <=50-ID request budget.
-  const auto keys=owners_.keys();QStringList targets;if(!keys.isEmpty()){rotation_%=keys.size();for(int i=0;i<qMin<qsizetype>(50,keys.size());++i)targets<<keys[(rotation_+i)%keys.size()];rotation_=(rotation_+targets.size())%keys.size();}
+  QStringList keys;for(auto i=channels_.begin();i!=channels_.end();++i)if(i.value()==snapshot.channel)keys<<i.key();QStringList targets;if(!keys.isEmpty()){rotation_%=keys.size();for(int i=0;i<qMin<qsizetype>(50,keys.size());++i)targets<<keys[(rotation_+i)%keys.size()];rotation_=(rotation_+targets.size())%keys.size();}
   refreshProjection(snapshot.channel,targets);
   const auto now=QDateTime::currentMSecsSinceEpoch();
   if(!reading_&&now-lastRead_>=60000){const QPointer<SocialAccessSession> weak(this);read({identity_,snapshot.channel,{},{},targets},[weak](auto,QString error){if(weak&&error.isEmpty())weak->notify();});}
