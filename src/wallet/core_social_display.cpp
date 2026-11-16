@@ -39,7 +39,8 @@ void CoreRuntime::signSocialDisplayConsent(const QString& sessionScript,const QS
     rpc("deriveaddresses",{value.toObject()["descriptor"]},[this,current,script,challenge,finish](QJsonValue value,QString error){
      const auto addresses=value.toArray();if(!current()||!error.isEmpty()||addresses.size()!=1){finish({},"Display signing address unavailable");return;}const auto address=addresses[0].toString();
      rpc("getaddressinfo",{address},[this,current,script,address,challenge,finish](QJsonValue value,QString error){
-      const auto info=value.toObject();if(!current()||!error.isEmpty()||!info["ismine"].toBool()||info["scriptPubKey"]!=script){finish({},"This wallet does not own the selected key. Export the public packet to its owner; no signature was requested.");return;}
+      const auto info=value.toObject();if(!current()||!error.isEmpty()||info["scriptPubKey"]!=script){finish({},"The name-signing wallet context could not be verified.");return;}
+      if(!info["ismine"].toBool()){finish({},"PGN_NATIVE_CONSENT_OTHER_WALLET");return;}
       rpc("signmessage",{address,QString::fromUtf8(challenge)},[current,finish](QJsonValue value,QString error){
        if(!current()){finish({},"Wallet changed; consent signature discarded");return;}
        if(!error.isEmpty()||!value.isString()||value.toString().isEmpty()||value.toString().size()>512){finish({},"Wallet consent signature unavailable. Unlock only through the normal explicit wallet controls.");return;}

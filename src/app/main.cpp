@@ -14,6 +14,7 @@
 #include "ui/vanity_view.h"
 #include "ui/social_view.h"
 #include "ui/social_display_session.h"
+#include "ui/social_remote_name_signer.h"
 #include "social/social_core_service.h"
 #include "social/social_leaderboard.h"
 #include "ui/mining_canvas.h"
@@ -617,7 +618,17 @@ int main(int argc,char** argv) {
    auto* service=new pgn::social::CoreSocialService(std::move(context),std::move(crypto),std::move(rpc),outbox,socialWeak.data());*socialConnection=service;*socialBinding=wanted;
    service->leaderboard=[inspectWallet](pgn::social::ReadRequest request,pgn::social::Services::Reply done){QJsonArray args;if(!pgn::social::leaderboardArguments(request,args)){done({},"Choose all recorded activity and a valid leaderboard page.");return;}pgn::ui::requestWalletSocial(inspectWallet,"getpgnleaderboard",args,[request,done](QJsonValue value,QString error){if(!error.isEmpty()){done({},error);return;}pgn::social::Snapshot snapshot;const auto failure=pgn::social::decodeLeaderboard(request,value.toObject(),snapshot);done(std::move(snapshot),failure);});};
    pgn::social::PublicDisplayRpc displayRpc=[inspectWallet](QString method,QJsonArray args,auto done){pgn::ui::requestWalletDisplayLink(inspectWallet,method,args,std::move(done));};
-   pgn::social::NameLinkWalletSigner displaySigner=[inspectWallet](pgn::social::Identity identity,pgn::social::NameLinkSide side,QString script,QByteArray source,auto done){pgn::ui::signWalletDisplayLink(inspectWallet,identity.subject,identity.genesis,side,script,source,std::move(done));};
+   pgn::social::NameLinkWalletSigner displaySigner=[inspectWallet,root,socialConnection,owner=QPointer<pgn::social::CoreSocialService>(service)](pgn::social::Identity identity,pgn::social::NameLinkSide side,QString script,QByteArray source,auto done){
+     const auto binding=pgn::ui::walletSocialBinding(inspectWallet);
+     const auto current=[inspectWallet,socialConnection,owner,identity,binding]{return owner&&*socialConnection==owner&&owner->identity()==identity&&pgn::ui::walletSocialBinding(inspectWallet)==binding;};
+     pgn::ui::signWalletDisplayLink(inspectWallet,identity.subject,identity.genesis,side,script,source,[current,owner,root,identity,side,script,source,done](QString signature,QString error){
+      if(!current()){done({},"The wallet connection changed; the name confirmation was discarded.");return;}
+      if(error=="PGN_NATIVE_CONSENT_OTHER_WALLET"&&(side==pgn::social::NameLinkSide::Native||side==pgn::social::NameLinkSide::Transition)){
+       pgn::ui::requestRemoteNameConsent(owner.data(),pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/worker-stream.json",identity,side,script,source,current,done);return;
+      }
+      done(signature,error=="PGN_NATIVE_CONSENT_OTHER_WALLET"?QString("This wallet does not own the chat identity."):error);
+     });
+    };
    *displayConnection=new pgn::ui::SocialDisplaySession(std::move(displayRpc),std::move(displaySigner),service->identity(),pgn::app::mutableDataRoot(root)+"/social/"+genesis+"/"+script+"/public-consent.json",socialWeak.data(),service);
    service->changed=[socialWeak]{if(socialWeak)socialWeak->refresh();};service->diagnostic=[socialWeak](QString error){if(socialWeak)socialWeak->setProperty("pgn_social_service_error",error);};
    socialWeak->setProperty("pgn_social_identity",QJsonObject{{"genesis",genesis},{"script",script}});socialWeak->setIdentity(service->identity());service->start();
