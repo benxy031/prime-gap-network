@@ -51,6 +51,7 @@ jobs:
           if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
             throw "MSYS2 base update failed with exit $pgnUpdateExit"
           }
+          exit 0
 
       - name: Finish the full system update in a fresh MSYS2 session
         run: pacman --noconfirm -Syu
