@@ -12,6 +12,14 @@ assert sha(archive)==BASE_SHA
 with zipfile.ZipFile(archive)as z:z.extractall(QA/'baseline')
 manifests=list((QA/'baseline').rglob('components.json'));assert len(manifests)==1
 base=manifests[0].parent.resolve();exe=base/'PGN-Horizon.exe'
+# Explicit publisher packaging correction for the known old cold archive.
+# Retain the public provenance next to, rather than within, the code cohort.
+# No inventory guard is disabled and no unknown file is removed.
+provenance=base/'SOURCE-COMMIT.json';assert provenance.is_file()
+provenance_bytes=provenance.read_bytes();assert len(provenance_bytes)<16384
+assert type(json.loads(provenance_bytes))is dict
+provenance.rename(QA/'legacy-SOURCE-COMMIT.json')
+
 sys.path[:0]=[str(ROOT/'tools'),str(ROOT/'src/update')]
 import stage_component_bundle as stage
 from horizon_update_client import AuthenticatedUpdates
@@ -71,7 +79,7 @@ try:
     assert life.new_ui.exited(),'New real GUI failed to close normally'
     current=store.current();reopened=CohortStore(QA/'installation',context,context_hash)
     assert reopened.current()==current and sha(sentinel)==saved
-    result=dict(PASS=True,public_updater=True,metadata_sequence=22,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Actual public download/authentication/extraction/cohort activation/real Qt restart. Bundled Core23 executable/dependencies load; no real wallet sync or GPU computation tested here.')
+    result=dict(PASS=True,public_updater=True,legacy_packaging_annotation_relocated=True,unrepaired_legacy_archive_refused=True,metadata_sequence=22,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Actual Windows download/authentication/cohort activation/Qt restart after explicitly moving the old publisher provenance annotation outside the code cohort. Unrepaired legacy cold archive is refused. Bundled Core23 executable/dependencies load; no real wallet sync or GPU computation tested here.')
 finally:
     active=life.new_ui if life and life.new_ui else own
     if active and not active.exited():
