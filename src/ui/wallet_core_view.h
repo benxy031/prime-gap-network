@@ -9,6 +9,7 @@ namespace pgn::social {enum class NameLinkSide;}
 namespace pgn::ui {
 using WalletObservationSink=std::function<void(const std::optional<pgn::wallet::ChainObservation>&)>;
 QWidget* createWalletCoreView(const QString& productRoot,WalletObservationSink observe={},bool testnet=false);
+void bindWalletStartupAttention(QWidget*,std::function<void(QString)>);
 void readWalletLocalConnection(QWidget*,std::function<void(QJsonObject,QString)>);
 void stopWalletCoreForUpdate(QWidget*,std::function<void(QString)>);
 void readWalletTicketPage(QWidget*,int,std::function<void(QJsonObject,QString)>);
