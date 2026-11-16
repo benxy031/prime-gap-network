@@ -584,7 +584,15 @@ int main(int argc,char** argv) {
  auto displayConnection=std::make_shared<QPointer<pgn::ui::SocialDisplaySession>>();
  pgn::social::Services socialServices;
  socialServices.read=[socialConnection,displayConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().read(std::move(request),[displayConnection,done](auto snapshot,QString error){if(!error.isEmpty()||!*displayConnection){done(std::move(snapshot),error);return;}(*displayConnection)->decorate(std::move(snapshot),done);});else done({},"Waiting for the verified wallet connection.");};
- socialServices.publicNameLink=[displayConnection](pgn::social::Identity,QStringList keys){if(*displayConnection)(*displayConnection)->open(keys.value(0));};
+ socialServices.publicNameLink=[displayConnection,inspectWallet,toolsButton](pgn::social::Identity identity,QStringList keys){
+  if(!*displayConnection)return;
+  if(!keys.value(0).isEmpty()){(*displayConnection)->open(keys.value(0));return;}
+  const auto address=toolsButton->property("pgn_public_audit_address").toString();
+  if(address.isEmpty()||toolsButton->property("pgn_public_mining_genesis").toString()!=identity.genesis){(*displayConnection)->open();return;}
+  // Use the already configured mining identity, then verify its exact script
+  // through Core. This is not a username lookup or a new authority grant.
+  pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection](QJsonValue value,QString error){if(!*displayConnection)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)(*displayConnection)->open(object["scriptPubKey"].toString());else (*displayConnection)->open();});
+ };
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
  auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);

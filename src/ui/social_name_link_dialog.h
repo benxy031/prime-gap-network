@@ -20,25 +20,40 @@ class SocialNameLinkDialog final:public QDialog {
  QLabel *summary_,*state_;QLineEdit* native_;QPlainTextEdit* packet_;
  QCheckBox* consent_;QComboBox *withdrawalSigner_,*action_;QPushButton *prepare_,*nativeSign_,*socialSign_,*submit_,*retry_,*save_,*load_;
  QByteArray saved_;QString event_,storageError_;bool rendering_{};
+ QPushButton *quick_{},*advancedToggle_{};QList<QWidget*> advanced_;bool advancedShown_{},automatic_{},automaticQueued_{};QString automaticPacket_;social::NameLinkIntent automaticIntent_;
+ void queueAutomatic(){
+  if(!automatic_||automaticQueued_)return;automaticQueued_=true;
+  QTimer::singleShot(0,this,[this]{automaticQueued_=false;if(!automatic_||!isVisible())return;
+   const auto& i=flow_.intent();const auto& p=flow_.prepared();
+   if(i.session!=automaticIntent_.session||i.socialScript!=automaticIntent_.socialScript||i.nativeScript!=automaticIntent_.nativeScript||i.action!=automaticIntent_.action||i.previousHead!=automaticIntent_.previousHead||p.packet.id!=automaticPacket_){automatic_=false;return;}
+   switch(flow_.phase()){
+    case social::NameLinkPhase::NeedsNativeConsent:flow_.sign(social::NameLinkSide::Native,true);break;
+    case social::NameLinkPhase::ReadyForSocialConsent:flow_.sign(i.action=="withdraw"?social::NameLinkSide::Transition:social::NameLinkSide::Social,true);break;
+    case social::NameLinkPhase::NativeConsentReady:flow_.submit(true);break;
+    case social::NameLinkPhase::Preparing:case social::NameLinkPhase::Signing:case social::NameLinkPhase::Submitting:break;
+    default:automatic_=false;break;
+   }
+  });
+ }
  void persist(){const auto source=flow_.packet();if(source.isEmpty()||source==saved_)return;storageError_=store_.save(source);if(storageError_.isEmpty())saved_=source;}
  void render(){
   rendering_=true;const auto& p=flow_.prepared();const auto phase=flow_.phase();const bool busy=phase==social::NameLinkPhase::Preparing||phase==social::NameLinkPhase::Signing||phase==social::NameLinkPhase::Submitting;
   action_->setEnabled(!busy);action_->setCurrentIndex(flow_.intent().action=="withdraw"?1:0);
   if(!p.packet.id.isEmpty()&&event_!=p.packet.id){event_=p.packet.id;consent_->setChecked(false);}
   const auto s=flow_.intent().socialScript,k=flow_.intent().nativeScript;
-  withdrawalSigner_->setVisible(flow_.intent().action=="withdraw");withdrawalSigner_->setEnabled(!busy&&!flow_.packet().isEmpty()&&phase!=social::NameLinkPhase::Pending&&phase!=social::NameLinkPhase::Included);
+  withdrawalSigner_->setVisible(advancedShown_&&flow_.intent().action=="withdraw");withdrawalSigner_->setEnabled(!busy&&!flow_.packet().isEmpty()&&phase!=social::NameLinkPhase::Pending&&phase!=social::NameLinkPhase::Included);
   withdrawalSigner_->setCurrentIndex(p.packet.certificate.value("authorizer_script").toString()==k?1:0);
   auto name=p.displayName.isEmpty()?QString("Public Native name is not yet verified."):QString("Native public name: %1").arg(p.displayName);
-  summary_->setText((flow_.intent().action=="withdraw"?QString("Withdraw this public name association.\n"):QString{})+name+"\nSocial "+s.left(8)+"…"+s.right(6)+"  /  Native "+k.left(8)+"…"+k.right(6)+"\nDisplay association only. No roles, mining statistics or proof of a common person.");
+  summary_->setText(p.displayName.isEmpty()?QString("Checking your public mining name…"):QString("Use %1 for your chat messages and member profile.").arg(p.displayName));
   summary_->setToolTip("Social S: "+s+"\nNative K: "+k+"\nOperator O: "+p.packet.operatorId+"\nNative anchor: "+p.anchor);
   QString status;
   switch(phase){
    case social::NameLinkPhase::Idle:status="Choose the Native signing key, then prepare the public consent.";break;
    case social::NameLinkPhase::Preparing:status="Checking canonical Native identity and consent…";break;
-   case social::NameLinkPhase::NeedsNativeConsent:status="Native consent needed. Sign here if this wallet owns K; otherwise export the packet to its owner.";break;
-   case social::NameLinkPhase::ReadyForSocialConsent:status=flow_.intent().action=="withdraw"?"Participant withdrawal consent needed.":"Native consent verified. The Social key owner can now consent.";break;
-   case social::NameLinkPhase::NativeConsentReady:status="Both key consents are verified. Apply the display link; capable PGN peers receive it automatically.";break;
-   case social::NameLinkPhase::Signing:status="Waiting for this wallet's explicit signature. No automatic unlock.";break;
+   case social::NameLinkPhase::NeedsNativeConsent:status="Your mining name is verified. Confirm below to use it in Chat.";break;
+   case social::NameLinkPhase::ReadyForSocialConsent:status=flow_.intent().action=="withdraw"?"Participant withdrawal consent needed.":"Ready to confirm your public chat name.";break;
+   case social::NameLinkPhase::NativeConsentReady:status="Ready to use this name in Chat.";break;
+   case social::NameLinkPhase::Signing:status="Confirming ownership with your wallet…";break;
    case social::NameLinkPhase::Submitting:status="Submitting the exact signed public packet…";break;
    case social::NameLinkPhase::Pending:status="Pending local proof admission. Keep this signed packet; no block or role is required.";break;
    case social::NameLinkPhase::VerifiedLocal:status="Verified for current display locally. Capable PGN peers receive the signed link. No role or historical identity is granted.";break;
@@ -55,12 +70,13 @@ class SocialNameLinkDialog final:public QDialog {
   socialSign_->setEnabled(agreed&&!busy&&phase==social::NameLinkPhase::ReadyForSocialConsent&&(flow_.intent().action=="withdraw"||flow_.intent().session.subject==s));
   submit_->setEnabled(agreed&&!busy&&phase==social::NameLinkPhase::NativeConsentReady);
   retry_->setEnabled(!busy&&!flow_.packet().isEmpty()&&phase!=social::NameLinkPhase::Included);
-  rendering_=false;
+  if(quick_){const bool ready=!p.displayName.isEmpty()&&(phase==social::NameLinkPhase::NeedsNativeConsent||phase==social::NameLinkPhase::ReadyForSocialConsent||phase==social::NameLinkPhase::NativeConsentReady);quick_->setEnabled(ready&&!automatic_&&!busy);quick_->setText(phase==social::NameLinkPhase::VerifiedLocal||phase==social::NameLinkPhase::Included?QString("Name active"):p.displayName.isEmpty()?QString("Use my mining name"):QString("Use %1 in Chat").arg(p.displayName));}
+  rendering_=false;queueAutomatic();
  }
 public:
  SocialNameLinkDialog(social::NameLinkServices services,social::NameLinkIntent intent,QString recoveryFile,QWidget* parent=nullptr):
   QDialog(parent),flow_(std::move(services)),store_(std::move(recoveryFile),intent.session){
-  setObjectName("pgn-social-name-link");setProperty("socialSurface",true);setWindowTitle("Link public mining name");resize(720,700);setMinimumSize(640,480);{QFont font("Segoe UI");font.setPixelSize(14);setFont(font);};
+  setObjectName("pgn-social-name-link");setProperty("socialSurface",true);setWindowTitle("Link public mining name");resize(620,320);setMinimumSize(520,280);{QFont font("Segoe UI");font.setPixelSize(14);setFont(font);};
   setStyleSheet("#pgn-social-name-link{background:#09262d;color:#e1eeee}#pgn-social-name-link QLabel,#pgn-social-name-link QCheckBox{color:#e1eeee}#pgn-social-name-link QLineEdit,#pgn-social-name-link QPlainTextEdit{background:#eaf0ef;color:#1a333b;border:1px solid #8aa6a9;border-radius:8px;padding:8px}#pgn-social-name-link QPushButton{background:#164550;color:#eef8f6;border:1px solid #3a6a72;border-radius:8px;padding:6px 12px;min-height:24px}#pgn-social-name-link QPushButton:hover{background:#205763}#pgn-social-name-link QPushButton:pressed{background:#103640}#pgn-social-name-link QPushButton:focus{border:2px solid #8ad1bf}#pgn-social-name-link QPushButton:disabled{background:#20383e;color:#94a9ab;border-color:#38535a}#pgn-social-name-link QPushButton[primary=true]{background:#237b68;border-color:#4fa48f}");
   auto* box=new QVBoxLayout(this);box->setContentsMargins(20,20,20,20);box->setSpacing(8);
   auto* title=new QLabel("Link a verified public name");title->setTextFormat(Qt::PlainText);auto font=title->font();font.setPixelSize(20);font.setBold(true);title->setFont(font);box->addWidget(title);
@@ -77,7 +93,15 @@ public:
   packet_=new QPlainTextEdit;packet_->setReadOnly(true);packet_->setObjectName("pgn-social-link-public-packet");packet_->setMaximumHeight(72);packet_->setAccessibleName("Canonical public consent packet");box->addWidget(packet_);
   auto* actions=new QHBoxLayout;load_=new QPushButton("Import packet…");load_->setObjectName("pgn-social-link-import");save_=new QPushButton("Export packet…");save_->setObjectName("pgn-social-link-export");retry_=new QPushButton("Recheck name");retry_->setObjectName("pgn-social-link-check");auto* close=new QPushButton("Close");close->setObjectName("pgn-social-link-close");actions->addWidget(load_);actions->addWidget(save_);actions->addWidget(retry_);actions->addStretch();actions->addWidget(close);box->addLayout(actions);
   connect(action_,&QComboBox::activated,this,[this,currentHead=intent.previousHead](int choice){if(rendering_)return;auto next=flow_.intent();next.action=choice?"withdraw":"bind";next.previousHead=currentHead;consent_->setChecked(false);flow_.setIntent(next);});
+  quick_=new QPushButton("Use my mining name");quick_->setObjectName("pgn-social-link-quick");quick_->setProperty("primary",true);box->insertWidget(2,quick_);
+  advancedToggle_=new QPushButton("Advanced details");advancedToggle_->setObjectName("pgn-social-link-advanced");advancedToggle_->setCheckable(true);box->addWidget(advancedToggle_,0,Qt::AlignLeft);
+  advanced_={action_,keyLabel,native_,prepare_,consent_,withdrawalSigner_,nativeSign_,socialSign_,submit_,packetLabel,packet_,load_,save_};for(auto* widget:advanced_)widget->hide();
+  connect(advancedToggle_,&QPushButton::toggled,this,[this](bool checked){advancedShown_=checked;for(auto* widget:advanced_)widget->setVisible(checked);render();adjustSize();});
+  connect(quick_,&QPushButton::clicked,this,[this]{const auto& p=flow_.prepared();if(p.displayName.isEmpty()||p.packet.id.isEmpty())return;automaticIntent_=flow_.intent();automaticPacket_=p.packet.id;automatic_=true;consent_->setChecked(true);render();});
+  connect(this,&QDialog::finished,this,[this]{automatic_=false;});
   flow_.changed=[this]{persist();render();};flow_.setIntent(intent);
+  // Read-only preparation does not authorize a signature or publication.
+  QTimer::singleShot(0,this,[this]{if(isVisible()&&!flow_.intent().nativeScript.isEmpty()&&flow_.packet().isEmpty())flow_.prepare();});
   connect(native_,&QLineEdit::textEdited,this,[this](QString key){if(rendering_)return;auto intent=flow_.intent();intent.nativeScript=key;flow_.setIntent(intent);});
   connect(prepare_,&QPushButton::clicked,this,[this]{flow_.prepare();});connect(consent_,&QCheckBox::toggled,this,[this]{if(!rendering_)render();});
   connect(withdrawalSigner_,&QComboBox::activated,this,[this](int choice){consent_->setChecked(false);flow_.chooseWithdrawalSigner(choice?flow_.intent().nativeScript:flow_.intent().socialScript);});
