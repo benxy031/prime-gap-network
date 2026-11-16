@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QTabWidget>
 #include <QPointer>
+#include <QSignalBlocker>
 #include <QUuid>
 #include <algorithm>
 #include <memory>
@@ -56,35 +57,29 @@ SocialAccessDialog::SocialAccessDialog(social::Identity identity,std::optional<s
     overwriteRole_=new SocialComboBox;overwriteRole_->setAccessibleName("Role or member for channel permission overwrite");overwriteBox->addWidget(overwriteRole_);overwrites_=new QListWidget;overwrites_->setAccessibleName("Channel permissions. Partially checked means inherit.");overwriteBox->addWidget(overwrites_,1);
     auto* overwriteActions=new QHBoxLayout;overwriteActions->addStretch();button(overwriteActions,"Save channel permissions",social::AccessAction::SetOverwrite,"pgn-social-save-overwrite");overwriteBox->addLayout(overwriteActions);tabs->addTab(overwritePage,"Channel permissions");
     tabs->addTab(accountPage,"Account && devices");
-    status_=label({});status_->setObjectName("pgn-social-access-status");box->addWidget(status_);auto* bottom=new QHBoxLayout;bottom->addStretch();auto* close=new QPushButton("Close");bottom->addWidget(close);box->addLayout(bottom);connect(close,&QPushButton::clicked,this,&QDialog::close);
+    status_=label({});status_->setObjectName("pgn-social-access-status");box->addWidget(status_);auto* bottom=new QHBoxLayout;auto* refresh=new QPushButton("Refresh roles");refresh->setObjectName("pgn-social-refresh-access");refresh->setEnabled(bool(services_.readAccess));bottom->addWidget(refresh);connect(refresh,&QPushButton::clicked,this,[this]{refreshAccess();});bottom->addStretch();auto* close=new QPushButton("Close");bottom->addWidget(close);box->addLayout(bottom);connect(close,&QPushButton::clicked,this,&QDialog::close);
     if(snapshot_){const auto error=social::validateAccess(*snapshot_,identity_);if(!error.isEmpty()){status_->setText(error);snapshot_.reset();}}
-    if(snapshot_){
-        auto sorted=snapshot_->roles;std::stable_sort(sorted.begin(),sorted.end(),[](const auto& a,const auto& b){return a.position>b.position;});
-        for(const auto& role:sorted){auto* item=new QListWidgetItem(role.name,roles_);item->setData(Qt::UserRole,role.id);memberRole_->addItem(role.name,role.id);overwriteRole_->addItem(role.name,role.id);}
-        for(const auto& p:snapshot_->permissionCatalog){auto* item=new QListWidgetItem(permissionLabel(p),permissions_);item->setData(Qt::UserRole,p);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(Qt::Unchecked);
-            auto* overwrite=new QListWidgetItem(permissionLabel(p),overwrites_);overwrite->setData(Qt::UserRole,p);overwrite->setFlags(overwrite->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsUserTristate);overwrite->setCheckState(Qt::PartiallyChecked);}
-        for(const auto& person:snapshot_->members){auto* item=new QListWidgetItem(person.name,members_);item->setData(Qt::UserRole,person.id);overwriteRole_->addItem("Member · "+person.name,person.id);overwriteRole_->setItemData(overwriteRole_->count()-1,true,Qt::UserRole+1);}
-    }
-    connect(roles_,&QListWidget::currentRowChanged,this,[this]{selectRole();});connect(members_,&QListWidget::currentRowChanged,this,[this]{selectMember();});
+    populateAccess(member);
+    connect(roles_,&QListWidget::currentRowChanged,this,[this]{selectRole();});connect(members_,&QListWidget::currentRowChanged,this,[this]{selectMember();if(services_.readAccess)refreshAccess();});
     connect(memberRole_,&QComboBox::currentIndexChanged,this,[this]{updateActions();});connect(overwriteRole_,&QComboBox::currentIndexChanged,this,[this]{selectOverwrite();});
     roles_->setCurrentRow(0);members_->setCurrentRow(0);selectRole();selectMember();selectOverwrite();
     for(int i=0;i<members_->count();++i)if(members_->item(i)->data(Qt::UserRole)==member){members_->setCurrentRow(i);tabs->setCurrentIndex(1);}
     create->setEnabled(bool(snapshot_));if(!services_.manage)status_->setText("Read only · no authenticated management service connected.");
-    updateActions();
+    updateActions();if(!snapshot_&&services_.readAccess)refreshAccess();
 }
 social::AccessRequest SocialAccessDialog::request(social::AccessAction action)const{
     social::AccessRequest r;r.identity=identity_;r.community=snapshot_?snapshot_->community:QString{};r.revision=snapshot_?snapshot_->revision:QString{};r.action=action;
     r.sessionReference=snapshot_?snapshot_->session.reference:QString{};
     if(action==social::AccessAction::EditRole||action==social::AccessAction::DeleteRole||action==social::AccessAction::MoveRole){r.role=itemId(roles_);if(creating_&&action==social::AccessAction::EditRole){r.action=social::AccessAction::CreateRole;r.role.clear();}
         if(r.action==social::AccessAction::CreateRole||r.action==social::AccessAction::EditRole){r.name=name_->text();for(int i=0;i<permissions_->count();++i)if(permissions_->item(i)->checkState()==Qt::Checked)r.permissions<<permissions_->item(i)->data(Qt::UserRole).toString();}
-        if(r.action==social::AccessAction::CreateRole||r.action==social::AccessAction::MoveRole)r.position=position_->value();}
+        if(r.action==social::AccessAction::CreateRole||r.action==social::AccessAction::EditRole||r.action==social::AccessAction::MoveRole)r.position=position_->value();}
     if(action==social::AccessAction::AssignRole||action==social::AccessAction::RemoveRole){r.target=itemId(members_);r.role=memberRole_->currentData().toString();}
     if(action==social::AccessAction::KickMember||action==social::AccessAction::BanMember){r.target=itemId(members_);r.reason=reason_->text();}
     if(action==social::AccessAction::SetOverwrite){r.channel=channel_;r.target=overwriteRole_->currentData().toString();if(!overwriteRole_->currentData(Qt::UserRole+1).toBool())r.role=r.target;for(int i=0;i<overwrites_->count();++i){auto* p=overwrites_->item(i);if(p->checkState()==Qt::Checked)r.allow<<p->data(Qt::UserRole).toString();else if(p->checkState()==Qt::Unchecked)r.deny<<p->data(Qt::UserRole).toString();}}
     return r;
 }
 void SocialAccessDialog::invalidateAccess(const social::AuthSession& session,QString reason){
-    ++authGeneration_;++actionGeneration_;busy_=false;snapshot_.reset();
+    ++authGeneration_;++actionGeneration_;++readGeneration_;busy_=false;snapshot_.reset();
     if(social::validAuthStatus(session,identity_)){auth_=session;authStatus_->setText(social::authStateLabel(auth_.state));}
     status_->setText(reason);updateActions();
 }
@@ -92,11 +87,12 @@ void SocialAccessDialog::authenticate(social::AuthIntent intent){
     if(!services_.authenticate||!auth_.availableFlows.contains(intent)){authStatus_->setText("Unavailable · no identity service flow offered.");return;}
     social::AuthRequest r;r.identity=identity_;r.intent=intent;r.requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);r.sessionReference=auth_.reference;
     if(intent==social::AuthIntent::RevokeDevice){r.device=itemId(devices_);if(r.device.isEmpty()){authStatus_->setText("Select a device to revoke.");return;}}
-    authStatus_->setText("Awaiting identity service…");const auto generation=++authGeneration_;++actionGeneration_;busy_=false;snapshot_.reset();updateActions();const QPointer<SocialAccessDialog> weak(this);const auto completed=std::make_shared<bool>(false);
+    authStatus_->setText("Awaiting identity service…");const auto generation=++authGeneration_;++actionGeneration_;++readGeneration_;busy_=false;snapshot_.reset();updateActions();const QPointer<SocialAccessDialog> weak(this);const auto completed=std::make_shared<bool>(false);
     services_.authenticate(r,[weak,r,generation,completed](social::AuthResult result){if(!weak||*completed||weak->authGeneration_!=generation)return;*completed=true;
         if(result.requestedIdentity!=r.identity||result.requestId!=r.requestId||!social::validAuthStatus(result.session,r.identity)){weak->authStatus_->setText("Denied · identity response mismatch or unverified session.");return;}
         weak->auth_=result.session;weak->snapshot_.reset();weak->updateActions();
         weak->authStatus_->setText(social::authStateLabel(result.session.state)+(result.reason.isEmpty()?QString{}:" · "+result.reason.left(256))+" · refresh roles from service");
+        if(result.session.state==social::AuthState::Verified)weak->refreshAccess();
         weak->devices_->clear();for(const auto& device:result.session.devices){auto* item=new QListWidgetItem(device.label+(device.revoked?" · revoked":""),weak->devices_);item->setData(Qt::UserRole,device.id);}
     });
 }
@@ -132,9 +128,48 @@ void SocialAccessDialog::submit(social::AccessAction action){
     r.requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);busy_=true;const auto generation=++actionGeneration_;status_->setText("Awaiting service authorization…");updateActions();const QPointer<SocialAccessDialog> weak(this);const auto completed=std::make_shared<bool>(false);
     services_.manage(r,[weak,r,generation,completed](social::AccessResult result){if(!weak||*completed||weak->actionGeneration_!=generation)return;*completed=true;weak->busy_=false;
         if(!social::matchingResult(result,r)){weak->status_->setText("Denied · response scope does not match this request.");weak->updateActions();return;}
-        const auto state=result.outcome==social::AccessOutcome::Accepted?"Accepted by service · refresh to read updated state":result.outcome==social::AccessOutcome::Denied?"Denied":result.outcome==social::AccessOutcome::Conflict?"Permissions changed · refresh required":"Service unavailable";
+        const auto state=result.outcome==social::AccessOutcome::Accepted?"Accepted by service":result.outcome==social::AccessOutcome::Denied?"Denied":result.outcome==social::AccessOutcome::Conflict?"Permissions changed · refresh required":"Service unavailable";
         weak->status_->setText(QString(state)+(result.reason.isEmpty()?QString{}:" · "+result.reason.left(512)));weak->updateActions();
-        if(result.outcome==social::AccessOutcome::Accepted||result.outcome==social::AccessOutcome::Conflict){weak->snapshot_.reset();weak->updateActions();}
+        if(result.outcome==social::AccessOutcome::Accepted||result.outcome==social::AccessOutcome::Conflict){weak->snapshot_.reset();weak->updateActions();weak->refreshAccess();}
     });
 }
+void SocialAccessDialog::populateAccess(QString member,QString role){
+    const QSignalBlocker a(roles_),b(members_),c(memberRole_),d(overwriteRole_);
+    roles_->clear();members_->clear();memberRole_->clear();overwriteRole_->clear();permissions_->clear();overwrites_->clear();
+    creating_=false;
+    if(snapshot_){
+        auto sorted=snapshot_->roles;std::stable_sort(sorted.begin(),sorted.end(),[](const auto& a,const auto& b){return a.position>b.position;});
+        for(const auto& role:sorted){auto* item=new QListWidgetItem(role.name,roles_);item->setData(Qt::UserRole,role.id);memberRole_->addItem(role.name,role.id);overwriteRole_->addItem(role.name,role.id);}
+        for(const auto& p:snapshot_->permissionCatalog){auto* item=new QListWidgetItem(permissionLabel(p),permissions_);item->setData(Qt::UserRole,p);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(Qt::Unchecked);
+            auto* overwrite=new QListWidgetItem(permissionLabel(p),overwrites_);overwrite->setData(Qt::UserRole,p);overwrite->setFlags(overwrite->flags()|Qt::ItemIsUserCheckable|Qt::ItemIsUserTristate);overwrite->setCheckState(Qt::PartiallyChecked);}
+        for(const auto& person:snapshot_->members){auto* item=new QListWidgetItem(person.name,members_);item->setData(Qt::UserRole,person.id);overwriteRole_->addItem("Member · "+person.name,person.id);overwriteRole_->setItemData(overwriteRole_->count()-1,true,Qt::UserRole+1);}
+    }
+
+    for(int i=0;i<roles_->count();++i)if(roles_->item(i)->data(Qt::UserRole)==role)roles_->setCurrentRow(i);
+    if(roles_->currentRow()<0&&roles_->count())roles_->setCurrentRow(0);
+    for(int i=0;i<members_->count();++i)if(members_->item(i)->data(Qt::UserRole)==member)members_->setCurrentRow(i);
+    if(members_->currentRow()<0&&members_->count())members_->setCurrentRow(0);
+    selectRole();selectMember();selectOverwrite();
+}
+void SocialAccessDialog::refreshAccess(){
+    if(!services_.readAccess||busy_)return;
+    const auto member=itemId(members_),role=itemId(roles_);
+    const auto assignmentRole=memberRole_->currentData().toString(),overwriteTarget=overwriteRole_->currentData().toString();
+    const bool overwriteMember=overwriteRole_->currentData(Qt::UserRole+1).toBool();
+    social::AccessReadRequest r{identity_,channel_,member,role};
+    const auto generation=++readGeneration_;++actionGeneration_;busy_=true;snapshot_.reset();updateActions();
+    status_->setText("Reading current roles and permissions…");
+    const QPointer<SocialAccessDialog> weak(this);const auto completed=std::make_shared<bool>(false);
+    services_.readAccess(r,[weak,r,generation,member,role,assignmentRole,overwriteTarget,overwriteMember,completed](social::AccessSnapshot value,QString error){
+        if(!weak||*completed||weak->readGeneration_!=generation)return;*completed=true;weak->busy_=false;
+        if(error.isEmpty())error=social::validateAccess(value,r.identity);
+        if(!error.isEmpty()){weak->snapshot_.reset();weak->status_->setText("Roles unavailable · "+error.left(512));weak->updateActions();return;}
+        weak->auth_=value.session;weak->snapshot_=std::move(value);weak->populateAccess(member,role);
+        const auto assigned=weak->memberRole_->findData(assignmentRole);if(assigned>=0)weak->memberRole_->setCurrentIndex(assigned);
+        for(int i=0;i<weak->overwriteRole_->count();++i)if(weak->overwriteRole_->itemData(i).toString()==overwriteTarget&&weak->overwriteRole_->itemData(i,Qt::UserRole+1).toBool()==overwriteMember){weak->overwriteRole_->setCurrentIndex(i);break;}
+        weak->authStatus_->setText(social::authStateLabel(weak->auth_.state));
+        weak->status_->setText("Roles and permissions up to date");weak->updateActions();
+    });
+}
+
 }

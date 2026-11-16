@@ -46,6 +46,7 @@ struct AccessSnapshot {
     QStringList permissionCatalog,grantablePermissions;QVector<Availability> availability;
     AuthSession session;
 };
+struct AccessReadRequest { Identity identity;QString channel,member,role; };
 struct AccessRequest {
     Identity identity;QString community,channel,revision,requestId;
     AccessAction action{};QString target,role,name;int position{};QStringList permissions,allow,deny;QString reason;
@@ -137,6 +138,8 @@ struct Services {
     // Adapter owns server authorization. Availability is presentation only.
     // A forged client must not bypass the service's current policy evaluation.
     std::function<void(AccessRequest,std::function<void(AccessResult)>)> manage;
+    // Focused authoritative access page; no Chat history/leaderboard refetch.
+    std::function<void(AccessReadRequest,std::function<void(AccessSnapshot,QString)>)> readAccess;
     // Root's mature identity-provider adapter performs WebAuthn/OIDC ceremonies
     // and server verification. These structs carry public status/references,
     // never assertions, bearer tokens, recovery codes or private key material.
