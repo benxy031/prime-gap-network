@@ -3,7 +3,9 @@
 #include "social/social_leaderboard.h"
 namespace pgn::social {
 inline bool displayScript(const QString& s){return QRegularExpression("^0014[0-9a-f]{40}$").match(s).hasMatch();}
-inline bool displayAddress(const QJsonValue& v){return v.isString()&&QRegularExpression("^[a-z0-9]{8,100}$").match(v.toString()).hasMatch();}
+// Transport grammar only: PGN addresses use mixed-case Base58. Core still
+// validates the address, network, script binding and consent signatures.
+inline bool displayAddress(const QJsonValue& v){return v.isString()&&QRegularExpression("^[A-Za-z0-9]{8,100}$").match(v.toString()).hasMatch();}
 inline bool displayChallenge(const QByteArray& bytes,const QString& genesis){
  if(bytes.size()<64||bytes.size()>24576)return false;
  const auto split=bytes.indexOf('\n');const auto domain=bytes.left(split);

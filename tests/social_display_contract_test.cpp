@@ -10,6 +10,17 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);unsigned checks{}
  auto certificate=QJsonObject{{"statement",statement},{"social_proof",""},{"operator_proof",""},{"authorizer_script",""},{"authorization_proof",""}};NameLinkPacket p;
  expect(decodeNameLinkPacket(canonical(certificate),g,p).isEmpty(),"Canonical partial packet refused");
  expect(displayChallenge(p.socialChallenge,g)&&displayChallenge(p.nativeChallenge,g),"Separated consent domains rejected");
+ // Captured from actual Core22 getdescriptorinfo/deriveaddresses/validateaddress,
+ // not invented lowercase placeholders. Regressions used to refuse both.
+ for(const auto address:{"tpgnHujbzQb1LCj4z68mv1c9ZWejtRL5r9ZeQ","tpgnYWNoxjyashJPmuWnUYmYHiFQQ3Ltw8As1"}){
+  expect(displayAddress(QString(address)),"Real mixed-case Native address refused");
+  expect(validDisplayRpcArguments("getpgnparticipants",{0,1,address},g),"Real Native membership request refused");
+  expect(validDisplayRpcArguments("validateaddress",{address},g),"Real Native address verification refused");
+  expect(validDisplayRpcArguments("verifymessage",{address,"AA==",QString::fromUtf8(p.socialChallenge)},g),"Real Native proof verification grammar refused");
+ }
+ for(const auto invalid:{"tpgn;walletpassphrase","tpgn\nscript","tpgn space","tpgn/../file","tpgn_unsafe"})expect(!displayAddress(QString(invalid)),"Non-address transport token accepted");
+ expect(!displayAddress(QString(101,'A')),"Unbounded address accepted");
+
  expect(!displayChallenge(p.transitionChallenge,g),"Bind accepted withdrawal signing domain");
  expect(!displayChallenge(p.socialChallenge,QString(64,'9')),"Cross-genesis consent accepted");
  expect(!displayChallenge(p.socialChallenge+" ",g),"Noncanonical challenge accepted");
