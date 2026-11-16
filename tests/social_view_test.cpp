@@ -239,8 +239,8 @@ int main(int argc,char** argv){
         ui::SocialView ranking(temp.path()+"/design/drafts.json",service);ranking.resize(1366,900);ranking.show();ranking.setIdentity(A());ranking.selectSection(social::Section::Miners);app.processEvents();
         auto response=snapshot(calls.last().request);response.miners=miners();response.miners[0].socialMemberId=A().subject;calls.last().reply(response,{});app.processEvents();
         auto* grid=find<QTableWidget>(ranking,"pgn-social-miners");auto* total=find<QPushButton>(ranking,"pgn-social-period-total");auto* today=find<QPushButton>(ranking,"pgn-social-period-today");
-        check(grid->height()<=58+4*36+4,"Small leaderboard leaves a giant pale empty sheet");
-        for(int size=1;size<=4;++size){auto small=response;small.miners.resize(size);ranking.refresh();calls.last().reply(small,{});app.processEvents();check(grid->height()<=qMax(100,58+size*36+4),"One-to-four-row card stretched beyond its data");}
+        check(grid->height()==grid->parentWidget()->height(),"Leaderboard does not fill its allocated content slot");
+        for(int size=1;size<=4;++size){auto small=response;small.miners.resize(size);ranking.refresh();calls.last().reply(small,{});app.processEvents();bool compact=true;for(int row=0;row<grid->rowCount();++row)compact&=grid->rowHeight(row)==36;check(grid->height()==grid->parentWidget()->height()&&compact,"One-to-four-row viewport must fill its slot without stretching rows");}
         for(int row=0;row<grid->rowCount();++row)check(grid->item(row,0)->data(Qt::UserRole+180).toBool()==(grid->item(row,0)->data(Qt::UserRole).toString()=="missing"),"Self-row highlight inferred from name or another identity");
         today->setFocus();key(today,Qt::Key_Space);app.processEvents();check(today->isChecked()&&!total->isChecked()&&calls.last().request.window==social::Window::Day,"Keyboard Today button bypassed real UTC query");
         const auto stale=calls.last();total->click();app.processEvents();check(total->isChecked()&&!today->isChecked()&&calls.last().request.window==social::Window::AllTime,"Total button bypassed real period reset");
