@@ -40,6 +40,21 @@ int main(int argc,char** argv){
     need(QJsonDocument::fromJson(after).object()==expected,"only program binding changes");
     need(!QFileInfo::exists(runtime+"/wallet-owned.json")&&!QFileInfo::exists(runtime+"/wallet-core-rebind.json"),"stopped owner and journal settled");
     result=prepareManagedCoreProfile(root,runtime,"test",true,absent);need(result.error.isEmpty()&&get(runtime+"/wallet-core.json")==after,"repeat is idempotent");
+    // A new ZIP must not depend on keeping the previous extracted program.
+    // Preserve the old fixture through a rename; no wallet/chain is moved.
+    const auto retainedOld=oldRoot+"-retained";
+    need(QDir().rename(oldRoot,retainedOld),"retain old package under another name");
+    reset();result=prepareManagedCoreProfile(root,runtime,"test",true,absent);
+    const bool baseline=argc==2&&QString::fromLocal8Bit(argv[1])=="--baseline";
+    if(baseline)need(!result.error.isEmpty()&&get(runtime+"/wallet-core.json")==before,"baseline reproduces missing old program failure");
+    else need(result.error.isEmpty()&&QJsonDocument::fromJson(get(runtime+"/wallet-core.json")).object()==expected,"missing old package reopens same wallet with current Core");
+    reset();result=prepareManagedCoreProfile(root,runtime,"test",true,unknown);
+    need(!result.error.isEmpty()&&get(runtime+"/wallet-core.json")==before&&get(runtime+"/wallet-owned.json")==owner,"missing old program never overrides unknown owner");
+    reset();auto optedExternal=profile;optedExternal.insert("program_selection","external");
+    const auto optedRaw=QJsonDocument(optedExternal).toJson(QJsonDocument::Compact);put(runtime+"/wallet-core.json",optedRaw);
+    result=prepareManagedCoreProfile(root,runtime,"test",true,absent);
+    need(!result.error.isEmpty()&&get(runtime+"/wallet-core.json")==optedRaw,"explicit external program remains explicit when absent");
+    need(QDir().rename(retainedOld,oldRoot),"restore old fixture path");
     reset();result=prepareManagedCoreProfile(root,runtime,"test",true,live);
     need(result.error.isEmpty()&&result.profile.executable==oldProfile.executable&&get(runtime+"/wallet-core.json")==before&&get(runtime+"/wallet-owned.json")==owner,"live old process is retained");
     reset();result=prepareManagedCoreProfile(root,runtime,"test",true,unknown);
