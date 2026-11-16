@@ -1,12 +1,12 @@
-name: UI167 wallet reopening and existing chat profiles
+name: UI168 existing wallet names and CPU routing
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/release167-wallet-names]
+    branches: [qualification/cpu296-runtime]
 permissions:
   contents: read
 concurrency:
-  group: release167-${{ github.ref }}
+  group: cpu296-runtime-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
@@ -37,6 +37,7 @@ jobs:
             /data/
             /qualification/names286/
             /qualification/wallet285/
+            /qualification/cpu296/
             /wallet/riecoin-core-upstream-v2606/src/
             /assets/
             /third_party/
@@ -91,6 +92,9 @@ jobs:
 
       - name: Compile focused name tests and normal application
         run: |
+          cmake -S qualification/cpu296 -B build-cpu296 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cpu296 --parallel 2
+          ctest --test-dir build-cpu296 --output-on-failure
           cmake -S qualification/wallet285 -B build-wallet285 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-wallet285 --parallel 2
           ctest --test-dir build-wallet285 --output-on-failure
@@ -118,6 +122,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: release167-windows
+          name: release168-windows
           path: names286-qa
           if-no-files-found: error

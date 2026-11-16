@@ -100,6 +100,7 @@ public:
     void attachMiner(QProcess* miner){if(!miner_||miner_->state()!=QProcess::Running||miner_==miner){miner_=miner;restored_=false;}}
     void minerReady(QProcess* miner){
         if(miner_!=miner||restored_||miner->state()!=QProcess::Running)return;restored_=true;
+        for(const auto& r:resources_)settled(r);
         for(const auto& r:resources_)if(r->selected&&r->wanted&&r->compatible&&r->client->available()&&r->control.isEmpty()){
             const auto affinity=r->client->affinityFor(r->desiredThreads);if(affinity.size()!=r->desiredThreads)continue;
             r->control="restore-resource:"+r->endpoint.deviceId;
@@ -119,14 +120,14 @@ public:
         const auto r=resources_.value(device);if(!r)return device.startsWith("CPU/")?refuse(device,request,"CPU executor is unavailable"):false;
         if(closing_||!r->compatible||!r->client->available()||r->inventory.isEmpty())return refuse(device,request,"CPU normal-cycle controller is unavailable or requires version2");
         r->wanted=enabled; // An accepted OFF cancels automatic resume before its acknowledgement.
-        if(cpuMiner_&&cpuMiner_->state()==QProcess::Starting){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
+        if((miner_&&miner_->state()==QProcess::Starting)||(cpuMiner_&&cpuMiner_->state()==QProcess::Starting)){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
         if(!r->control.isEmpty()){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
         const int maximum=r->inventory.value("maximum_workers").toInt();if(maximum<1)return refuse(device,request,"CPU thread budget is unavailable");
         const int workers=exactWorkers>0?exactWorkers:std::clamp(qRound(maximum*percent/100.),1,maximum);const auto affinity=r->client->affinityFor(workers);
         if(affinity.size()!=workers)return refuse(device,request,"CPU fixed affinity budget is unavailable");
         r->desiredThreads=workers;
         QSettings().setValue("mining/cpuThreads/"+device,workers);
-        if(enabled&&!cpuProgram_.isEmpty()&&(!cpuMiner_||miner_!=cpuMiner_||cpuMiner_->state()!=QProcess::Running)){
+        if(enabled&&!cpuProgram_.isEmpty()&&(!miner_||miner_->state()==QProcess::NotRunning)){
             r->queued=Choice{request,enabled,percent,exactWorkers};if(launchCpuMiner())return true;r->queued.reset();
             return refuse(device,request,"CPU normal miner is not ready");
         }

@@ -17,7 +17,9 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
  resources.onControl=[&](auto,auto,bool okay,auto){check(okay,"resource control refused");++controls;};
  for(const auto& host:QStringList{"ALEX","WIZZ"}){CpuControlEndpoint endpoint;endpoint.deviceId="CPU/"+host+"/0";endpoint.host=host;endpoint.program=python;endpoint.arguments={"-I","-X","utf8",fixture,"--host",host,"--workspace",root+"/"+host};resources.add(endpoint);}
  check(until([&]{return statuses.size()==2;}),"two CPU services did not become ready");
- QProcess miner;miner.start(python,{"-I","-X","utf8",fixture,"--echo"});check(miner.waitForStarted(3000),"closed miner fixture failed");resources.attachMiner(&miner);
+ const QJsonObject fallback{{"schema","PGN_LOCAL_CPU_NORMAL_PROFILE_V1"},{"program",python},{"local",true},{"network_arguments",QJsonArray{"-I","-X","utf8",fixture,"--network","--cpu-only"}}};
+ check(resources.configureNormalMiner(fallback),"CPU fallback profile refused");
+ QProcess miner;QObject::connect(&miner,&QProcess::started,&resources,[&]{resources.minerReady(&miner);});miner.start(python,{"-I","-X","utf8",fixture,"--echo"});resources.attachMiner(&miner);
  QByteArray buffer;QList<QJsonObject> packets;
  const auto drain=[&]{buffer+=miner.readAllStandardOutput();while(buffer.contains('\n')){const auto end=buffer.indexOf('\n');packets.append(QJsonDocument::fromJson(buffer.left(end)).object());buffer.remove(0,end+1);}};
  check(resources.control("CPU/ALEX/0","alex-on",true,50),"ALEX control missing");check(resources.control("CPU/WIZZ/0","wizz-on",true,25),"WIZZ control missing");
