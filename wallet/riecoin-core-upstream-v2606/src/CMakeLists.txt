@@ -219,6 +219,7 @@ add_library(riecoin_node STATIC EXCLUDE_FROM_ALL
   net.cpp
   net_processing.cpp
   pgn/social.cpp
+  pgn/social_display_native.cpp
   netgroup.cpp
   node/abort.cpp
   node/blockmanager_args.cpp
