@@ -86,7 +86,7 @@ jobs:
           ctest --test-dir build-social278 --output-on-failure
       - name: Access policy, protocol, storage and backpressure tests
         shell: pwsh
-        working-directory: qualification/social278-http-client
+        working-directory: qualification/social278-access
         run: |
           python -m unittest test_authority test_backend test_http test_registry -v
           if ($LASTEXITCODE -ne 0) { throw "Access candidate tests failed" }
