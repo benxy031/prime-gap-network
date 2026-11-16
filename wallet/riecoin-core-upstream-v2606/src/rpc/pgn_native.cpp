@@ -1,3 +1,4 @@
+#include <pgn/social_identity_snapshot.h>
 // Copyright (c) 2026 The PGN developers. MIT.
 // Native current-state work interface. No search, wallet keys or caller seals.
 #include <pgn/native_elapsed_retarget.h>
@@ -928,6 +929,8 @@ RPCMethod getpgnnetworkmetrics(){
 }
 
 }
+std::shared_ptr<const pgn::core::NativeLeaderboardSnapshot>
+pgn::core::ReadNativeSocialIdentitySnapshot(ChainstateManager& manager){return ReadLeaderboardSnapshot(manager,std::nullopt);}
 void RegisterPgnNativeRPCCommands(CRPCTable& table){
  static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
  for(const auto& command:commands)table.appendCommand(command.name,&command);

@@ -1884,7 +1884,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     auto& kernel_notifications{*Assert(node.notifications)};
 
     // Start asynchronous Social storage/verifier before native net threads.
-    pgn::social::Start();
+    pgn::social::Start(node.chainman.get());
     assert(!node.peerman);
     node.peerman = PeerManager::make(*node.connman, *node.addrman,
                                      node.banman.get(), chainman,

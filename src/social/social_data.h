@@ -145,6 +145,8 @@ struct Services {
     // requestId is stable across retries of this operation, including lost replies.
     // The adapter/service must enforce idempotence. No optimistic message insertion.
     std::function<void(SendRequest,std::function<void(SendResult)>)> sendChat;
+    // Public display consent only; never grants roles or proves a human identity.
+    std::function<void(Identity,QStringList)> publicNameLink;
 };
 inline bool current(const QDateTime& t,const QDateTime& now) {
     return t.isValid()&&t<=now.addSecs(60)&&t>=now.addSecs(-300);
