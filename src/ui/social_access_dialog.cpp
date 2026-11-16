@@ -79,7 +79,7 @@ social::AccessRequest SocialAccessDialog::request(social::AccessAction action)co
     return r;
 }
 void SocialAccessDialog::invalidateAccess(const social::AuthSession& session,QString reason){
-    ++authGeneration_;++actionGeneration_;++readGeneration_;busy_=false;snapshot_.reset();
+    ++authGeneration_;++actionGeneration_;++readGeneration_;busy_=false;refreshPending_=false;snapshot_.reset();
     if(social::validAuthStatus(session,identity_)){auth_=session;authStatus_->setText(social::authStateLabel(auth_.state));}
     status_->setText(reason);updateActions();
 }
@@ -152,7 +152,9 @@ void SocialAccessDialog::populateAccess(QString member,QString role){
     selectRole();selectMember();selectOverwrite();
 }
 void SocialAccessDialog::refreshAccess(){
-    if(!services_.readAccess||busy_)return;
+    if(!services_.readAccess)return;
+    if(busy_){refreshPending_=true;return;}
+    refreshPending_=false;
     const auto member=itemId(members_),role=itemId(roles_);
     const auto assignmentRole=memberRole_->currentData().toString(),overwriteTarget=overwriteRole_->currentData().toString();
     const bool overwriteMember=overwriteRole_->currentData(Qt::UserRole+1).toBool();
@@ -162,6 +164,8 @@ void SocialAccessDialog::refreshAccess(){
     const QPointer<SocialAccessDialog> weak(this);const auto completed=std::make_shared<bool>(false);
     services_.readAccess(r,[weak,r,generation,member,role,assignmentRole,overwriteTarget,overwriteMember,completed](social::AccessSnapshot value,QString error){
         if(!weak||*completed||weak->readGeneration_!=generation)return;*completed=true;weak->busy_=false;
+        if(error.isEmpty()&&weak->refreshPending_){weak->refreshPending_=false;weak->refreshAccess();return;}
+        weak->refreshPending_=false;
         if(error.isEmpty())error=social::validateAccess(value,r.identity);
         if(!error.isEmpty()){weak->snapshot_.reset();weak->status_->setText("Roles unavailable · "+error.left(512));weak->updateActions();return;}
         weak->auth_=value.session;weak->snapshot_=std::move(value);weak->populateAccess(member,role);

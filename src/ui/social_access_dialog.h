@@ -21,7 +21,7 @@ private:
     QPushButton* createRole_{};
     social::AuthSession auth_;QLabel* authStatus_{};QListWidget* devices_{};
     struct ActionButton{QPushButton* button;social::AccessAction action;};
-    QVector<ActionButton> actions_;bool creating_{},busy_{};quint64 authGeneration_{},actionGeneration_{},readGeneration_{};
+    QVector<ActionButton> actions_;bool creating_{},busy_{},refreshPending_{};quint64 authGeneration_{},actionGeneration_{},readGeneration_{};
     social::AccessRequest request(social::AccessAction action)const;
     void selectRole();void selectMember();void selectOverwrite();void updateActions();void submit(social::AccessAction action);
     void authenticate(social::AuthIntent intent);
