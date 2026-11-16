@@ -120,7 +120,7 @@ public:
         const auto r=resources_.value(device);if(!r)return device.startsWith("CPU/")?refuse(device,request,"CPU executor is unavailable"):false;
         if(closing_||!r->compatible||!r->client->available()||r->inventory.isEmpty())return refuse(device,request,"CPU normal-cycle controller is unavailable or requires version2");
         r->wanted=enabled; // An accepted OFF cancels automatic resume before its acknowledgement.
-        if(miner_&&miner_->state()==QProcess::Starting){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
+        if((miner_&&miner_->state()==QProcess::Starting)||(cpuMiner_&&cpuMiner_->state()==QProcess::Starting)){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
         if(!r->control.isEmpty()){r->queued=Choice{request,enabled,percent,exactWorkers};return true;}
         const int maximum=r->inventory.value("maximum_workers").toInt();if(maximum<1)return refuse(device,request,"CPU thread budget is unavailable");
         const int workers=exactWorkers>0?exactWorkers:std::clamp(qRound(maximum*percent/100.),1,maximum);const auto affinity=r->client->affinityFor(workers);
