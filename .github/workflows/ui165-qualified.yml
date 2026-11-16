@@ -1,13 +1,13 @@
-name: Social278 private access candidate
+name: Social278 product asynchronous HTTP client
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/social278-access]
+    branches: [qualification/social278-http-client]
 permissions:
   contents: read
 concurrency:
   group: social278-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   windows:
     name: UCRT64 all targets and isolated tests
@@ -86,7 +86,7 @@ jobs:
           ctest --test-dir build-social278 --output-on-failure
       - name: Access policy, protocol, storage and backpressure tests
         shell: pwsh
-        working-directory: qualification/social278-access
+        working-directory: qualification/social278-http-client
         run: |
           python -m unittest test_authority test_backend test_http test_registry -v
           if ($LASTEXITCODE -ne 0) { throw "Access candidate tests failed" }
