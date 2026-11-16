@@ -77,7 +77,7 @@ def legal_clock(node,parent,salt=0):
     # Exact Native contextual rules: >MTP and >=previous_time-15. Use the
     # retained history's valid time range rather than running100 blocks into
     # the real wall clock's separate15-second future bound. No mock-time.
-    return max(header['mediantime']+1,header['time']-15)+salt
+    return max(header['mediantime']+1,header['time']-15,int(time.time())-120)+salt
 def append(node,salt=0):
     work=node.rpc('getpgnbootstraptemplate',[[]]);assert work['nonce_offset']==82 and work['nonce_bytes']==8
     proposed=bytes.fromhex(work['block']);clock=legal_clock(node,work['parent'],salt)
@@ -105,7 +105,7 @@ def main():
     started=time.monotonic()
     try:
         with contextlib.ExitStack()as cleanup:
-            directory=cleanup.enter_context(tempfile.TemporaryDirectory(prefix='pgn-grouped249-'))
+            directory=tempfile.mkdtemp(prefix='pgn-grouped249-retained-');result['retained_test_directory']=directory
             root=Path(directory);a=Node(args.core.resolve(),root/'a');nodes.append(a);cleanup.callback(a.close)
             b=Node(args.core.resolve(),root/'b');nodes.append(b);cleanup.callback(b.close)
             with args.history.open('rb')as f:
@@ -120,6 +120,8 @@ def main():
                 s=node.rpc('getpgnstate',[0,1]);assert s['height']==321 and s['gold_blocks']==10 and s['audit_paid_atomic']=='0'and s['audit_pool_atomic']=='1250000000000'and s['issuance_snapshot_version']==5
                 node.watch();assert node.coins()==0
             result['phase']='public_prefix_and_watch_wallets_passed'
+            result['initial_block_download_before']=[n.rpc('getblockchaininfo')['initialblockdownload']for n in nodes]
+            result['fixture_tip_age_seconds']=int(time.time())-a.rpc('getblockheader',[a.rpc('getbestblockhash')])['time']
             b.rpc('addnode',['127.0.0.1:'+str(a.p2p),'onetry'])
             work=a.rpc('getpgnbootstraptemplate',[[]]);assert work['height']==322
             raw,identity=mine(bytes.fromhex(work['block']),int(work['numeric_target'],16),legal_clock(a,work['parent']))
@@ -132,6 +134,7 @@ def main():
                 s=node.rpc('getpgnstate',[0,1]);assert s['gold_blocks']==10 and s['audit_paid_atomic']=='1250000000000'and s['audit_pool_atomic']=='0'and s['issuance_snapshot_version']==format_version
                 assert node.coins()==125
             result['phase']='actual_payment_and_peer_relay_passed'
+            result['initial_block_download_after']=[n.rpc('getblockchaininfo')['initialblockdownload']for n in nodes]
             next_hash,_=append(a);await_tip(b,next_hash)
             assert not any(o['value']for o in a.rpc('getblock',[next_hash,2])['tx'][0]['vout'])
             a.close();a.start();a.ensure_wallet();assert a.coins()==125
@@ -153,6 +156,9 @@ def main():
             result.update(PASS=True,public_prefix_blocks=322,actual_original_audit_outputs=38,actual_payment_outputs=output_count,legacy_reference=args.legacy,exact_paid_PGN='125',two_Core_relay=True,full_ConnectBlock=True,watch_only_wallets=True,malformed_amount_rejected=reject,duplicate_payment_refused=True,cold_restart=True,reorg_undo_and_reapply=True,mature_UTXOs=output_count,verifychain_level4=True,core_sha256=hashlib.sha256(args.core.read_bytes()).hexdigest(),seconds=round(time.monotonic()-started,3))
     except Exception as error:
         result['error']=str(error)[:2000]
+        for i,n in enumerate(nodes):
+            try:result['peer_diagnostics_'+str(i)]=dict(chain=n.rpc('getblockchaininfo'),peers=n.rpc('getpeerinfo'),log=(n.data/'testnet/debug.log').read_bytes()[-3500:].decode(errors='replace'))
+            except Exception as detail:result['diagnostic_error_'+str(i)]=str(detail)[:300]
         raise
     finally:
         for node in reversed(nodes):node.close()
