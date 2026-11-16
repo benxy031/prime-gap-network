@@ -38,6 +38,17 @@ inline bool previousBundle(const CoreProfile& profile){
         old.deployment.value("executable_sha256").toString().compare(profile.executableSha256,Qt::CaseInsensitive)==0&&
         old.deployment.value("genesis_hash").toString().compare(profile.genesisHash,Qt::CaseInsensitive)==0;
 }
+// A portable release may have been moved/deleted after Core was stopped.
+// The approved wallet location is independent of that former program path.
+// Only the standard bundled daemon layout qualifies for this legacy fallback;
+// the caller still verifies that the previous owner is absent before rebinding.
+inline bool missingManagedProgram(const CoreProfile& profile,const QJsonObject& original){
+    if(!profile.userSelectedDirectory||profile.frontend!="daemon"||!QRegularExpression("^[0-9a-fA-F]{64}$").match(profile.executableSha256).hasMatch()||original.value("program_selection")=="external"||
+       QFileInfo::exists(profile.executable)||!QFileInfo(profile.executable).isAbsolute())return false;
+    const QFileInfo executable(profile.executable);
+    return QStringList{"pgn-core","pgn-core.exe"}.contains(executable.fileName(),Qt::CaseInsensitive)&&
+        QFileInfo(executable.absolutePath()).fileName().compare("Core",Qt::CaseInsensitive)==0;
+}
 inline QJsonObject replacement(const QJsonObject& original,const QJsonObject& bundled){
     const auto profile=CoreProfile::fromJson(original);
     if(bundled.value("chain")!=profile.chain||bundled.value("frontend")!=profile.frontend||
@@ -84,7 +95,7 @@ inline CoreProfilePreparation prepareManagedCoreProfile(const QString& root,cons
             const auto next=replacement(original,bundled.deployment);
             const bool same=next==original;
             const bool samePath=QFileInfo(result.profile.executable).canonicalFilePath()==bundled.deployment.value("executable").toString();
-            if(!next.isEmpty()&&!same&&(samePath||previousBundle(result.profile))){
+            if(!next.isEmpty()&&!same&&(samePath||previousBundle(result.profile)||missingManagedProgram(result.profile,original))){
                 bool ownerOkay{};ownerRaw=read(ownerPath,8192,&ownerOkay);
                 if(!ownerOkay)return reject("Saved Core ownership could not be read");
                 if(QFileInfo::exists(runtime+"/wallet-launch-intent.json"))

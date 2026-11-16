@@ -1,12 +1,12 @@
-name: Chat names293 existing remote profiles
+name: UI167 wallet reopening and existing chat profiles
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/names293-legacy-profile]
+    branches: [qualification/release167-wallet-names]
 permissions:
   contents: read
 concurrency:
-  group: names293-${{ github.ref }}
+  group: release167-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   windows:
@@ -36,6 +36,7 @@ jobs:
             /tools/
             /data/
             /qualification/names286/
+            /qualification/wallet285/
             /wallet/riecoin-core-upstream-v2606/src/
             /assets/
             /third_party/
@@ -90,19 +91,25 @@ jobs:
 
       - name: Compile focused name tests and normal application
         run: |
+          cmake -S qualification/wallet285 -B build-wallet285 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-wallet285 --parallel 2
+          ctest --test-dir build-wallet285 --output-on-failure
           cmake -S qualification/names286 -B build-names286 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-names286 --parallel 3
           ctest --test-dir build-names286 --output-on-failure
           cmake -S . -B build-app286 -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-app286 --target PGN-Horizon pgn-social-view-test pgn-social-display-opening-test pgn-social-display-contract-test --parallel 4
+          cmake --build build-app286 --target pgn-wallet-fresh-setup-view-test pgn-core-profile-test PGN-Horizon pgn-social-view-test pgn-social-display-opening-test pgn-social-display-contract-test --parallel 4
       - name: Verify automatic names and existing Social behavior
         run: |
           ctest --test-dir build-names286 --output-on-failure
           QT_QPA_PLATFORM=offscreen ctest --test-dir build-app286 -R "^social-(view|display-contract|display-opening)$" --output-on-failure
+          build-app286/pgn-core-profile-test.exe
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app286 -R wallet-fresh-setup-view --output-on-failure
       - name: Collect exact runtime and qualification binaries
         if: always()
         run: |
           mkdir -p names286-qa
+          cp build-wallet285/baseline.exe build-wallet285/candidate.exe build-wallet285/defaultwallet.exe names286-qa/
           cp build-names286/configured-identity.exe build-names286/automatic-name.exe build-names286/actual-name.exe build-app286/PGN-Horizon.exe names286-qa/
           printf '%s\n' "$GITHUB_SHA" > names286-qa/SOURCE.txt
           qmake6 -query QT_VERSION > names286-qa/QT_VERSION.txt
@@ -111,6 +118,6 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: names286-windows
+          name: release167-windows
           path: names286-qa
           if-no-files-found: error
