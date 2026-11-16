@@ -190,9 +190,11 @@ def context_from_bytes(raw):
 
 def _cache_path(path, context):
     path = _plain_chain(path)
+    # Windows short (8.3) and long names must share one containment boundary.
+    canonical = path.resolve()
     for root in context['protected_roots']:
         protected = Path(root).resolve()
-        require(path != protected and not path.is_relative_to(protected) and not protected.is_relative_to(path),
+        require(canonical != protected and not canonical.is_relative_to(protected) and not protected.is_relative_to(canonical),
                 'Cache overlaps a protected installation/data directory')
     return path
 
