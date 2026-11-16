@@ -36,7 +36,7 @@ jobs:
             /tools/
             /data/
             /qualification/names286/
-            /wallet/riecoin-core-upstream-v2606/src/pgn/currency_constants.h
+            /wallet/riecoin-core-upstream-v2606/src/
             /assets/pgn.qrc
             /assets/pgn-horizon.rc.in
             /assets/*.ico
@@ -97,6 +97,7 @@ jobs:
         run: |
           cmake -S qualification/names286 -B build-names286 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-names286 --parallel 3
+          ctest --test-dir build-names286 --output-on-failure
           cmake -S . -B build-app286 -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build-app286 --target PGN-Horizon pgn-social-view-test pgn-social-display-opening-test pgn-social-display-contract-test --parallel 4
       - name: Verify automatic names and existing Social behavior
