@@ -1,0 +1,31 @@
+{
+  "scope": "PRIVATE synthetic h9, actual Core23 RPC responses; C cold loading and A ready; no signature proof claimed",
+  "core_sha256": "69540e832254de4bf61d80e1fcf6e6de19e190162ff53dd338b1a2776b0e5751",
+  "genesis": "710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314",
+  "social_script": "0014dfd83e48ad6f82c31499e894fe05d604de754191",
+  "native_script": "00141b2f935ae016799cabca7342b2775774ff55209e",
+  "loading": {
+    "schema": "PGN_SOCIAL_CURRENT_DISPLAY_1",
+    "genesis": "710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314",
+    "state": "loading",
+    "current_display_only": true,
+    "permissions_granted": false
+  },
+  "ready": {
+    "schema": "PGN_SOCIAL_CURRENT_DISPLAY_1",
+    "genesis": "710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314",
+    "bestblockhash": "0de9de238bc964bbb9d9d7ae0e7cffcc56557d79b00b652efd094662978d130c",
+    "height": 9,
+    "current_display_only": true,
+    "permissions_granted": false,
+    "display_storage_schema": "PGN_SOCIAL_DISPLAY_INDEX_3",
+    "results": [
+      {
+        "input_index": 0,
+        "social_script": "0014dfd83e48ad6f82c31499e894fe05d604de754191",
+        "state": "unlinked",
+        "complete": true
+      }
+    ]
+  }
+}
