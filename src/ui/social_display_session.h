@@ -1,5 +1,6 @@
 #pragma once
 #include "social/social_display_consent.h"
+#include "social/social_automatic_name.h"
 #include "ui/social_name_link_dialog.h"
 #include "ui/social_view.h"
 #include <QMessageBox>
@@ -11,7 +12,7 @@ namespace pgn::ui {
 class SocialDisplaySession final:public QObject {
  social::PublicDisplayRpc rpc_;social::Identity identity_;QString recovery_;
  QPointer<SocialView> view_;social::NativeDisplayResolver resolver_;
- social::CurrentDisplayConsent consent_;QPointer<SocialNameLinkDialog> dialog_;
+ social::CurrentDisplayConsent consent_,automaticConsent_;social::AutomaticPublicName automaticName_;QPointer<SocialNameLinkDialog> dialog_;
  QTimer refresh_{this};quint64 openGeneration_{};bool opening_{};QString pendingKey_;
  void finishOpen(){opening_=false;pendingKey_.clear();if(view_)view_->unsetCursor();}
  void requestOpen(QString key,quint64 generation,int remaining){
@@ -49,14 +50,17 @@ class SocialDisplaySession final:public QObject {
  }
 public:
  SocialDisplaySession(social::PublicDisplayRpc rpc,social::NameLinkWalletSigner signer,social::Identity identity,QString recovery,SocialView* view,QObject* parent):
- QObject(parent),rpc_(std::move(rpc)),identity_(std::move(identity)),recovery_(std::move(recovery)),view_(view),resolver_(rpc_,identity_,this),consent_(rpc_,std::move(signer),identity_,this){
+ QObject(parent),rpc_(std::move(rpc)),identity_(std::move(identity)),recovery_(std::move(recovery)),view_(view),resolver_(rpc_,identity_,this),consent_(rpc_,signer,identity_,this),automaticConsent_(rpc_,std::move(signer),identity_,this),automaticName_(rpc_,automaticConsent_.services(),identity_,recovery_+".automatic",this){
   consent_.changed=[this]{if(view_)view_->refresh();};
+  automaticConsent_.changed=[this]{if(view_)view_->refresh();};
+  automaticName_.changed=[this](QString state,QString error){if(view_){view_->setProperty("pgn_social_name_state",state);view_->setProperty("pgn_social_name_error",error);}};
   // Display-link events have their own stream, not the Chat history cursor.
   // Refresh the visible Chat only; this reads local Core, never whole history.
   refresh_.setInterval(5000);connect(&refresh_,&QTimer::timeout,this,[this]{if(!view_||!view_->isVisible())return;auto* tabs=view_->findChild<QTabWidget*>("pgn-social-sections");if(tabs&&tabs->currentIndex()==0)view_->refresh();});refresh_.start();
  }
  ~SocialDisplaySession()override{finishOpen();if(dialog_)delete dialog_;}
  void decorate(social::Snapshot snapshot,social::Services::Reply done){resolver_.decorate(std::move(snapshot),std::move(done));}
+ void ensureMiningName(const QString& address){automaticName_.ensure(address);}
  void open(QString key={}){
   if(!view_||!view_->isVisible()||(opening_&&pendingKey_==key))return;
   opening_=true;pendingKey_=key;view_->setCursor(Qt::BusyCursor);

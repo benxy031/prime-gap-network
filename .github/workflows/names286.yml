@@ -1,0 +1,120 @@
+name: Chat names286 automatic public mining aliases
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/chat-names286]
+permissions:
+  contents: read
+concurrency:
+  group: names286-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/names286/
+            /wallet/riecoin-core-upstream-v2606/src/pgn/currency_constants.h
+            /assets/pgn.qrc
+            /assets/pgn-horizon.rc.in
+            /assets/*.ico
+            /assets/pgn-mark.png
+            /assets/chevron-down.svg
+            /assets/chevron-up.svg
+            /assets/checkbox-tick.svg
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Record the actual tool versions
+        run: |
+          g++ --version
+          cmake --version
+          ninja --version
+          pacman -Q mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-sqlite3 mingw-w64-ucrt-x86_64-gmp
+
+
+      - name: Compile focused name tests and normal application
+        run: |
+          cmake -S qualification/names286 -B build-names286 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-names286 --parallel 3
+          cmake -S . -B build-app286 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-app286 --target PGN-Horizon pgn-social-view-test pgn-social-display-opening-test pgn-social-display-contract-test --parallel 4
+      - name: Verify automatic names and existing Social behavior
+        run: |
+          ctest --test-dir build-names286 --output-on-failure
+          QT_QPA_PLATFORM=offscreen build-app286/pgn-social-view-test.exe
+          build-app286/pgn-social-display-contract-test.exe
+          QT_QPA_PLATFORM=offscreen build-app286/pgn-social-display-opening-test.exe
+      - name: Collect exact runtime and qualification binaries
+        run: |
+          mkdir -p names286-qa
+          cp build-names286/automatic-name.exe build-names286/actual-name.exe build-app286/PGN-Horizon.exe names286-qa/
+          printf '%s\n' "$GITHUB_SHA" > names286-qa/SOURCE.txt
+          qmake6 -query QT_VERSION > names286-qa/QT_VERSION.txt
+          g++ --version > names286-qa/COMPILER.txt
+          sha256sum names286-qa/*.exe > names286-qa/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: names286-windows
+          path: names286-qa
+          if-no-files-found: error

@@ -599,12 +599,12 @@ int main(int argc,char** argv) {
  auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
- *syncSocial=[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode]{
+ *syncSocial=[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{
   if(!socialWeak)return;const auto binding=pgn::ui::walletSocialBinding(inspectWallet);const auto wanted=binding;
   if(binding.isEmpty()){displayConnection->clear();
    if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});socialBinding->clear();++*socialEpoch;}return;
   }
-  if(*socialBinding==wanted&&*socialConnection)return;if(*socialPreparing)return;displayConnection->clear();*socialPreparing=true;const auto e=++*socialEpoch;
+  if(*socialBinding==wanted&&*socialConnection){if(*displayConnection&&toolsButton->property("pgn_public_mining_genesis").toString()==(*socialConnection)->identity().genesis)(*displayConnection)->ensureMiningName(toolsButton->property("pgn_public_audit_address").toString());return;}if(*socialPreparing)return;displayConnection->clear();*socialPreparing=true;const auto e=++*socialEpoch;
   if(*socialConnection){(*socialConnection)->stop();(*socialConnection)->deleteLater();socialConnection->clear();socialWeak->setIdentity({});socialWeak->setProperty("pgn_social_identity",QJsonObject{});}
   pgn::ui::readWalletSocialContext(inspectWallet,{},[socialConnection,displayConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,wanted,binding,e,testnetMode](QJsonObject verified,QString error){
    *socialPreparing=false;if(!socialWeak||e!=*socialEpoch||pgn::ui::walletSocialBinding(inspectWallet)!=binding||!error.isEmpty())return;
