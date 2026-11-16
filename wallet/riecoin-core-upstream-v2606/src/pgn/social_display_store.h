@@ -12,6 +12,9 @@
 #include <atomic>
 
 namespace pgn::social::display {
+#ifdef PGN_SOCIAL_DISPLAY_INDEX_TESTING
+inline std::function<void()> DisplayIndexCommittedTestHook;
+#endif
 class ContextUnavailable:public std::runtime_error{public:using std::runtime_error::runtime_error;};
 using Certificate=identity::committed::ConsentCertificate;
 using identity::committed::DecodeConsentCertificate;
@@ -37,7 +40,7 @@ struct DisplayState {
 class Store {
  using Key=std::pair<uint8_t,std::string>;
  fs::path path_;std::string genesis_;Source source_;std::unique_ptr<CDBWrapper> db_;std::mutex mutex_;
- uint64_t sequence_{},pending_namespaces_{},replica_sequence_{},work_head_{},work_tail_{};std::atomic<uint64_t> logical_bytes_{};std::string generation_,replica_generation_;
+ uint64_t sequence_{},pending_namespaces_{},replica_sequence_{},work_head_{},work_tail_{};std::atomic<uint64_t> logical_bytes_{},proof_reads_{};std::string generation_,replica_generation_;
  std::map<std::string,std::string> crypto_;std::list<std::string> crypto_order_;
  static std::string Number(uint64_t n){auto s=std::to_string(n);return std::string(20-s.size(),'0')+s;}
  void Proof(const Certificate& p){
@@ -48,6 +51,7 @@ class Store {
   if(!known)crypto_order_.push_back(p.id);crypto_[p.id]=digest;
  }
  Certificate Read(const std::string& id,DisplayNode* output=nullptr){
+  ++proof_reads_;
   DisplayNode node;std::string raw;
   if(!db_->Read(Key{'n',id},node)||!node.sequence||!db_->Read(Key{'e',Number(node.sequence)},raw))
    throw ContextUnavailable("Display proof index incomplete; no reset inferred");
@@ -56,6 +60,10 @@ class Store {
  }
  static bool Related(const Certificate& child,const Certificate& parent){
   return child.social_script==parent.social_script&&child.operator_script==parent.operator_script&&child.operator_id==parent.operator_id;
+ }
+ bool HasWaiting(const std::string& parent){
+  auto it=std::unique_ptr<CDBIterator>(db_->NewIterator());it->Seek(Key{'w',parent+std::string(64,'0')});Key key;
+  return it->Valid()&&it->GetKey(key)&&key.first=='w'&&key.second.starts_with(parent);
  }
  void Current(const Certificate& p,const Context& c){
   if(c.genesis!=genesis_||c.height<0||!c.canonical||!c.native||!c.canonical(c.height,c.tip)||!c.canonical(p.anchor_height,p.anchor))
@@ -98,20 +106,24 @@ class Store {
    }
    b.Write(Key{'n',p.previous},parent);
   }
+  const bool queue=attached&&HasWaiting(p.id);
   if(attached){
    if(indexed&&state.detached)--state.detached;
    b.Erase(Key{'w',p.previous+p.id});
    node.replica_sequence=replica_sequence_+1;
    b.Write(Key{'r',Number(node.replica_sequence)},p.id);
    b.Write(std::string("replica_sequence"),node.replica_sequence);
-   b.Write(Key{'q',Number(work_tail_+1)},p.id);b.Write(std::string("work_tail"),work_tail_+1);
+   if(queue){b.Write(Key{'q',Number(work_tail_+1)},p.id);b.Write(std::string("work_tail"),work_tail_+1);}
   }
   const bool new_pending=pending&&!state.pending;if(new_pending)state.pending=true;
   if(new_pending)b.Write(std::string("indexed_pending_namespaces"),pending_namespaces_+1);
   b.Write(Key{'n',p.id},node);b.Write(Key{'m',p.social_script},state);
   if(!migration){b.Write(Key{'e',Number(seq)},p.source);b.Write(std::string("sequence"),seq);}
   CommitSocialBatch(*db_,b);
-  if(attached){++replica_sequence_;++work_tail_;}
+#ifdef PGN_SOCIAL_DISPLAY_INDEX_TESTING
+  if(DisplayIndexCommittedTestHook)DisplayIndexCommittedTestHook();
+#endif
+  if(attached)++replica_sequence_;if(queue)++work_tail_;
   if(new_pending)++pending_namespaces_;
   if(!migration){sequence_=seq;logical_bytes_+=p.source.size()+p.id.size()+p.previous.size()+p.social_script.size()+192;}
  }
@@ -120,7 +132,7 @@ class Store {
   // an in-memory graph or a depth/lifetime quota. Queue/cursor writes are atomic.
   while(work_head_<work_tail_){
    std::string parent;if(!db_->Read(Key{'q',Number(work_head_+1)},parent))throw ContextUnavailable("Display migration work item missing");
-   auto it=std::unique_ptr<CDBIterator>(db_->NewIterator());it->Seek(Key{'w',parent});
+   auto it=std::unique_ptr<CDBIterator>(db_->NewIterator());it->Seek(Key{'w',parent+std::string(64,'0')});
    for(;it->Valid();it->Next()){
     Key key;std::string id;if(!it->GetKey(key)||key.first!='w'||!key.second.starts_with(parent))break;
     if(!it->GetValue(id))throw ContextUnavailable("Display pending child unreadable");
@@ -243,5 +255,6 @@ public:
   }return out;
  }
  uint64_t LogicalBytesSinceStart()const{return logical_bytes_.load();}
+ uint64_t ProofReadsSinceStart()const{return proof_reads_.load();}
 };
 }
