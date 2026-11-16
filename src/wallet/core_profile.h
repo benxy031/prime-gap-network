@@ -22,6 +22,8 @@ QString verifyCoreIdentity(const CoreProfile&,const QJsonObject& chain,
 QJsonObject coreOwnershipBinding(const CoreProfile&,qint64 pid,const QString& birth);
 QString verifyCoreOwnership(const CoreProfile&,const QJsonObject&,qint64 pid,
                             const QString& birth,const QString& observedImage);
+// Only validates a retained binding for an OS absence probe, never live adoption.
+QString verifyCoreOwnershipForAbsenceProbe(const CoreProfile&,const QJsonObject&,qint64,const QString&);
 QJsonObject coreLaunchIntent(const CoreProfile&,const QString& transaction,const QString& utc);
 QString verifyCoreLaunchIntent(const CoreProfile&,const QJsonObject&);
 }

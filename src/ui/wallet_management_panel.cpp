@@ -46,15 +46,16 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
  connect(file,&QAction::triggered,this,[this]{const auto path=QFileDialog::getOpenFileName(this,"Open existing PGN wallet file",manager_->walletDirectory(),"Core wallet (*.dat)");if(!path.isEmpty())manager_->open(path);});
  connect(load_,&QPushButton::clicked,this,[this]{manager_->load(wallets_->currentData().toString());});connect(select_,&QPushButton::clicked,this,[this]{manager_->select(wallets_->currentData().toString());});connect(close_,&QPushButton::clicked,this,[this]{manager_->unload(wallets_->currentData().toString());});connect(wallets_,&QComboBox::currentIndexChanged,this,[this]{refresh();});refresh();
 }
-void WalletManagementPanel::present(const QString& network,const QString& directory,bool configured,bool pending,const QString& pendingDirectory){
+void WalletManagementPanel::present(const QString& network,const QString& directory,bool configured,bool pending,const QString& pendingDirectory,const QString& savedWallet){
  const bool changed=configured_!=configured;configured_=configured;pending_=pending;
  location_->setText(configured?QString("Network: %1\nCurrent Core data folder: %2\nDefault wallet folder: %3").arg(network,directory,QDir(directory).filePath(network=="test"?"testnet/wallets":"wallets")):"To get started, click Create node and wallet. You can use the suggested folder as it is. To reuse an existing node, choose Open existing Core folder. Existing wallet files are preserved.");
  configure_->setText("Change Core folder…");configure_->setVisible(configured);configure_->setToolTip("Choose a Core data folder. Existing files are never moved or deleted.");reload_->setVisible(configured);walletControls_->setVisible(configured);
  if(!configured||changed)setupFields_->setVisible(!configured);setupFields_->setEnabled(!pending&&!setupBusy_);applySetup_->setText(configured?"Save Core folder":"Create node and wallet");existingSetup_->setVisible(!configured);
- if(configured&&!directory.isEmpty()){directory_->setText(directory);if(!manager_->serviceWallet().isEmpty())setupWallet_->setText(manager_->serviceWallet());}
+ if(configured&&!directory.isEmpty()){directory_->setText(directory);if(!savedWallet.isEmpty())setupWallet_->setText(savedWallet);else if(!manager_->serviceWallet().isEmpty())setupWallet_->setText(manager_->serviceWallet());}
  configure_->setEnabled(!pending);cancelChange_->setVisible(pending);
  if(pending)location_->setText(location_->text()+"\nScheduled Core data folder: "+pendingDirectory+"\nWaiting for the current Core to stop cleanly. Reopening Horizon while Core is still running keeps the current folder.");
 }
+void WalletManagementPanel::showConnectionIssue(const QString& reason){setupFields_->setVisible(true);message_->setText("The existing wallet could not be reconnected. "+reason);}
 void WalletManagementPanel::finishSetup(const QString& error){setupBusy_=false;setupError_=error;setupFields_->setEnabled(!pending_);message_->setText(error);}
 void WalletManagementPanel::refresh(){
  const auto rows=manager_->wallets();const auto previous=wallets_->currentData().toString();wallets_->blockSignals(true);wallets_->clear();

@@ -35,10 +35,22 @@ QString verifyCoreOwnership(const CoreProfile& p,const QJsonObject& saved,qint64
   return "Saved Core process image does not match the pinned executable";
  return {};
 }
+QString verifyCoreOwnershipForAbsenceProbe(const CoreProfile& p,const QJsonObject& saved,qint64 pid,const QString& birth){
+ const auto strict=verifyCoreOwnership(p,saved,pid,birth,p.executable);if(strict.isEmpty())return {};
+ // A removed program has no canonicalFilePath. Compare its retained absolute
+ // binding before probing that exact PID/creation epoch. This never authorizes
+ // adopting or stopping a live process: those paths still use strict checks.
+ if(pid<=0||birth.isEmpty()||QFileInfo::exists(p.executable)||!QFileInfo(p.executable).isAbsolute())return strict;
+ const auto previous=saved.value("executable").toString();
+ if(!QFileInfo(previous).isAbsolute()||QDir::cleanPath(previous).compare(QDir::cleanPath(QFileInfo(p.executable).absoluteFilePath()),Qt::CaseInsensitive)!=0)return strict;
+ auto expected=coreOwnershipBinding(p,pid,birth);expected.insert("executable",previous);
+ return saved==expected?QString{}:strict;
+}
 CoreProfile CoreProfile::fromJson(const QJsonObject& json){
  CoreProfile p;
  if(json.value("schema")=="pgn-core-deployment-3"&&
-    (json.value("data_directory_origin")!="user_setup"||!json.value("approved_data_directory").isString()||!json.value("create_wallet").isBool()))return p;
+    ((json.value("data_directory_origin")!="user_setup"&&json.value("data_directory_origin")!="default_existing_wallet")||!json.value("approved_data_directory").isString()||!json.value("create_wallet").isBool()))return p;
+ if(json.value("data_directory_origin")=="default_existing_wallet"&&json.value("create_wallet")!=false)return p;
  // No legacy default executable, network, port, genesis or wallet directory.
  if((json.value("schema").toString()!="pgn-core-deployment-1"&&json.value("schema").toString()!="pgn-core-deployment-2"&&json.value("schema").toString()!="pgn-core-deployment-3") ||
     json.value("product").toString()!="PGN Core" ||
@@ -50,7 +62,7 @@ CoreProfile CoreProfile::fromJson(const QJsonObject& json){
  p.genesisHash=json.value("genesis_hash").toString();
  p.rpcPort=json.value("rpc_port").toInt();p.peerPort=json.value("peer_port").toInt();
  if(json.value("schema")=="pgn-core-deployment-3"){
-  p.userSelectedDirectory=json.value("data_directory_origin")=="user_setup";
+  p.userSelectedDirectory=json.value("data_directory_origin")=="user_setup"||json.value("data_directory_origin")=="default_existing_wallet";
   p.approvedDataDirectory=json.value("approved_data_directory").toString();
   p.createWallet=json.value("create_wallet").toBool();
  }

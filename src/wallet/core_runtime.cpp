@@ -142,7 +142,7 @@ CoreOwnerPresence coreOwnerPresence(const CoreProfile& profile,const QJsonObject
  bool valid=false;const auto pid=saved.value("pid").toString().toLongLong(&valid);
  const auto savedBirth=saved.value("birth").toString();
  if(!valid||pid<=0||pid>0xffffffffLL||savedBirth.isEmpty()||
-    !verifyCoreOwnership(profile,saved,pid,savedBirth,profile.executable).isEmpty())return CoreOwnerPresence::Unknown;
+    !verifyCoreOwnershipForAbsenceProbe(profile,saved,pid,savedBirth).isEmpty())return CoreOwnerPresence::Unknown;
 #ifdef Q_OS_WIN
  HANDLE handle=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,static_cast<DWORD>(pid));
  if(!handle)return GetLastError()==ERROR_INVALID_PARAMETER?CoreOwnerPresence::Absent:CoreOwnerPresence::Unknown;

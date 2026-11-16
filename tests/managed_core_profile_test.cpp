@@ -44,6 +44,8 @@ int main(int argc,char** argv){
     // Preserve the old fixture through a rename; no wallet/chain is moved.
     const auto retainedOld=oldRoot+"-retained";
     need(QDir().rename(oldRoot,retainedOld),"retain old package under another name");
+    need(verifyCoreOwnershipForAbsenceProbe(oldProfile,QJsonDocument::fromJson(owner).object(),1234567,"fixture-birth").isEmpty(),"missing old executable can still identify its exact prior owner for absence probe");
+    auto wrongOwner=QJsonDocument::fromJson(owner).object();wrongOwner["data_directory"]=temp.filePath("another-wallet");need(!verifyCoreOwnershipForAbsenceProbe(oldProfile,wrongOwner,1234567,"fixture-birth").isEmpty(),"mismatched wallet cannot authorize an absence probe");
     reset();result=prepareManagedCoreProfile(root,runtime,"test",true,absent);
     const bool baseline=argc==2&&QString::fromLocal8Bit(argv[1])=="--baseline";
     if(baseline)need(!result.error.isEmpty()&&get(runtime+"/wallet-core.json")==before,"baseline reproduces missing old program failure");

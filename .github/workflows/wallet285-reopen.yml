@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: wallet285-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   windows:
     name: UCRT64 all targets and isolated tests
@@ -27,6 +27,23 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/wallet285/
+            /wallet/riecoin-core-upstream-v2606/src/pgn/currency_constants.h
+            /assets/pgn.qrc
+            /assets/pgn-horizon.rc.in
+            /assets/*.ico
+            /assets/pgn-mark.png
+            /assets/chevron-down.svg
+            /assets/chevron-up.svg
+            /assets/checkbox-tick.svg
 
 
       - name: Bootstrap MSYS2 without the failing geo-mirror update
@@ -79,13 +96,18 @@ jobs:
       - name: Compile original and corrected managed-Core paths
         run: |
           cmake -S qualification/wallet285 -B build-wallet285 -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-wallet285 --parallel 2
+          cmake --build build-wallet285 --target baseline candidate defaultwallet --parallel 2
+          cmake -S . -B build-wallet285-app -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-wallet285-app --target pgn-wallet-fresh-setup-view-test pgn-core-profile-test PGN-Horizon --parallel 4
       - name: Reproduce original failure and verify wallet-preserving correction
-        run: ctest --test-dir build-wallet285 --output-on-failure
+        run: |
+          ctest --test-dir build-wallet285 --output-on-failure
+          build-wallet285-app/pgn-core-profile-test.exe
+          build-wallet285-app/pgn-wallet-fresh-setup-view-test.exe
       - name: Collect exact test binaries
         run: |
           mkdir -p wallet285-qa
-          cp build-wallet285/baseline.exe build-wallet285/candidate.exe wallet285-qa/
+          cp build-wallet285/baseline.exe build-wallet285/candidate.exe build-wallet285/defaultwallet.exe build-wallet285-app/PGN-Horizon.exe wallet285-qa/
           printf '%s\n' "$GITHUB_SHA" > wallet285-qa/SOURCE.txt
           qmake6 -query QT_VERSION > wallet285-qa/QT_VERSION.txt
           sha256sum wallet285-qa/*.exe > wallet285-qa/SHA256SUMS.txt

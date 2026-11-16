@@ -6,6 +6,8 @@
 #include "ui/wallet_history_view.h"
 #include "ui/component_versions_dialog.h"
 #include "wallet/setup_deployment.h"
+#include "wallet/existing_wallet_discovery.h"
+#include "wallet/managed_core_profile.h"
 #include "wallet/core_bundle.h"
 #include "wallet/runtime_paths.h"
 #include "ui/audit_explorer_view.h"
@@ -145,7 +147,7 @@ public:
     if(file.open(QIODevice::ReadOnly)&&file.size()<=32768)config=QJsonDocument::fromJson(file.readAll()).object();
     QFile pending(runtime_->runtimeDirectory()+"/wallet-pending-setup.json");QString scheduled;
     if(pending.open(QIODevice::ReadOnly)&&pending.size()<=40000)scheduled=QJsonDocument::fromJson(pending.readAll()).object().value("profile").toObject().value("data_directory").toString();
-    management_->present(config.value("chain").toString(),config.value("data_directory").toString(),!config.isEmpty(),QFileInfo::exists(pending.fileName()),scheduled);
+    management_->present(config.value("chain").toString(),config.value("data_directory").toString(),!config.isEmpty(),QFileInfo::exists(pending.fileName()),scheduled,config.value("wallet").toString());
    };presentSetup();
    management_->onCancelChange=[this,presentSetup]{
     const auto path=runtime_->runtimeDirectory()+"/wallet-pending-setup.json";
@@ -202,6 +204,7 @@ public:
    history.append(QJsonObject{{"state",key},{"detail",detail},{"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
    while(history.size()>32)history.removeFirst();
    setProperty("pgn_core_link_transitions",history);
+   if(state==pgn::wallet::CoreLinkState::Rejected){if(auto* pages=findChild<QStackedWidget*>("pgn-wallet-pages"))pages->setCurrentIndex(1);management_->showConnectionIssue(detail);}
    if(state!=pgn::wallet::CoreLinkState::Ready)accountPanel_->setEnabled(false);
    else accountPanel_->setEnabled(runtime_->displayWalletReady()&&!runtime_->walletManager()->busy());
   };
@@ -216,7 +219,25 @@ public:
   attachClock_.setInterval(500);connect(&attachClock_,&QTimer::timeout,this,[this]{attach();});
   const bool needsSetup=!QFileInfo::exists(runtime_->runtimeDirectory()+"/wallet-core.json");
   setProperty("pgn_wallet_setup_required",needsSetup);
-  if(needsSetup){workspace->setCurrentIndex(0);walletPages->setCurrentIndex(1);}
+  if(needsSetup){
+   workspace->setCurrentIndex(0);walletPages->setCurrentIndex(1);
+   // Recover only a single existing default wallet. Saved/custom profiles
+   // follow the unchanged normal Core lifecycle above.
+   QTimer::singleShot(0,this,[this,root,testnet,presentSetup,walletPages]{
+    setupOpen_=true;management_->setEnabled(false);status_->setText("Looking for an existing PGN wallet…");
+    auto* discovery=new QFutureWatcher<pgn::wallet::ExistingWalletDiscovery>(this);
+    connect(discovery,&QFutureWatcher<pgn::wallet::ExistingWalletDiscovery>::finished,this,[this,discovery,presentSetup,walletPages]{
+     const auto result=discovery->result();discovery->deleteLater();setupOpen_=false;management_->setEnabled(true);
+     if(QFileInfo::exists(runtime_->runtimeDirectory()+"/wallet-core.json")){presentSetup();runtime_->launch();return;}
+     if(!result.found){management_->finishSetup(result.notice);status_->setText(result.notice.isEmpty()?QString("No existing wallet found. Create a wallet below, or open an existing Core folder."):result.notice);return;}
+     const auto error=pgn::wallet::publishWalletSetup(runtime_->runtimeDirectory(),result.setup);
+     management_->finishSetup(error);if(!error.isEmpty()){status_->setText(error);return;}
+     presentSetup();setProperty("pgn_wallet_setup_required",false);walletPages->setCurrentIndex(0);status_->setText(result.notice);runtime_->launch();
+    });
+    const auto bundleRoot=pgn::wallet::managedCoreBundleRoot(root,QCoreApplication::applicationDirPath());
+    discovery->setFuture(QtConcurrent::run([bundleRoot,testnet]{return pgn::wallet::prepareDefaultExistingWallet(bundleRoot,testnet?QString("test"):QString("main"));}));
+   });
+  }
   else QTimer::singleShot(0,runtime_,[this]{runtime_->launch();});
  }
  ~WalletCoreView() override = default;

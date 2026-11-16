@@ -8,8 +8,9 @@ namespace pgn::ui {
 class WalletManagementPanel final:public QWidget {
 public:
  explicit WalletManagementPanel(pgn::wallet::WalletManager*,QWidget* parent=nullptr,const QString& genesis={});
- void present(const QString& network,const QString& dataDirectory,bool configured,bool pending=false,const QString& pendingDirectory={});
+ void present(const QString& network,const QString& dataDirectory,bool configured,bool pending=false,const QString& pendingDirectory={},const QString& savedWallet={});
  void refresh();
+ void showConnectionIssue(const QString& reason);
  void finishSetup(const QString& error={});
  QString setupError()const{return setupError_;}
  std::function<void(const pgn::wallet::WalletSetupSelection&)> onApplySetup;
