@@ -43,7 +43,6 @@ class SocialNameLinkDialog final:public QDialog {
   const auto s=flow_.intent().socialScript,k=flow_.intent().nativeScript;
   withdrawalSigner_->setVisible(advancedShown_&&flow_.intent().action=="withdraw");withdrawalSigner_->setEnabled(!busy&&!flow_.packet().isEmpty()&&phase!=social::NameLinkPhase::Pending&&phase!=social::NameLinkPhase::Included);
   withdrawalSigner_->setCurrentIndex(p.packet.certificate.value("authorizer_script").toString()==k?1:0);
-  auto name=p.displayName.isEmpty()?QString("Public Native name is not yet verified."):QString("Native public name: %1").arg(p.displayName);
   summary_->setText(p.displayName.isEmpty()?QString("Checking your public mining name…"):QString("Use %1 for your chat messages and member profile.").arg(p.displayName));
   summary_->setToolTip("Social S: "+s+"\nNative K: "+k+"\nOperator O: "+p.packet.operatorId+"\nNative anchor: "+p.anchor);
   QString status;

@@ -591,7 +591,8 @@ int main(int argc,char** argv) {
   if(address.isEmpty()||toolsButton->property("pgn_public_mining_genesis").toString()!=identity.genesis){(*displayConnection)->open();return;}
   // Use the already configured mining identity, then verify its exact script
   // through Core. This is not a username lookup or a new authority grant.
-  pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection](QJsonValue value,QString error){if(!*displayConnection)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)(*displayConnection)->open(object["scriptPubKey"].toString());else (*displayConnection)->open();});
+  const QPointer<pgn::ui::SocialDisplaySession> target=*displayConnection;
+  pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection,target](QJsonValue value,QString error){if(!target||*displayConnection!=target)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)target->open(object["scriptPubKey"].toString());else target->open();});
  };
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
  auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
