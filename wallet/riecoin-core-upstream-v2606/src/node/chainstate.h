@@ -45,6 +45,7 @@ enum class ChainstateLoadStatus {
     SUCCESS,
     FAILURE, //!< Generic failure which reindexing may fix
     FAILURE_FATAL, //!< Fatal error which should not prompt to reindex
+    NATIVE_LEGACY_CACHE, //!< Verified legacy audit cache; rebuild through normal block validation
     FAILURE_INCOMPATIBLE_DB,
     FAILURE_INSUFFICIENT_DBCACHE,
     INTERRUPTED,

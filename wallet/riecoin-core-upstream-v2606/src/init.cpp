@@ -7,6 +7,7 @@
 #include <riecoin-build-config.h> // IWYU pragma: keep
 
 #include <init.h>
+#include <pgn/audit_grouping_activation.h>
 
 #include <kernel/checks.h>
 
@@ -1839,7 +1840,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     assert(!node.chainman);
 
     bool do_reindex{args.GetBoolArg("-reindex", false)};
-    const bool do_reindex_chainstate{args.GetBoolArg("-reindex-chainstate", false)};
+    bool do_reindex_chainstate{args.GetBoolArg("-reindex-chainstate", false)};
 
     // Chainstate initialization and loading may be retried once with reindexing by GUI users
     auto [status, error] = InitAndLoadChainstate(
@@ -1848,6 +1849,29 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         do_reindex_chainstate,
         kernel_cache_sizes,
         args);
+    if (status == ChainstateLoadStatus::NATIVE_LEGACY_CACHE &&
+        !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node)) {
+        // A Core20 validator may have rejected the new grouped-settlement
+        // branch. Reconsider the common pre-activation ancestor, then replay
+        // the retained blocks with the current, unchanged validation rules.
+        // No wallet is loaded at this initialization stage.
+        {
+            LOCK(cs_main);
+            auto& chainman = *Assert(node.chainman);
+            auto& active = chainman.ActiveChainstate();
+            const auto activation = pgn::core::ConfiguredAuditGroupingActivation(chainparams.GenesisBlock().GetHash());
+            const auto* tip = active.m_chain.Tip();
+            const auto* ancestor = activation && tip ? tip->GetAncestor(activation->height - 1) : nullptr;
+            if (!ancestor) return InitError(_("The local PGN upgrade anchor could not be verified"));
+            active.ResetBlockFailureFlags(const_cast<CBlockIndex*>(ancestor));
+            chainman.m_blockman.WriteBlockIndexDB();
+        }
+        LogInfo("Upgrading legacy PGN audit chainstate through complete block replay");
+        uiInterface.InitMessage(_("Updating local PGN data; wallet files are preserved…"));
+        do_reindex_chainstate = true;
+        std::tie(status, error) = InitAndLoadChainstate(
+            node, false, true, kernel_cache_sizes, args);
+    }
     if (status == ChainstateLoadStatus::FAILURE && !do_reindex && !ShutdownRequested(node)) {
         // suggest a reindex
         bool do_retry{HasTestOption(args, "reindex_after_failure_noninteractive_yes") ||
