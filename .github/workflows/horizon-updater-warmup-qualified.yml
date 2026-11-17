@@ -1,0 +1,45 @@
+name: Qualify prolonged Core startup in the frozen Horizon updater
+on:
+  push:
+    branches: [qualification/horizon-updater-warmup]
+permissions:
+  contents: read
+jobs:
+  updater:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            src/update
+            tools
+            tests
+      - name: Install pinned updater dependencies
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Authenticated phases and transaction failure checks
+        working-directory: tests
+        run: python -m unittest test_updater_startup_warmup test_update_cli test_authenticated_updates test_component_install -q
+
+      - name: Freeze the tested Windows updater and execute its self-test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $deps = python -c "import site; print(site.getsitepackages()[-1])"
+          python tools/build_horizon_updater.py --output qa-frozen --dependencies $deps
+          if ($LASTEXITCODE -ne 0) { throw 'Could not freeze the updater' }
+          $self = & qa-frozen/dist/horizon-updater/horizon-updater.exe --self-test | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $self.PASS -or $self.version -ne '2026.11.17.30') { throw 'Frozen updater self-test failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: runner.os == 'Windows'
+        with:
+          name: horizon-updater-warmup-windows
+          path: |
+            qa-frozen/dist/horizon-updater
+            qa-frozen/UPDATER-SOURCE.json
+          if-no-files-found: error
+          retention-days: 7
