@@ -1,6 +1,6 @@
 # Current Windows and Ubuntu testnet tester guide
 
-Download the complete archive for your operating system from the [current testnet release](https://github.com/wizz13150/prime-gap-network/releases/tag/horizon-testnet), then extract the complete folder.
+Download the complete archive for your operating system from the [current testnet release](https://github.com/wizz13150/prime-gap-network/releases/tag/horizon-testnet-epoch3), then extract the complete folder.
 
 - Windows: launch `PGN-Horizon/PGN-Horizon.exe`.
 - Ubuntu: launch `PGN-Horizon-Ubuntu/Horizon/launch-horizon.sh`. To compile from source, follow [BUILDING.md](BUILDING.md).
