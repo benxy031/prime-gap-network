@@ -6,6 +6,8 @@ permissions:
   contents: read
 jobs:
   verify:
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
