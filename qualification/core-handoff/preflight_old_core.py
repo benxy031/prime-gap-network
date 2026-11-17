@@ -93,10 +93,16 @@ class CutTheSignedBundle(ResumableTargetFetcher):
 def verify_slow_core_handoff(current_code, expected, runtime_directory):
     """Run a real portable GUI against the same recorded older owned process."""
     profile_path=(Path(runtime_directory)/'wallet-core.json').resolve(strict=True)
-    assert profile_path.is_relative_to(QA.resolve())
+    assert os.environ.get('GITHUB_ACTIONS')=='true'
     original=profile_path.read_bytes()
     profile=json.loads(original)
     assert Path(profile['data_directory']).resolve()==wallet_data.resolve()
+    # Qt's Windows known-folder lookup can ignore the two environment aliases.
+    # The hosted runner is disposable, and the actual profile must bind this
+    # test's synthetic data before its known app-local file may be exercised.
+    assert profile.get('genesis_hash')==GENESIS and profile.get('wallet')==WALLET
+    if not profile_path.is_relative_to(QA.resolve()):
+        assert profile_path.parent.name==GENESIS and profile_path.parent.parent.name=='testnet'
     owner_path=profile_path.with_name('wallet-owned.json')
     prior=QA/'earlier-owned'
     if not prior.exists():
