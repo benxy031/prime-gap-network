@@ -15,6 +15,7 @@ namespace pgn::ui {
 // Presentation roles only. The existing model's exact values, provenance and
 // canonical ID remain authoritative; no rank, presence or award is fabricated.
 enum LeaderboardRole { LeaderboardOwnRole=Qt::UserRole+180, LeaderboardRankRole };
+inline bool leaderboardAwardColumn(int col){return col>=6&&col<=10;}
 class LeaderboardDelegate final:public QStyledItemDelegate {
 public:
     explicit LeaderboardDelegate(QObject* parent):QStyledItemDelegate(parent){}
@@ -39,7 +40,7 @@ public:
         }else{
             // Segoe UI's numeric text is right aligned; the exact integer stays
             // in the native model tooltip and accessible description.
-            const bool award=index.column()>=6;p->setPen(award?QColor("#36575f"):QColor("#294950"));
+            const bool award=leaderboardAwardColumn(index.column());p->setPen(award?QColor("#36575f"):QColor("#294950"));
             const QRect textRect=award?option.rect.adjusted(2,0,-2,0):option.rect.adjusted(10,0,-14,0);
             const QString text=award?p->fontMetrics().elidedText(index.data().toString(),Qt::ElideRight,textRect.width()):index.data().toString();
             p->drawText(textRect,award?Qt::AlignCenter:Qt::AlignRight|Qt::AlignVCenter,text);
@@ -55,12 +56,12 @@ public:
     explicit LeaderboardHeader(QWidget* parent):QHeaderView(Qt::Horizontal,parent){
         setFocusPolicy(Qt::StrongFocus);setSectionsClickable(true);setSortIndicatorShown(true);setHighlightSections(false);setMouseTracking(true);setFixedHeight(58);setDefaultAlignment(Qt::AlignRight|Qt::AlignVCenter);
         setObjectName("pgn-social-miner-sort-header");setAccessibleName("Sort leaderboard. Left and Right choose a metric. Enter or Space changes order.");
-        connect(this,&QHeaderView::sectionClicked,this,[this](int col){if(col<6){focused_=col;if(onSort)onSort(col);}});
+        connect(this,&QHeaderView::sectionClicked,this,[this](int col){if(!leaderboardAwardColumn(col)){focused_=col;if(onSort)onSort(col);}});
     }
 protected:
     void keyPressEvent(QKeyEvent* event)override{
         const int key=event->key();
-        if(key==Qt::Key_Left||key==Qt::Key_Right){int visual=visualIndex(focused_);do{visual+=key==Qt::Key_Right?1:-1;}while(visual>=0&&visual<count()&&logicalIndex(visual)>=6);if(visual>=0&&visual<count())focused_=logicalIndex(visual);viewport()->update();event->accept();return;}
+        if(key==Qt::Key_Left||key==Qt::Key_Right){int visual=visualIndex(focused_);do{visual+=key==Qt::Key_Right?1:-1;}while(visual>=0&&visual<count()&&(leaderboardAwardColumn(logicalIndex(visual))||isSectionHidden(logicalIndex(visual))));if(visual>=0&&visual<count())focused_=logicalIndex(visual);viewport()->update();event->accept();return;}
         if(key==Qt::Key_Home||key==Qt::Key_End){focused_=key==Qt::Key_Home?0:5;viewport()->update();event->accept();return;}
         if(key==Qt::Key_Return||key==Qt::Key_Enter||key==Qt::Key_Space){if(onSort)onSort(focused_);viewport()->update();event->accept();return;}
         QHeaderView::keyPressEvent(event);
@@ -68,16 +69,16 @@ protected:
     void mouseMoveEvent(QMouseEvent* event)override{hovered_=logicalIndexAt(event->position().toPoint());viewport()->update();QHeaderView::mouseMoveEvent(event);}
     void leaveEvent(QEvent* event)override{hovered_=-1;viewport()->update();QHeaderView::leaveEvent(event);}
     void paintSection(QPainter* p,const QRect& r,int col)const override{
-        if(!r.isValid())return;p->save();p->fillRect(r,col==hovered_&&col<6?QColor("#d6e6df"):QColor("#e2ece6"));
+        if(!r.isValid())return;p->save();p->fillRect(r,col==hovered_&&!leaderboardAwardColumn(col)?QColor("#d6e6df"):QColor("#e2ece6"));
         p->setPen(QColor("#bfd2c8"));p->drawLine(r.bottomLeft(),r.bottomRight());
         QFont font("Segoe UI");font.setPixelSize(11);font.setWeight(QFont::DemiBold);p->setFont(font);p->setPen(QColor("#46666e"));
-        if(col>=6){const auto icon=qvariant_cast<QIcon>(model()->headerData(col,orientation(),Qt::DecorationRole));const int x=r.center().x()-19;icon.paint(p,QRect(x,r.top()+25,24,28));font.setPixelSize(12);font.setWeight(QFont::Bold);p->setFont(font);p->setPen(QColor("#244951"));p->drawText(QRect(x+25,r.top()+27,13,23),Qt::AlignCenter,QString("QGSBR").mid(col-6,1));}
+        if(leaderboardAwardColumn(col)){const auto icon=qvariant_cast<QIcon>(model()->headerData(col,orientation(),Qt::DecorationRole));const int x=r.center().x()-19;icon.paint(p,QRect(x,r.top()+25,24,28));font.setPixelSize(12);font.setWeight(QFont::Bold);p->setFont(font);p->setPen(QColor("#244951"));p->drawText(QRect(x+25,r.top()+27,13,23),Qt::AlignCenter,QString("QGSBR").mid(col-6,1));}
         else{
             const QStringList captions{"Miner","Positions","Reported","Validated","Audits","Last activity"};
             const QStringList groups{"","VALIDATED","","","VALIDATED","BLOCK HEIGHT"};
             const QRect textRect(r.left()+(col?8:16),r.top()+27,r.width()-(col?26:30),23);
-            p->setPen(QColor("#244951"));font.setPixelSize(12);p->setFont(font);p->drawText(textRect,col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,captions[col]);
-            font.setPixelSize(11);p->setFont(font);p->setPen(QColor("#46666e"));p->drawText(r.adjusted(12,4,-14,-30),col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,groups[col]);
+            p->setPen(QColor("#244951"));font.setPixelSize(12);p->setFont(font);p->drawText(textRect,col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,col==11?QString("Largest gap"):captions[col]);
+            font.setPixelSize(11);p->setFont(font);p->setPen(QColor("#46666e"));p->drawText(r.adjusted(12,4,-14,-30),col?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter,col==11?QString("RECORDED"):groups[col]);
             if(sortIndicatorSection()==col){p->setPen(Qt::NoPen);p->setBrush(QColor("#337c73"));const int x=r.right()-8,y=r.top()+39;QPolygon triangle;const int d=sortIndicatorOrder()==Qt::AscendingOrder?-1:1;triangle<<QPoint(x-3,y-2*d)<<QPoint(x+3,y-2*d)<<QPoint(x,y+2*d);p->drawPolygon(triangle);}
         }
         if(hasFocus()&&focused_==col){p->setBrush(Qt::NoBrush);p->setPen(QPen(QColor("#39827b"),2));p->drawRoundedRect(r.adjusted(3,3,-3,-3),5,5);}
@@ -90,14 +91,15 @@ protected:
 };
 class LeaderboardTable final:public QTableWidget {
     void layoutColumns(){
-        if(columnCount()!=11)return;const int available=viewport()->width(),minimum[]{264,148,110,110,100,146},weights[]{4,2,1,1,1,1};
-        const int extra=qMax(0,available-1098);int used=220;auto* header=horizontalHeader();header->setStretchLastSection(false);
+        if(columnCount()!=12)return;const int available=viewport()->width(),minimum[]{264,148,110,110,100,146},weights[]{4,2,1,1,1,1};
+        const int gap=isColumnHidden(11)?0:120;const int extra=qMax(0,available-1098-gap);int used=220+gap;auto* header=horizontalHeader();header->setStretchLastSection(false);header->setSectionResizeMode(11,QHeaderView::Fixed);header->resizeSection(11,120);
         for(int col=0;col<6;++col){header->setSectionResizeMode(col,QHeaderView::Fixed);const int size=minimum[col]+extra*weights[col]/10;header->resizeSection(col,size);used+=size;}
         // Integer remainder belongs to the identity, never a surprise scroll.
-        if(available>=1098)header->resizeSection(0,header->sectionSize(0)+available-used);
+        if(available>=1098+gap)header->resizeSection(0,header->sectionSize(0)+available-used);
     }
 public:
-    explicit LeaderboardTable(QWidget* parent=nullptr):QTableWidget(0,11,parent){setProperty("leaderboardHoverRow",-1);setItemDelegate(new LeaderboardDelegate(this));setShowGrid(false);setMouseTracking(true);setFrameShape(QFrame::NoFrame);setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);setMinimumHeight(100);}
+    explicit LeaderboardTable(QWidget* parent=nullptr):QTableWidget(0,12,parent){setColumnHidden(11,true);setProperty("leaderboardHoverRow",-1);setItemDelegate(new LeaderboardDelegate(this));setShowGrid(false);setMouseTracking(true);setFrameShape(QFrame::NoFrame);setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);setMinimumHeight(100);}
+    void showLargestGap(bool show){setColumnHidden(11,!show);layoutColumns();updateGeometry();}
     QSize sizeHint()const override{int rows=0;for(int i=0;i<rowCount();++i)if(!isRowHidden(i))++rows;return {1100,58+qMax(1,rows)*36+2};}
     QSize minimumSizeHint()const override{return {0,100};}
 protected:

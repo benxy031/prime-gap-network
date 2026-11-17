@@ -3,6 +3,7 @@
 #pragma once
 #include <pgn/merit_arithmetic.h>
 #include <univalue.h>
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <optional>
@@ -13,7 +14,15 @@
 namespace pgn::core {
 struct LeaderboardRosetteTotals {
     std::array<uint64_t,5> counts{}; // Q independently of exclusive G/S/B/R.
+    uint64_t largest_gap{};
     std::array<bool,5> complete{true,true,true,true,true};
+    bool largest_gap_complete{true};
+    UniValue LargestGapJson()const{
+        UniValue out{UniValue::VOBJ};out.pushKV("complete",largest_gap_complete);
+        if(largest_gap_complete&&largest_gap)out.pushKV("gap",std::to_string(largest_gap));
+        else out.pushKV("reason",largest_gap_complete?"No disclosed gap in this UTC interval":"Qualified disclosure unavailable or malformed");
+        return out;
+    }
     UniValue Json()const{
         static constexpr const char* names[]{"q","g","s","b","r"};
         UniValue out{UniValue::VOBJ};
@@ -44,29 +53,32 @@ struct LeaderboardRosettes:LeaderboardRosetteTotals {
     // outside the requested time window, so a replay cannot earn a second row.
     // The caller authenticates report inclusion, owner, root and qualification.
     template<class Hash> void Observe(std::string_view disclosure,std::string_view root,
-                                      bool in_window,Hash&& hash) {
-        if(disclosure.size()>65536||root.size()!=64||hash(disclosure)!=root){if(in_window)Unavailable();return;}
+                                      bool in_window,Hash&& hash,std::optional<bool> gap_window={}) {
+        const bool largest_in_window=gap_window.value_or(in_window);
+        const auto unavailable=[&]{if(in_window)Unavailable();if(largest_in_window)largest_gap_complete=false;};
+        if(disclosure.size()>65536||root.size()!=64||hash(disclosure)!=root){unavailable();return;}
         UniValue body;
         if(!body.read(std::string{disclosure})||!body.isObject()||
            !body["schema"].isStr()||body["schema"].get_str()!="PGN_NETWORK_RANGE_REPORT_V1"||
            !body["computed"].isObject()||!body["computed"]["best"].isArray()){
-            if(in_window)Unavailable();return;
+            unavailable();return;
         }
         const auto& records=body["computed"]["best"];
-        if(records.size()>100){if(in_window)Unavailable();return;}
+        if(records.size()>100){unavailable();return;}
         const auto numerator=Decimal(body["target_numerator"]),denominator=Decimal(body["target_denominator"]);
         const bool target_ok=numerator&&denominator&&*denominator>0&&*numerator>3*(*denominator);
         std::set<std::pair<Integer,Integer>> local;
         for(const auto& record:records.getValues()){
             const auto lower=Decimal(record["lower_prime"]),upper=Decimal(record["upper_prime"]);
             if(!lower||!upper||*lower<3||*upper<=*lower||!record["gap"].isNum()){
-                if(in_window)Unavailable();return;
+                unavailable();return;
             }
             const auto gap=record["gap"].getInt<int64_t>();
             if(gap<=0||gap>(int64_t{1}<<32)||gap%2||*lower%2!=1||*upper!=*lower+gap||
-               !local.emplace(*lower,Integer{gap}).second){if(in_window)Unavailable();return;}
+               !local.emplace(*lower,Integer{gap}).second){unavailable();return;}
         }
         std::erase_if(local,[&](const auto& key){return !seen.insert(key).second;});
+        if(largest_in_window)for(const auto& key:local)largest_gap=std::max(largest_gap,key.second.template convert_to<uint64_t>());
         if(!in_window||local.empty())return;
         // ln is monotone. These two directed endpoints decide every ordinary
         // record in a narrow scientific range; only an interval-straddling

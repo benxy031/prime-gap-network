@@ -56,7 +56,7 @@ public:
   automaticName_.changed=[this](QString state,QString error){if(view_){view_->setProperty("pgn_social_name_state",state);view_->setProperty("pgn_social_name_error",error);}};
   // Display-link events have their own stream, not the Chat history cursor.
   // Refresh the visible Chat only; this reads local Core, never whole history.
-  refresh_.setInterval(5000);connect(&refresh_,&QTimer::timeout,this,[this]{if(!view_||!view_->isVisible())return;auto* tabs=view_->findChild<QTabWidget*>("pgn-social-sections");if(tabs&&tabs->currentIndex()==0)view_->refresh();});refresh_.start();
+  refresh_.setInterval(5000);connect(&refresh_,&QTimer::timeout,this,[this]{if(!view_||!view_->isVisible())return;auto* tabs=view_->findChild<QTabWidget*>("pgn-social-sections");if(tabs&&tabs->currentIndex()==0)view_->refresh();else if(tabs&&tabs->currentIndex()==3)view_->refreshExpiredLeaderboardWindow();});refresh_.start();
  }
  ~SocialDisplaySession()override{finishOpen();if(dialog_)delete dialog_;}
  void decorate(social::Snapshot snapshot,social::Services::Reply done){resolver_.decorate(std::move(snapshot),std::move(done));}
