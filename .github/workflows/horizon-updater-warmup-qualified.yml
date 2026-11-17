@@ -29,9 +29,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $deps = python -c "import site; print(site.getsitepackages()[-1])"
-          python tools/build_horizon_updater.py --output qa-frozen --dependencies $deps
+          python -m venv .freeze-venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the isolated freeze toolchain' }
+          $pgnPython = '.freeze-venv/Scripts/python.exe'
+          & $pgnPython -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install pinned freeze tools' }
+          Get-Content -LiteralPath tools/requirements-updater.txt | Where-Object { $_ -notmatch '^PyInstaller==' } | Set-Content -LiteralPath runtime-requirements.txt -Encoding utf8NoBOM
+          & $pgnPython -m pip install --disable-pip-version-check --target .freeze-runtime -r runtime-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install isolated runtime dependencies' }
+          & $pgnPython tools/build_horizon_updater.py --output qa-frozen --dependencies .freeze-runtime
           if ($LASTEXITCODE -ne 0) { throw 'Could not freeze the updater' }
+          & $pgnPython -c "import sys; from pathlib import Path; sys.path.insert(0, 'tools'); from stage_component_bundle import _code_path; root=Path('qa-frozen/dist/horizon-updater'); [_code_path('payload/ui/UpdateRuntime/'+f.relative_to(root).as_posix(),'ui') for f in root.rglob('*') if f.is_file()]"
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen bundle includes an undeclared non-code file' }
           $self = & qa-frozen/dist/horizon-updater/horizon-updater.exe --self-test | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $self.PASS -or $self.version -ne '2026.11.17.30') { throw 'Frozen updater self-test failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
