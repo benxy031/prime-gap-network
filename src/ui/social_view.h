@@ -17,6 +17,7 @@ public:
     ~SocialView()override;
     void setIdentity(social::Identity identity);
     void refresh();void selectSection(social::Section section);bool saveDrafts();
+    void refreshExpiredLeaderboardWindow();
 private:
     struct Page{
         QLabel *counter{},*saved{},*reason{},*empty{},*count{},*composeContext{},*windowInfo{};
@@ -32,6 +33,7 @@ private:
         QDateTime observedUtc;QString selectedId,nextCursor,state{"offline"},statusText,chatHistoryGeneration;
         bool loaded{},busy{},replyMode{};quint64 generation{};
         std::optional<social::LeaderboardPeriod> leaderboardPeriod;
+        qint64 utcRefreshAttemptMs{};
         bool threadBusy{};quint64 threadGeneration{};
         bool canSend{},sending{};QString sendWhy,sendNotice;
     };

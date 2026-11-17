@@ -129,7 +129,8 @@ inline NativeLeaderboardSnapshot BuildNativeLeaderboard(
         const auto height=window.utc_start?LeaderboardQualificationHeight(ledger,report,result.bindings,tip):report.report.height;
         const bool in_window=!window.utc_start||window.Contains(LeaderboardEventTime(tip,height));
         rosettes[owner].Observe(report.owner_reveal,report.report.commitment.root.GetHex(),in_window,
-            [](std::string_view raw){return HexStr(AuditSha(Bytes{raw.begin(),raw.end()}));});
+            [](std::string_view raw){return HexStr(AuditSha(Bytes{raw.begin(),raw.end()}));},
+            !window.utc_start||window.Contains(LeaderboardEventTime(tip,report.report.height)));
     }
     for (const auto& [id, report] : ledger) {
         const auto* confirmation = tip.GetAncestor(report.report.height);
@@ -199,7 +200,7 @@ inline UniValue NativeLeaderboardPage(const NativeLeaderboardSnapshot& snapshot,
     UniValue out{UniValue::VOBJ}, rows{UniValue::VARR};
     out.pushKV("schema", "PGN_LEADERBOARD_V1");
     if(snapshot.window.utc_start){
-        out.pushKV("period","today_utc");out.pushKV("utc_start",*snapshot.window.utc_start);out.pushKV("utc_end",*snapshot.window.utc_start+86400);
+        out.pushKV("period",snapshot.window.Name());out.pushKV("utc_start",*snapshot.window.utc_start);out.pushKV("utc_end",snapshot.window.End());
         out.pushKV("event_time_source","canonical_block_header_time");out.pushKV("validation_date_scope","latest_current_qualification_episode");
         out.pushKV("history_complete",true);
     }
@@ -217,6 +218,10 @@ inline UniValue NativeLeaderboardPage(const NativeLeaderboardSnapshot& snapshot,
     out.pushKV("rosette_categories","exclusive_g_s_b_r_at_target_target_minus_1_2_3");
     out.pushKV("quadrigantium_scope","independent_merit_at_least_40_included_in_g_s_b_r_when_applicable");
     out.pushKV("rosette_payment_scope","discovery_statistics_not_coin_payments");
+    UniValue periods{UniValue::VARR};for(const auto* name:{"total","today_utc","week_utc","month_utc","hour_utc"})periods.push_back(name);
+    out.pushKV("supported_periods",periods);
+    out.pushKV("largest_gap_scope","unique_disclosed_gaps_per_operator_from_current_qualified_reports");
+    out.pushKV("largest_gap_time_source","first_qualified_disclosure_canonical_header_time");
     out.pushKV("volume_definition", "sum_of_qualified_report_range_lengths_including_repeated_coverage");
     out.pushKV("alias_scope", "historical_contributors_plus_current_authenticated_aliases");
     out.pushKV("alias_limit_per_row", uint64_t(LeaderboardAliasesPerRow));
@@ -229,6 +234,7 @@ inline UniValue NativeLeaderboardPage(const NativeLeaderboardSnapshot& snapshot,
         row.pushKV("rank", index + 1); row.pushKV("operator_id", source.operator_id.GetHex());
         if(source.display_name)row.pushKV("display_name",*source.display_name);
         row.pushKV("rosettes",source.rosettes.Json());
+        row.pushKV("largest_recorded_gap",source.rosettes.LargestGapJson());
         row.pushKV("tickets_reported", std::to_string(source.tickets_reported));
         row.pushKV("tickets_validated", std::to_string(source.tickets_validated));
         row.pushKV("audits_finalized_valid", std::to_string(source.audits_finalized_valid));
