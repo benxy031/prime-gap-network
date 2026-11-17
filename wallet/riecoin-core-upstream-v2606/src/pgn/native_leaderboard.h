@@ -33,6 +33,12 @@ inline void LeaderboardBind(LeaderboardBindings& bindings, const Bytes& script,
     if (!inserted && at->second.operator_id != id) throw std::runtime_error("Leaderboard operator transition invalid");
     if (!inserted) at->second.height = std::min(at->second.height, height);
 }
+inline void LeaderboardBindAuthority(LeaderboardBindings& bindings, const NativeAuditLedger& ledger) {
+    if (ledger.authority.empty()) return;
+    NativeAuditLedger empty;
+    LeaderboardBind(bindings, Bytes{ledger.authority.begin(), ledger.authority.end()},
+                    NativeAuditOperator(empty, ledger.authority), ledger.authority_height);
+}
 struct NativeLeaderboardRow {
     uint256 operator_id;
     uint64_t tickets_reported{}, tickets_validated{}, audits_finalized_valid{};
