@@ -6,6 +6,16 @@
 #include <cmath>
 #include <optional>
 namespace pgn::ui {
+// Synchronization is not proof that a retained checkpoint is the current
+// assignment. Clear only this presentation copy; durable work stays intact.
+inline QJsonObject currentAssignmentPresentation(const QJsonObject& frame){
+ if(frame.value("phase")!="Synchronizing")return frame;
+ QJsonObject waiting;
+ for(const auto* key:{"schema","phase","message","source_device","stream_id","local_sequence","observed_utc"})
+  if(frame.contains(key))waiting.insert(key,frame.value(key));
+ waiting.insert("title","Waiting for current assignment");waiting.insert("source_stale",true);
+ return waiting;
+}
 struct CycleSlice { double weight{},fraction{};QString role;bool skipped{},pendingAssignment{}; };
 struct CycleProgress {
  bool known{},preparing{};double fraction{};QString title,phase;QVector<CycleSlice> slices;

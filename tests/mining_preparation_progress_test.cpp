@@ -68,6 +68,14 @@ int main(int argc,char** argv){
   check(rail.property("pgn_ticket_display_phase").toString()=="Paused","Assigned search concealed its paused state");
   check(!rail.property("pgn_ticket_cycle_eta_seconds").isValid(),"Paused work advertised an active cycle ETA");
 
+  auto retained=search;retained["phase"]="Synchronizing";retained["positions"]="1224065679360";retained["source_age_ns"]="129666390000000";const auto saved=retained;
+  const auto waiting=currentAssignmentPresentation(retained);
+  check(retained==saved,"Presentation rewrite mutated retained computation evidence");
+  check(!waiting.contains("ticket_id")&&!waiting.contains("positions")&&!waiting.contains("audit_service"),"Unverified prior assignment leaked into current synchronization presentation");
+  render(waiting,"captures/waiting-assignment.png");
+  check(rail.property("pgn_ticket_display_phase").toString()=="Synchronizing"&&!rail.property("pgn_ticket_progress_fraction").isValid(),"Actual widget displayed prior ticket progress before current assignment verification");
+  check(currentAssignmentPresentation(search)==search&&currentAssignmentPresentation(paused)==paused,"Valid searching or paused checkpoint changed");
+  render(search,"captures/assignment-restored.png");check(rail.property("pgn_ticket_progress_fraction").isValid(),"Fresh verified assignment could not restore progress");
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";
   return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

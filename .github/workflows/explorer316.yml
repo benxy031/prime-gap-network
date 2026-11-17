@@ -89,11 +89,11 @@ jobs:
       - name: Build application and run existing explorer regressions offscreen
         run: |
           cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-app --target PGN-Horizon pgn-block-explorer-view-test pgn-explorer-projection-test pgn-network-metrics-view-test --parallel 4
-          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app -R 'block-explorer-view|explorer-projection|network-metrics-view' --output-on-failure
+          cmake --build build-app --target PGN-Horizon pgn-block-explorer-view-test pgn-explorer-projection-test pgn-network-metrics-view-test pgn-mining-preparation-progress-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app -R 'block-explorer-view|explorer-projection|network-metrics-view|mining-preparation-progress' --output-on-failure
           mkdir -p explorer316-app
           QT_QPA_PLATFORM=offscreen build-app/pgn-block-explorer-view-test.exe explorer316-app
-          cp build-app/PGN-Horizon.exe explorer316-app/
+          cp build-app/PGN-Horizon.exe build-app/captures/waiting-assignment.png explorer316-app/
           printf '%s\n' "$GITHUB_SHA" > explorer316-app/SOURCE.txt
           qmake6 -query QT_VERSION > explorer316-app/QT_VERSION.txt
           sha256sum explorer316-app/*.exe explorer316-app/*.png > explorer316-app/SHA256SUMS.txt
