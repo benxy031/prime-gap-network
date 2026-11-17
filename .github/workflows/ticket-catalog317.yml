@@ -1,0 +1,23 @@
+name: Ticket archive catalog qualification
+on:
+  push:
+    branches: [qualification/ticket-catalog317]
+permissions:
+  contents: read
+jobs:
+  archive:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify archive retention, cursor restart, and wrap
+        run: python -B -m unittest discover -s tests -p "test_*archive*.py"

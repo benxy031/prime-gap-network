@@ -25,6 +25,7 @@ WORK_FILES = (
 BATCH_CURSOR_SCHEMA = "PGN_HORIZON_RETENTION_CURSOR_V1"
 OWNER_RETIREMENT_SCHEMA = "PGN_ARCHIVED_OWNER_OUTPUT_V1"
 MAXIMUM_OWNER_JOBS = 4096
+TICKET_NAME = re.compile(r"[0-9a-f]{64}")
 
 
 def _owner_ticket_hints(metadata):
@@ -514,17 +515,25 @@ def retire_completed_owner_output(owner, dry_run=False):
 
 
 def _batch_names(tickets, after, limit):
-    """Scan names only, retaining at most one batch rather than the catalogue."""
+    """Find the next batch and wrap at the end without scanning twice."""
     def eligible(entries):
         for entry in entries:
             name = entry.name
-            if (len(name) == 64 and all(c in "0123456789abcdef" for c in name)
-                    and (after is None or name > after)
+            if (TICKET_NAME.fullmatch(name)
                     and entry.is_dir(follow_symlinks=False)
-                    and not getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & 0x400):
+                    and (os.name != "nt" or not entry.stat(follow_symlinks=False).st_file_attributes & 0x400)):
                 yield name
+
     with os.scandir(tickets) as entries:
-        return heapq.nsmallest(limit, eligible(entries))
+        candidates = eligible(entries)
+        if after is None:
+            return heapq.nsmallest(limit, candidates), False
+        names = heapq.nsmallest(limit, candidates, key=lambda name: (name <= after, name))
+    wrapped = not names or names[0] <= after
+    # Finish a partial tail on its own, as with the durable lexical cursor.
+    if not wrapped:
+        names = [name for name in names if name > after]
+    return names, wrapped
 
 
 def compact_batch(root, limit=512, dry_run=False, *, _ticket_guard=None,
@@ -570,10 +579,7 @@ def compact_batch(root, limit=512, dry_run=False, *, _ticket_guard=None,
                     or not isinstance(after, str) or len(after) != 64
                     or any(c not in "0123456789abcdef" for c in after)):
                 raise ValueError("Retention cursor is invalid or belongs to another catalogue")
-        names = _batch_names(tickets, after, limit)
-        wrapped = after is not None and not names
-        if wrapped:
-            names = _batch_names(tickets, None, limit)
+        names, wrapped = _batch_names(tickets, after, limit)
         summary.update(resumed_after=after, wrapped=wrapped)
         last_considered = after
         for name in names:

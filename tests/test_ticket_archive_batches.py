@@ -98,7 +98,17 @@ class ArchiveBatchTests(unittest.TestCase):
         self.assertEqual(archive.compact_batch(self.root, 1)['retained'], 1)
         self.assertEqual(archive.compact_batch(self.root, 1)['compacted'], 1)
         new, report = self.ticket(1)
-        wrapped = archive.compact_batch(self.root, 1)
+        scan = archive.os.scandir
+        catalog_scans = []
+
+        def count_catalog_scan(path):
+            if path == self.root / 'tickets':
+                catalog_scans.append(path)
+            return scan(path)
+
+        with patch.object(archive.os, 'scandir', side_effect=count_catalog_scan):
+            wrapped = archive.compact_batch(self.root, 1)
+        self.assertEqual(len(catalog_scans), 1)
         self.assertTrue(wrapped['wrapped'])
         self.assertEqual(wrapped['next_after'], new.name)
         self.assertEqual(archive.load(new)['report'], report)
