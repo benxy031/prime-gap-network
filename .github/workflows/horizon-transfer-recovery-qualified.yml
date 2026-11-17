@@ -1,0 +1,156 @@
+name: Qualify interrupted transfer and portable startup recovery
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/horizon-transfer-recovery]
+permissions:
+  contents: read
+concurrency:
+  group: horizon-transfer-recovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/names286/
+            /qualification/names303/
+            /qualification/statistics309/
+            /qualification/social278-qt/
+            /qualification/social278-access/
+            /qualification/wallet285/
+            /qualification/cpu296/
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+
+      - name: Build the Windows application from the qualified sources
+        run: |
+          cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-app --target pgn-update-selector-test pgn-component-update-service-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^(update-selector|component-update-service)$'
+          cmake --build build-app --target PGN-Horizon pgn-component-updates-dialog-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^component-updates-dialog$'
+          mkdir -p horizon-transfer-recovery
+          cp build-app/PGN-Horizon.exe horizon-transfer-recovery/
+          printf '%s\n' "$GITHUB_SHA" > horizon-transfer-recovery/SOURCE.txt
+          qmake6 -query QT_VERSION > horizon-transfer-recovery/QT_VERSION.txt
+          sha256sum horizon-transfer-recovery/*.exe > horizon-transfer-recovery/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: horizon-transfer-recovery-windows
+          path: horizon-transfer-recovery
+          if-no-files-found: error
+          retention-days: 7
+
+  updater:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            src/update
+            tools
+            tests
+      - name: Install pinned updater dependencies
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+      - name: Authenticated phases and transaction failure checks
+        working-directory: tests
+        run: python -m unittest test_update_fetch_recovery test_updater_startup_warmup test_update_cli test_authenticated_updates test_component_install -q
+
+      - name: Freeze the tested Windows updater and execute its self-test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv .freeze-venv
+          if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the isolated freeze toolchain' }
+          $pgnPython = '.freeze-venv/Scripts/python.exe'
+          & $pgnPython -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install pinned freeze tools' }
+          Get-Content -LiteralPath tools/requirements-updater.txt | Where-Object { $_ -notmatch '^PyInstaller==' } | Set-Content -LiteralPath runtime-requirements.txt -Encoding utf8NoBOM
+          & $pgnPython -m pip install --disable-pip-version-check --target .freeze-runtime -r runtime-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install isolated runtime dependencies' }
+          & $pgnPython tools/build_horizon_updater.py --output qa-frozen --dependencies .freeze-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Could not freeze the updater' }
+          & $pgnPython -c "import sys; from pathlib import Path; sys.path.insert(0, 'tools'); from stage_component_bundle import _code_path; root=Path('qa-frozen/dist/horizon-updater'); [_code_path('payload/ui/UpdateRuntime/'+f.relative_to(root).as_posix(),'ui') for f in root.rglob('*') if f.is_file()]"
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen bundle includes an undeclared non-code file' }
+          $self = & qa-frozen/dist/horizon-updater/horizon-updater.exe --self-test | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $self.PASS -or $self.version -ne '2026.11.17.31') { throw 'Frozen updater self-test failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: runner.os == 'Windows'
+        with:
+          name: horizon-transfer-updater-windows
+          path: |
+            qa-frozen/dist/horizon-updater
+            qa-frozen/UPDATER-SOURCE.json
+          if-no-files-found: error
+          retention-days: 7
