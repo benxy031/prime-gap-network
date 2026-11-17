@@ -16,7 +16,8 @@ constexpr size_t CoinbaseCacheGuard=8*1024*1024,ProofCacheGuard=1024*1024;
 bool BudgetValid(RequestHistoryArchiveBudget b){return b.coinbase_bytes&&b.proof_bytes&&b.coinbase_bytes<=CoinbaseCacheGuard&&b.proof_bytes<=ProofCacheGuard;}
 DBParams Parameters(fs::path path,size_t bytes){
     if(path.empty()||!path.is_absolute()||!bytes)throw std::invalid_argument("Explicit absolute request-cache path and cache budget required");
-    return {.path=std::move(path),.cache_bytes=bytes,.memory_only=false,.wipe_data=false,.obfuscate=false};
+    return {.path=std::move(path),.cache_bytes=bytes,.memory_only=false,.wipe_data=false,.obfuscate=false,
+            .options={.compress_new_files=true}};
 }
 auto Key(const uint256& chain,const uint256& block){return std::pair{std::string{"PGN/request-history/v1"},std::pair{chain,block}};}
 struct Record {

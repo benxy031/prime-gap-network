@@ -32,6 +32,8 @@ static const size_t DBWRAPPER_MAX_FILE_SIZE{32_MiB};
 struct DBOptions {
     //! Compact database on startup.
     bool force_compact = false;
+    //! Use transparent Windows filesystem compression on newly created files.
+    bool compress_new_files = false;
 };
 
 //! Application-specific storage settings.

@@ -34,6 +34,31 @@
 #include <optional>
 #include <utility>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <winioctl.h>
+
+static void CompressNewDatabaseFiles(const fs::path& path)
+{
+    const HANDLE directory = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (directory == INVALID_HANDLE_VALUE) return;
+
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (GetFileInformationByHandle(directory, &info) &&
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_COMPRESSED))) {
+        // A directory default affects new files. Existing tables keep their bytes and attributes.
+        USHORT format = COMPRESSION_FORMAT_DEFAULT;
+        DWORD returned = 0;
+        DeviceIoControl(directory, FSCTL_SET_COMPRESSION, &format, sizeof(format),
+                        nullptr, 0, &returned, nullptr);
+    }
+    CloseHandle(directory);
+}
+#endif
+
 static auto CharCast(const std::byte* data) { return reinterpret_cast<const char*>(data); }
 
 bool DestroyDB(const std::string& path_str)
@@ -243,6 +268,9 @@ CDBWrapper::CDBWrapper(const DBParams& params)
         }
         if (!params.testing_env) {
             TryCreateDirectories(params.path);
+#ifdef _WIN32
+            if (params.options.compress_new_files) CompressNewDatabaseFiles(params.path);
+#endif
         }
         LogInfo("Opening LevelDB in %s", fs::PathToString(params.path));
     }
