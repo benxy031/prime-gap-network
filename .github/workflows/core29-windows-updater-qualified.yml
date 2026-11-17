@@ -1,0 +1,46 @@
+name: Core29 signed update and actual Windows restart
+on:
+  push:
+    branches: [qualification/core29-updater]
+permissions:
+  contents: read
+jobs:
+  windows_updater:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Permit long source paths on disposable runner
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /updates/testnet-epoch3/metadata/
+      - name: Pinned updater Python dependencies only
+        shell: pwsh
+        run: |
+          python -m venv .qa-updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
+          & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Real signed install and Windows Qt restart
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_core29_windows.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows updater qualification failed' }
+      - name: Preserve bounded evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core29-windows-${{ github.run_id }}
+          path: |
+            core29-windows/RESULT.json
+            core29-windows/evidence
+            core29-windows/installation/current.json
+            core29-windows/installation/transaction.json
+            core29-windows/installation/windows-lifecycle.json
+          if-no-files-found: error
