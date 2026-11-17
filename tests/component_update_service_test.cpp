@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QSysInfo>
 #include <iostream>
 #include <stdexcept>
@@ -20,6 +21,13 @@ int main(int argc,char** argv){
  if(QFileInfo(app.applicationFilePath()).fileName()==helperName){
   QFile input;input.open(stdin,QIODevice::ReadOnly);const auto request=QJsonDocument::fromJson(input.readAll()).object();const auto fixture=request.value("fixture").toString();
   if(fixture=="delay")QThread::sleep(30);
+  if(fixture=="ongoing"||fixture=="repeated"){
+   for(int i=1;i<=7;++i){
+    const auto bytes=fixture=="repeated"?1:i;
+    std::cerr<<"{\"schema\":\"PGN_UPDATE_PROGRESS_V1\",\"stage\":\"download\",\"component\":\"\",\"completed\":"<<bytes<<",\"total\":10}\n"<<std::flush;
+    QThread::msleep(85);
+   }
+  }
   if(fixture=="oversized"){std::cout<<std::string(140000,'x');return 0;}
   if(fixture=="malformed"){std::cout<<"invalid JSON";return 0;}
   if(fixture=="failure"){std::cout<<"{\"error\":\"Fixture refused\"}";return 1;}
@@ -68,6 +76,25 @@ int main(int argc,char** argv){
   require(service.start(request()),"Valid helper request refused");require(!service.start(request()),"Concurrent operation was admitted");wait();require(results==1&&errors==0,"Successful helper response lost");
   {int observed=0;service.onProgress=[&](const QJsonObject& value){if(value.value("completed").toInt()==5&&value.value("total").toInt()==10)++observed;};require(service.start(request("progress")),"Progress fixture refused");wait();require(observed==1,"Measured progress did not cross the actual child-process transport");service.onProgress={};--results;}
   {QJsonObject value{{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","download"},{"component","gpu"},{"completed",5},{"total",10}};require(pgn::update::validComponentUpdateProgress(value),"Valid progress rejected");value.insert("completed",11);require(!pgn::update::validComponentUpdateProgress(value),"Progress beyond total admitted");value.insert("completed",1.5);require(!pgn::update::validComponentUpdateProgress(value),"Fractional byte count admitted");value.insert("completed",1);value.insert("path","private");require(!pgn::update::validComponentUpdateProgress(value),"Unbounded private progress field admitted");}
+  {
+   auto* watchdog=service.findChild<QTimer*>();
+   require(watchdog,"Missing helper watchdog");
+   const auto exercise=[&](const QString& fixture){
+    bool intervalSet=false;
+    service.onProgress=[&](const QJsonObject&){
+     if(!intervalSet){
+      intervalSet=true;watchdog->start(350);
+     }
+    };
+    require(service.start(QJsonObject{{"action","prepare"},{"fixture",fixture}}),"Slow download fixture refused");
+    wait();service.onProgress={};
+    require(intervalSet,"Slow download did not produce valid progress");
+   };
+   const auto beforeGood=results;
+   exercise("ongoing");require(results==beforeGood+1,"An advancing download expired despite confirmed byte progress");--results;
+   const auto beforeBad=errors;
+   exercise("repeated");require(errors==beforeBad+1&&lastError.contains("timed out",Qt::CaseInsensitive),"Repeated counts renewed the idle watchdog");
+  }
   for(const auto& fixture:{QString("failure"),QString("malformed"),QString("wrong-type"),QString("oversized")}){const auto before=errors;require(service.start(request(fixture)),"Fixture request refused");wait();require(errors==before+1&&!lastError.isEmpty(),"Bad helper response was accepted or completed twice");}
   require(service.start(request("delay")),"Cancellation fixture refused");app.processEvents();service.cancel();wait();require(lastError.contains("cancelled"),"Cancellation was not distinct");
   require(service.start(request()),"Request after cancellation refused");wait();require(results==2,"Cancellation poisoned the next request");
