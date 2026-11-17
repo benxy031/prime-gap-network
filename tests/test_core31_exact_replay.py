@@ -95,9 +95,46 @@ assert halted.returncode==0,(halted.returncode,b[-1800:].decode(errors='replace'
 assert marker in b,b[-1800:].decode(errors='replace')
 heights=[int(m[1]) for line in b.splitlines() if b'UpdateTip:' in line and (m:=re.search(rb'height=(\d+)',line))]
 assert 1600<=max(heights)<2400,heights[-10:]
+from native_grouped249_actual import port
+
+class ReplayNode(Node):
+    def start(self):
+        self.rpcport=port()
+        self.log=(self.data/'owned.log').open('ab')
+        cursor=self.log.tell()
+        args=[str(self.core),'-testnet','-server=1','-listen=0','-connect=0','-dnsseed=0',
+              '-fixedseeds=0','-discover=0','-par=1','-dbcache=64','-keypool=2',
+              '-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1',f'-rpcport={self.rpcport}',f'-datadir={self.data}']
+        self.process=subprocess.Popen(args,cwd=self.core.parent,stdout=self.log,stderr=subprocess.STDOUT,
+              creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        started=time.monotonic()
+        last_progress=started
+        current_height=0
+        tail=b''
+        while self.process.poll() is None:
+            try:
+                if self.rpc('getblockhash',[0])==GENESIS:return
+            except (OSError,RuntimeError):pass
+            with (self.data/'owned.log').open('rb') as f:
+                f.seek(cursor)
+                tail=f.read(512*1024)
+                cursor=f.tell()
+            heights=[int(match[1]) for match in re.finditer(rb'height=(\d+)',tail)]
+            now=time.monotonic()
+            if max(heights,default=0)>current_height:
+                current_height=max(heights);last_progress=now
+            if now-started>245 or now-last_progress>85:break
+            time.sleep(.22)
+        exit_code=self.process.poll()
+        if exit_code is None:
+            self.process.terminate()
+            self.process.wait(timeout=15)
+        self.log.close()
+        raise RuntimeError((exit_code,current_height,tail[-1800:].decode(errors='replace')))
+
 def normal(name,prev_size,expect_replay):
     native_log=partial/'testnet/debug.log'
-    node=Node(core,partial)
+    node=ReplayNode(core,partial)
     try:
         deadline=time.monotonic()+220
         while time.monotonic()<deadline:
