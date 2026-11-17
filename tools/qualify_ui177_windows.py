@@ -225,6 +225,23 @@ def verify_slow_core_handoff(current_code, expected, runtime_directory):
         profile_path.write_bytes(original)
     return dict(expected_handoff=expected,old_core_exited=expected,shutdown_requests=observed_stops)
 
+def baseline_progress(snapshot):
+    stable_names=('pgn_core_link_state','pgn_core_link_detail','pgn_wallet_embedded_pid','pgn_network_height',
+                  'pgn_wallet_frontend_loaded','pgn_wallet_setup_required','pgn_core_link_transitions')
+    core={name:snapshot[name] for name in stable_names if name in snapshot}
+    core['core_note']=str(core.get('pgn_core_link_detail',''))[:250]
+    log=wallet_data/'testnet/debug.log'
+    if log.is_file():
+        with log.open('rb') as file:
+            file.seek(max(0,log.stat().st_size-16384))
+            rows=file.read(16384).decode(errors='replace').splitlines()
+        useful=[row for row in rows if any(marker in row.lower() for marker in
+                ('updateTip: new best'.lower(),'error','init message','shutdown','revalidating','loaded best'))]
+        core['native_tail']=useful[-10:]
+        import re
+        heights=[int(match.group(1)) for row in useful if (match:=re.search(r'height=(\d+)',row))]
+        core['native_height']=max(heights,default=0)
+    return core
 old,files,_,_=inventory(base)
 for name in ('config','data','cache','runtime'):(QA/name).mkdir()
 for name in ('QT_PLUGIN_PATH','QT_QPA_PLATFORM','QT_QPA_PLATFORM_PLUGIN_PATH'):os.environ.pop(name,None)
@@ -239,10 +256,22 @@ try:
         try:state=owned_ipc(own,'--inspect-owned');break
         except (RuntimeError,OSError,ValueError):time.sleep(.25)
     assert state and state['pgn_update_genesis']==GENESIS
-    limit=time.monotonic()+80
+    first=time.monotonic()
+    last_progress=first
+    highest=0
     while state.get('pgn_core_link_state')!='ready':
-        assert time.monotonic()<limit and not own.exited(),'Existing Core did not become ready'
-        time.sleep(.35);state=owned_ipc(own,'--inspect-owned')
+        snapshot=baseline_progress(state)
+        (E/'BASELINE-READINESS.json').write_text(json.dumps(snapshot,indent=2)+'\n',encoding='utf-8')
+        height=snapshot.get('native_height',0)
+        if height>highest:
+            highest=height
+            last_progress=time.monotonic()
+        now=time.monotonic()
+        assert now-last_progress<80 and now-first<200 and not own.exited(), {
+            'cause':'baseline old Core readiness failed', 'state':snapshot.get('pgn_core_link_state'),
+            'detail':snapshot['core_note'], 'native_height':highest,
+        }
+        time.sleep(1);state=owned_ipc(own,'--inspect-owned')
     assert rpc(wallet_data,wallet_port,'listwallets',[])==[WALLET]
     assert rpc(wallet_data,wallet_port,'getaddressinfo',[address])['ismine'] is True
     old_core_pid=state['pgn_wallet_embedded_pid']
