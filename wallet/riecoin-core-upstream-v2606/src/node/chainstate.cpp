@@ -285,6 +285,22 @@ ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const C
                                                          "Only rebuild the block database if you are sure that your computer's date and time are correct")};
             }
 
+            // The native cache format is a startup compatibility requirement,
+            // independent of optional -checklevel/-checkblocks verification.
+            // Replaying this recognized, tip-bound legacy cache still applies
+            // the complete current validation rules before any wallet loads.
+            const auto activation = pgn::core::ConfiguredAuditGroupingActivation(chainman.GetParams().GenesisBlock().GetHash());
+            const auto legacy = chainstate->CoinsDB().GetPgnIssuanceState();
+            if (chainman.m_options.pgn_candidate_science_budget &&
+                chainman.m_chainstates.size() == 1 &&
+                !chainman.m_blockman.m_have_pruned && !chainman.m_blockman.IsPruneMode() &&
+                activation && tip && tip->nHeight >= activation->height &&
+                legacy && legacy->Valid() && legacy->tip == tip->GetBlockHash() &&
+                legacy->audit_settlement && !legacy->audit_settlement->grouped) {
+                return {ChainstateLoadStatus::NATIVE_LEGACY_CACHE,
+                        _("The local PGN data needs a compatibility upgrade")};
+            }
+
             VerifyDBResult result = CVerifyDB(chainman.GetNotifications()).VerifyDB(
                 *chainstate, chainman.GetConsensus(), chainstate->CoinsDB(),
                 options.check_level,
@@ -295,23 +311,8 @@ ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const C
                 break;
             case VerifyDBResult::INTERRUPTED:
                 return {ChainstateLoadStatus::INTERRUPTED, _("Block verification was interrupted")};
-            case VerifyDBResult::CORRUPTED_BLOCK_DB: {
-                // Classify only a valid, tip-bound pre-grouping snapshot on
-                // the compiled epoch3 schedule. Healthy caches take SUCCESS
-                // above; unrelated corruption and pruned data stay fail-closed.
-                const auto activation = pgn::core::ConfiguredAuditGroupingActivation(chainman.GetParams().GenesisBlock().GetHash());
-                const auto legacy = chainstate->CoinsDB().GetPgnIssuanceState();
-                if (chainman.m_options.pgn_candidate_science_budget &&
-                    chainman.m_chainstates.size() == 1 &&
-                    !chainman.m_blockman.m_have_pruned && !chainman.m_blockman.IsPruneMode() &&
-                    activation && tip && tip->nHeight >= activation->height &&
-                    legacy && legacy->Valid() && legacy->tip == tip->GetBlockHash() &&
-                    legacy->audit_settlement && !legacy->audit_settlement->grouped) {
-                    return {ChainstateLoadStatus::NATIVE_LEGACY_CACHE,
-                            _("The local PGN data needs a compatibility upgrade")};
-                }
+            case VerifyDBResult::CORRUPTED_BLOCK_DB:
                 return {ChainstateLoadStatus::FAILURE, _("Corrupted block database detected")};
-            }
             case VerifyDBResult::SKIPPED_L3_CHECKS:
                 if (options.require_full_verification) {
                     return {ChainstateLoadStatus::FAILURE_INSUFFICIENT_DBCACHE, _("Insufficient dbcache for block verification")};
