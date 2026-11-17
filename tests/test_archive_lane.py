@@ -226,7 +226,7 @@ class ArchiveLaneTests(unittest.TestCase):
              patch('horizon_status_stream.ticket_frame', return_value=fixture.frame), \
              patch.object(lane_module, 'compact', side_effect=compact):
             lane = self.lane()
-            lane.offer(fixture.folder)
+            lane.offer(fixture.folder.resolve())
             self.assertTrue(finished.wait(2),self.notes)
             self.assertEqual(fixture.report,
                              archive_fixture.archive.result(fixture.folder, fixture.cfg))
