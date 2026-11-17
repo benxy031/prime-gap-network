@@ -33,7 +33,7 @@ struct Fixture {
     View view;
     NativeRequestHistoryArchive archive;
     explicit Fixture(const fs::path& path):archive(path,1U<<20){}
-    CBlockIndex& Append(CBlockIndex* previous,unsigned unique){
+    CBlockIndex& Append(CBlockIndex* previous,unsigned unique,const NativeReportCommitment* report=nullptr){
         const auto height=previous?previous->nHeight+1:0;
         CMutableTransaction transaction;transaction.vin.resize(1);transaction.vin[0].scriptSig=CScript{}<<int64_t(unique);
         CScript script;
@@ -42,6 +42,12 @@ struct Fixture {
             assert(policy);script=*policy;
         }else script=CScript{}<<OP_RETURN;
         transaction.vout.emplace_back(0,script);
+        if(report){
+            assert(previous&&report->parent==previous->GetBlockHash());
+            const auto envelope=BuildNativeReportEnvelope(*report);
+            assert(envelope);
+            transaction.vout.emplace_back(0,*envelope);
+        }
         CBlock block;block.nVersion=4;block.nTime=1000+unique;
         if(previous)block.hashPrevBlock=previous->GetBlockHash();
         block.vtx.push_back(MakeTransactionRef(std::move(transaction)));block.hashMerkleRoot=BlockMerkleRoot(block);
@@ -140,5 +146,26 @@ int main(int argc,char** argv){
     auto tiny_replay=replay_budget;tiny_replay.maximum_blocks=2;
     const auto complete_replay=ReplayConfirmedRequestHistoryToParent(second.view,*second_tip,second.archive,complete_registry,tiny_replay);
     assert(complete_replay.verdict==RequestReplayVerdict::AtParent&&complete_replay.blocks==8&&complete_registry);
+    // A shared report view follows the current branch. Readers that retained
+    // an older view keep its exact contents after an append or reorganization.
+    Fixture frozen{fs::PathFromString(std::string(argv[1])+"-reports")};
+    auto& report_genesis=frozen.Append(nullptr,40000);
+    auto& report_parent=frozen.Append(&report_genesis,40001);
+    const auto before=ReadConfirmedNativeReports(frozen.view,report_parent,frozen.archive,report_budget);
+    assert(before&&before->empty());
+    const NativeReportCommitment report{report_genesis.GetBlockHash(),report_parent.GetBlockHash(),
+        second_tip->GetBlockHash(),report_parent.GetBlockHash(),Bytes{1}};
+    auto& productive=frozen.Append(&report_parent,40002,&report);
+    const auto after=ReadConfirmedNativeReports(frozen.view,productive,frozen.archive,report_budget);
+    assert(after&&after!=before&&after->size()==1&&before->empty());
+    assert(after->at(report.request).commitment.root==report.root);
+    assert(after->at(report.request).block==productive.GetBlockHash());
+    auto& quiet=frozen.Append(&productive,40003);
+    assert(ReadConfirmedNativeReports(frozen.view,quiet,frozen.archive,report_budget)==after);
+    auto& replacement=frozen.Append(&report_parent,40004);
+    const auto fork_view=ReadConfirmedNativeReports(frozen.view,replacement,frozen.archive,report_budget);
+    assert(fork_view&&fork_view!=after&&fork_view->empty()&&after->size()==1);
+    assert(!ReadConfirmedNativeReports(frozen.view,productive,frozen.archive,report_budget));
+    assert(ReadConfirmedNativeReports(frozen.view,replacement,frozen.archive,report_budget)==fork_view);
     return 0;
 }

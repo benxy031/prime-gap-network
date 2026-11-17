@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <primitives/block.h>
 #include <map>
+#include <memory>
 namespace pgn::core {
 inline constexpr std::string_view NativeReportTag{"PGNREPORT-COMMIT-1"};
 struct NativeReportCommitment {
@@ -59,9 +60,11 @@ inline uint256 NativeReportWorkIdentity(const uint256& chain,const NativeReportC
     hash<<chain<<report.request<<report.ticket<<report.root;
     return hash.GetHash();
 }
+using ConfirmedNativeReportRegistry = std::map<uint256,ConfirmedNativeReport>;
+
 // Full current-branch authentication is inherited from the native archive.
 // Missing history fails closed; a restart never substitutes an empty registry.
-inline std::optional<std::map<uint256,ConfirmedNativeReport>> ReadConfirmedNativeReports(
+inline std::shared_ptr<const ConfirmedNativeReportRegistry> ReadConfirmedNativeReports(
     const CCoinsView& view,const CBlockIndex& parent,const NativeRequestHistoryArchive& history,
     const RangeScheduleBudget& budget)
 {
@@ -72,7 +75,7 @@ inline std::optional<std::map<uint256,ConfirmedNativeReport>> ReadConfirmedNativ
        view.GetBestBlock()!=parent.GetBlockHash()||!budget.maximum_blocks||!budget.maximum_requests)return {};
     struct Snapshot {
         uint256 chain,tip;int32_t height{-1};
-        std::map<uint256,ConfirmedNativeReport> reports;
+        std::shared_ptr<ConfirmedNativeReportRegistry> reports;
     };
     static Snapshot cached;
     const auto* anchor=cached.height>=0&&cached.height<=parent.nHeight?parent.GetAncestor(cached.height):nullptr;
@@ -80,9 +83,13 @@ inline std::optional<std::map<uint256,ConfirmedNativeReport>> ReadConfirmedNativ
        (!anchor||!anchor->phashBlock||!anchor->IsValid(BLOCK_VALID_SCRIPTS)||anchor->GetBlockHash()!=cached.tip)))
         cached=Snapshot{};
     cached.chain=head->chain;
-    if(cached.reports.size()>budget.maximum_requests)return {};
-    const auto reject=[&](){cached=Snapshot{};return std::optional<std::map<uint256,ConfirmedNativeReport>>{};};
+    const auto reject=[&]() -> std::shared_ptr<const ConfirmedNativeReportRegistry> {
+        cached=Snapshot{};
+        return {};
+    };
     try{
+        if(!cached.reports)cached.reports=std::make_shared<ConfirmedNativeReportRegistry>();
+        if(cached.reports->size()>budget.maximum_requests)return {};
         while(cached.height<parent.nHeight){
             const int64_t first=int64_t(cached.height)+1;
             const int64_t last=std::min<int64_t>(parent.nHeight,first+budget.maximum_blocks-1);
@@ -96,13 +103,13 @@ inline std::optional<std::map<uint256,ConfirmedNativeReport>> ReadConfirmedNativ
             for(const auto* block:ancestry){
                 const auto loaded=history.Load(view,parent,block->nHeight,budget.archive);
                 if(!loaded.block||!loaded.block->Coinbase())return reject();
-                std::map<uint256,ConfirmedNativeReport> additions;
+                ConfirmedNativeReportRegistry additions;
                 for(const auto& output:loaded.block->Coinbase()->vout){
                     if(!IsNativeReportScript(output.scriptPubKey))continue;
                     auto report=DecodeNativeReportEnvelope(output.scriptPubKey);
                     if(!report||output.nValue!=0||!block->pprev||report->parent!=block->pprev->GetBlockHash())return reject();
-                    const auto known=cached.reports.find(report->request);
-                    if(known!=cached.reports.end()){
+                    const auto known=cached.reports->find(report->request);
+                    if(known!=cached.reports->end()){
                         if(known->second.commitment.root!=report->root||known->second.commitment.ticket!=report->ticket)return reject();
                         continue;
                     }
@@ -111,12 +118,18 @@ inline std::optional<std::map<uint256,ConfirmedNativeReport>> ReadConfirmedNativ
                         if(pending->second.commitment.root!=report->root||pending->second.commitment.ticket!=report->ticket)return reject();
                         continue;
                     }
-                    if(additions.size()>=budget.maximum_requests-cached.reports.size())return reject();
+                    if(additions.size()>=budget.maximum_requests-cached.reports->size())return reject();
                     const auto request=report->request;
                     additions.emplace(request,ConfirmedNativeReport{std::move(*report),block->GetBlockHash(),block->nHeight});
                 }
                 // Complete one verified block before publishing its prefix.
-                cached.reports.merge(additions);cached.height=block->nHeight;cached.tip=block->GetBlockHash();
+                if(!additions.empty()){
+                    // Readers retain their authenticated branch snapshot.
+                    if(cached.reports.use_count()!=1)
+                        cached.reports=std::make_shared<ConfirmedNativeReportRegistry>(*cached.reports);
+                    cached.reports->merge(additions);
+                }
+                cached.height=block->nHeight;cached.tip=block->GetBlockHash();
             }
         }
         return cached.reports;
@@ -129,8 +142,10 @@ inline bool VerifyProposedNativeReportCommitments(const CCoinsView& view,const C
     for(const auto& output:block.vtx.front()->vout)has_report|=IsNativeReportScript(output.scriptPubKey);
     if(!has_report)return true;
     const auto policy=ReadChainRangePolicy(view,parent,history,schedule_budget.archive,policy_budget);
-    auto known=ReadConfirmedNativeReports(view,parent,history,schedule_budget);
-    if(!policy.policy||!known)return false;
+    const auto confirmed=ReadConfirmedNativeReports(view,parent,history,schedule_budget);
+    if(!policy.policy||!confirmed)return false;
+    // Proposed commitments remain local even when the confirmed prefix is shared.
+    auto known=*confirmed;
     size_t count{};
     for(const auto& output:block.vtx.front()->vout){
         if(!IsNativeReportScript(output.scriptPubKey))continue;
@@ -142,9 +157,9 @@ inline bool VerifyProposedNativeReportCommitments(const CCoinsView& view,const C
         const auto& owner=reservation.reservation->Lease().owner.Request().miner;
         const auto identity=NativeReportWorkIdentity(policy.policy->Chain(),*report);
         if(!VerifyScriptWork({policy.policy->Chain(),identity,parent.GetBlockHash()},owner,report->signature,signature_budget).proof)return false;
-        const auto old=known->find(report->request);
-        if(old!=known->end()&&(old->second.commitment.root!=report->root||old->second.commitment.ticket!=report->ticket))return false;
-        known->insert_or_assign(report->request,ConfirmedNativeReport{*report,block.GetHash(),parent.nHeight+1});
+        const auto old=known.find(report->request);
+        if(old!=known.end()&&(old->second.commitment.root!=report->root||old->second.commitment.ticket!=report->ticket))return false;
+        known.insert_or_assign(report->request,ConfirmedNativeReport{*report,block.GetHash(),parent.nHeight+1});
     }
     return true;
 }
