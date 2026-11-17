@@ -42,7 +42,10 @@ class ArchiveLaneTests(unittest.TestCase):
             entered.set()
             if not release.wait(3):
                 raise RuntimeError('Test did not release archive')
-        with patch.object(ArchiveLane, '_compact', side_effect=blocked):
+        # This test limits the blocked I/O to the queued completion. The
+        # immediately due background sweep has its own test below.
+        with patch.object(lane_module, 'compact_batch', return_value={'visited': 0}), \
+             patch.object(ArchiveLane, '_compact', side_effect=blocked):
             lane = self.lane()
             service = EngineService.__new__(EngineService)
             service.root, service.archives = self.root, lane

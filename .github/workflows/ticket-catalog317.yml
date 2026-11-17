@@ -15,9 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 3
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Reproduce the original archive-worker test on the released base
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/archive-baseline" 33739e6bfe8bc94c17c61bf37f88574d9875e561
+          cd "$RUNNER_TEMP/archive-baseline"
+          set +e
+          python -B tests/test_archive_lane.py ArchiveLaneTests.test_blocked_cleanup_does_not_block_result_return
+          echo "Original isolated test exit: $?"
+          python -B -m unittest discover -s tests -p "test_*archive*.py"
+          echo "Original suite exit: $?"
       - name: Verify archive retention, cursor restart, and wrap
         run: python -B -m unittest discover -s tests -p "test_*archive*.py"
