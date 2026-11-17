@@ -98,5 +98,12 @@ int main(int argc,char** argv){QApplication app(argc,argv);QFont font("Segoe UI"
  if(argc>1){for(int width:{820,1380}){bounded.resize(width,760);app.processEvents();bounded.grab().save(QString::fromLocal8Bit(argv[1])+QString("/bounded-transaction-%1.png").arg(width));}}
  pageNext->click();require(outTree->findItems("Output 52",Qt::MatchExactly).size()==1&&!pageNext->isEnabled(),"Final output page is incomplete or skips its end");
  bounded.inspectHash(a);defer=true;pageNext->click();require(!deferred.empty(),"Deferred block page fixture did not start");bounded.inspectHash(b);deferred.back()({},{});require(bounded.property("pgn_explorer_selected_block").toJsonObject().value("hash")==b,"Late transaction-page response overwrote newer block selection");
+ // Gold is a subset of non-genesis blocks; coordination must not be the total height.
+ auto counters=page(11354,a);counters["gold_blocks"]=543;bounded.presentSnapshot(counters);
+ auto* goldCount=bounded.findChild<QLabel*>("pgn-explorer-gold-height");auto* coordinationCount=bounded.findChild<QLabel*>("pgn-explorer-coordination-blocks");
+ require(goldCount&&coordinationCount&&goldCount->text()=="543"&&coordinationCount->text()=="10811","Gold and coordination counters used incorrect total-height semantics");
+ if(argc>1){bounded.resize(1360,800);app.processEvents();bounded.grab().save(QString::fromLocal8Bit(argv[1])+"/three-counters.png");}
+ counters["gold_blocks"]=11355;bounded.presentSnapshot(counters);require(goldCount->text()=="—"&&coordinationCount->text()=="—","Invalid Gold count produced a plausible coordination count");
+ counters.remove("gold_blocks");bounded.presentSnapshot(counters);require(goldCount->text()=="—"&&coordinationCount->text()=="—","Missing count was replaced by a fake zero");
  std::cout<<"PASS explorer: latest intent wins, stable refresh/selection, exact amounts, non-skipping paging, compact/wide layout and destroyed-view callback safety\n";
 }
