@@ -66,7 +66,7 @@ int main(int argc,char** argv){try{
     need(!unrelated.complete[0]&&unrelated.largest_gap_complete,"unavailable disclosure outside gap interval does not poison that interval");
     LeaderboardRosettes empty;for(size_t i=0;i<5;++i)need(empty.complete[i]&&empty.counts[i]==0,"known empty remains zero");
     need(empty.Json()["g"]["count"].get_str()=="0","RPC decimal string");
-    need(sizeof(LeaderboardRosetteTotals)==48,"fifty thousand retained row summaries occupy 2.4MB");
+    need(sizeof(LeaderboardRosetteTotals)==56,"fifty thousand retained row summaries occupy 2.8MB including largest-gap metadata");
     LeaderboardRosettes overflow;overflow.counts[1]=std::numeric_limits<uint64_t>::max();overflow.Add(1);
     need(!overflow.complete[1]&&!overflow.Json()["g"].exists("count"),"overflow cannot wrap to zero");
     std::cout<<"PASS "<<checks<<" checks; "<<rows<<" independent Decimal boundary cases\n";return 0;
