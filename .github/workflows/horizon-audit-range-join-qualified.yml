@@ -1,0 +1,46 @@
+name: Verify Horizon audit lease projection without copies
+on:
+  push:
+    branches: [qualification/horizon-audit-range-join]
+permissions:
+  contents: read
+jobs:
+  verify:
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
+      - name: Verify exact native types, cache identity, reorg and byte limits
+        run: |
+          src=wallet/riecoin-core-upstream-v2606/src
+          c++ -std=c++20 -O2 -I"$src" -I"$src/univalue/include" -I"$src/secp256k1/include" tests/native_rpc_audit_cache_test.cpp -o audit-cache-test
+          ./audit-cache-test
+      - name: Acquire the immutable public block sample
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history.blocks
+          echo '09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4  public-history.blocks' | sha256sum --check
+      - name: Build exact Core and verify warm versus cold RPC outputs
+        run: |
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_DAEMON=ON -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF -DPGN_DAEMON_OUTPUT_NAME=pgn-core
+          cmake --build build-native --parallel 3 --target riecoind pgn-native-range-reader-test
+          fixture="$(mktemp -d)"
+          build-native/bin/pgn-native-range-reader-test "$fixture/chain"
+          python tests/native_authority_cache_actual.py --core build-native/bin/pgn-core --history public-history.blocks --receipt evidence/AUTHORITY-CACHE.json
+          python tests/native_statistics_actual.py --core build-native/bin/pgn-core --history public-history.blocks --receipt evidence/STATISTICS.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: horizon-audit-range-join-${{ github.run_id }}
+          path: evidence/*.json
+          if-no-files-found: error
+          retention-days: 7

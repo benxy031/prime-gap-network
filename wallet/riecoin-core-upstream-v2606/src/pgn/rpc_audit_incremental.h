@@ -19,18 +19,18 @@ inline std::shared_ptr<const NativeAuditLedger> AdvanceRpcAuditLedger(
         if(!policy.policy||!ChainRangePolicyOnBranch(view,tip,*policy.policy)||policy.policy->Chain()!=head->chain)return {};
         // Re-derive the authenticated current schedule rather than assuming
         // that a cached assignment survives a policy or retention transition.
-        const auto schedule=ReconstructCandidateRangeSchedule(view,tip,*policy.policy,history,schedule_budget);
-        if(!schedule.schedule)return {};
-        std::map<uint256,const CandidateRangeLease*> leases;
-        for(const auto& lease:schedule.schedule->active)leases.emplace(lease.owner.Id(),&lease);
         std::optional<NativeAuditLedger> next;
         const auto write=[&]() -> NativeAuditLedger& {
             if(!next)next.emplace(*previous);
             return *next;
         };
-        for(const auto& [id,report]:*reports){
-            const auto lease=leases.find(id);if(lease==leases.end())return {};
-            const auto& owned=*lease->second;
+        // Borrow each authenticated lease under cs_main. The verified
+        // request registry permits each signed request ID only once.
+        size_t matched{};
+        const auto bind=[&](const CandidateRangeLease& owned) {
+            const auto report_entry=reports->find(owned.owner.Id());
+            if(report_entry==reports->end())return true;
+            const auto& [id,report]=*report_entry;
             const auto old=previous->find(id);
             if(old!=previous->end()){
                 const auto& retained=old->second;const auto& a=retained.report.commitment;const auto& b=report.commitment;
@@ -38,17 +38,23 @@ inline std::shared_ptr<const NativeAuditLedger> AdvanceRpcAuditLedger(
                    retained.report.block!=report.block||retained.report.height!=report.height||
                    retained.owner!=owned.owner.Request().miner||retained.range.start!=owned.assignment.start||
                    retained.range.length!=owned.assignment.end-owned.assignment.start||retained.range.segments!=100||
-                   !std::equal(retained.range.ticket_id.begin(),retained.range.ticket_id.end(),report.commitment.ticket.begin()))return {};
+                   !std::equal(retained.range.ticket_id.begin(),retained.range.ticket_id.end(),report.commitment.ticket.begin()))return false;
             }else{
                 // Only the direct child may add a previously unseen report.
                 // A missing earlier report requires full reconstruction.
-                if(report.height!=tip.nHeight||report.block!=tip.GetBlockHash())return {};
+                if(report.height!=tip.nHeight||report.block!=tip.GetBlockHash())return false;
                 NativeReportAudit entry;entry.report=report;entry.owner=owned.owner.Request().miner;
                 std::copy(report.commitment.ticket.begin(),report.commitment.ticket.end(),entry.range.ticket_id.begin());
                 entry.range.start=owned.assignment.start;entry.range.length=owned.assignment.end-owned.assignment.start;entry.range.segments=100;
                 write().emplace(id,std::move(entry));
             }
-        }
+            ++matched;
+            return true;
+        };
+        bool consistent=true;
+        const auto schedule=VisitCandidateRangeSchedule(view,tip,*policy.policy,history,schedule_budget,
+            [&](const CandidateRangeLease& lease){if(consistent)consistent=bind(lease);});
+        if(!schedule.schedule||!consistent||matched!=reports->size())return {};
         // No old entry may silently disappear from the confirmed registry.
         if((next?next->size():previous->size())!=reports->size())return {};
         const auto block=history.Load(view,tip,tip.nHeight,schedule_budget.archive);
