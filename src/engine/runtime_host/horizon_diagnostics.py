@@ -1,5 +1,6 @@
 """Export bounded status captures; never reads a wallet, work folder or key."""
-import io,json,re,sys,zipfile,math
+import io,json,re,sys,zipfile,math,os
+from horizon_diagnostics_install import inspect_installations
 MAX_INPUT=2*1024*1024
 MAX_SAMPLES=1800
 FORBIDDEN=('cookie','password','secret','private','signature','nonce','counts','answers','report','scopes','best','recent','wif','authorization','seed','token','credential','api_key','apikey')
@@ -27,12 +28,17 @@ def clean(value,depth=0):
  if type(value)is float and math.isfinite(value):return value
  raise ValueError('Unsupported diagnostic value')
 
-def export(raw):
+def export(raw,locations=None):
  if not isinstance(raw,bytes)or len(raw)>MAX_INPUT:raise ValueError('Diagnostic input exceeds 2 MiB')
  value=json.loads(raw)
  if not isinstance(value,dict):raise ValueError('A diagnostic capture object is required')
  samples=value.get('samples')
  if value.get('schema')!='PGN_DIAGNOSTIC_CAPTURE_V1'or not isinstance(samples,list)or not 1<=len(samples)<=MAX_SAMPLES:raise ValueError('A bounded nonempty diagnostic capture is required')
+ context=value.get('context')
+ if isinstance(context,dict):
+  context.pop('local_paths',None)
+  if locations is not None:
+   context['installation']=inspect_installations(locations,context.get('observed_core_pid'))
  safe=clean(value);encoded=json.dumps(safe,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf8')
  if len(encoded)>MAX_INPUT:raise ValueError('Sanitized diagnostic capture exceeds its bound')
  stream=io.BytesIO()
@@ -45,5 +51,10 @@ def export(raw):
 
 def main():
  raw=sys.stdin.buffer.read(MAX_INPUT+1)
- sys.stdout.buffer.write(export(raw));sys.stdout.buffer.flush();return 0
+ locations=None
+ supplied=os.environ.get('PGN_DIAGNOSTIC_LOCAL_PATHS','')
+ if 0<len(supplied)<=16384:
+  try:locations=json.loads(supplied)
+  except ValueError:pass
+ sys.stdout.buffer.write(export(raw,locations));sys.stdout.buffer.flush();return 0
 if __name__=='__main__':sys.exit(main())

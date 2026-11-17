@@ -16,6 +16,7 @@
 #include <QRegularExpression>
 #include <QTimer>
 #include <QDateTime>
+#include <QMutex>
 #include <stdexcept>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -25,6 +26,37 @@ namespace pgn::update {
 namespace {
 constexpr qsizetype MessageLimit=128*1024,ErrorLimit=16*1024;
 void require(bool value,const char* text){if(!value)throw std::runtime_error(text);}
+QMutex diagnosticMutex;
+QJsonArray diagnosticHistory;
+
+void recordDiagnostic(const QString& operation,const QString& action,QJsonObject event){
+    event.insert("operation",operation);
+    event.insert("action",action);
+    event.insert("observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    const QMutexLocker locker(&diagnosticMutex);
+    const auto prior=diagnosticHistory.isEmpty()?QJsonObject{}:diagnosticHistory.last().toObject();
+    if(event.value("event")=="progress"&&prior.value("event")=="progress"&&
+       prior.value("operation")==operation&&prior.value("stage")==event.value("stage")&&
+       prior.value("component")==event.value("component")){
+        diagnosticHistory.replace(diagnosticHistory.size()-1,event);
+    }else{
+        diagnosticHistory.append(event);
+        while(diagnosticHistory.size()>48)diagnosticHistory.removeFirst();
+    }
+}
+
+QString diagnosticFailure(const QString& error){
+    if(error.contains("disk space",Qt::CaseInsensitive))return "disk_space";
+    if(error.contains("could not be written",Qt::CaseInsensitive))return "file_write";
+    if(error.contains("publisher identity",Qt::CaseInsensitive))return "publisher_unverified";
+    if(error.contains("interrupted",Qt::CaseInsensitive)||error.contains("update server",Qt::CaseInsensitive))return "transfer";
+    if(error.contains("result",Qt::CaseInsensitive)||error.contains("response",Qt::CaseInsensitive))return "helper_response";
+    return "helper_failure";
+}
+}
+QJsonArray componentUpdateDiagnosticHistory(){
+    const QMutexLocker locker(&diagnosticMutex);
+    return diagnosticHistory;
 }
 ComponentUpdateDeployment componentUpdateDeployment(const QString& applicationDirectory,bool testnet){
     const auto root=QFileInfo(applicationDirectory).canonicalFilePath();
@@ -165,6 +197,8 @@ ComponentUpdateService::ComponentUpdateService(ComponentUpdateDeployment deploym
         while(progressBuffer_.contains('\n')){const auto end=progressBuffer_.indexOf('\n');const auto line=progressBuffer_.left(end);progressBuffer_.remove(0,end+1);if(line.size()>4096)continue;
             const auto value=QJsonDocument::fromJson(line).object();
             if(!validComponentUpdateProgress(value))continue;
+            recordDiagnostic(diagnosticOperation_,action_,{{"event","progress"},{"stage",value.value("stage")},
+                {"component",value.value("component")},{"completed",value.value("completed")},{"total",value.value("total")}});
             if(!settled_&&(action_=="prepare"||action_=="prepare_install")&&value.value("stage")=="download"){
                 auto& highWater=downloadHighWater_[value.value("component").toString()];
                 const auto total=value.value("total").toInteger();
@@ -193,6 +227,8 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     const auto data=QJsonDocument(request).toJson(QJsonDocument::Compact);
     if(data.size()>MessageLimit)return false;
     output_.clear();errors_.clear();progressBuffer_.clear();downloadHighWater_.clear();settled_=false;cancelled_=oversized_=timedOut_=false;action_=action;
+    diagnosticOperation_=QUuid::createUuid().toString(QUuid::WithoutBraces);
+    recordDiagnostic(diagnosticOperation_,action_,{{"event","started"}});
     process_->setProgram(deployment_.helper);process_->setArguments({});process_->setWorkingDirectory(QFileInfo(deployment_.helper).absolutePath());
     disconnect(startedConnection_);
     startedConnection_=connect(process_,&QProcess::started,this,[this,data]{disconnect(startedConnection_);process_->write(data);process_->closeWriteChannel();});
@@ -219,7 +255,13 @@ void ComponentUpdateService::complete(){
     if(error.isEmpty()&&result.value("schema").toString()!=expected)error="The update helper returned an unexpected result type.";
     if(error.isEmpty()&&storage&&(!result.value("process_control_performed").isBool()||result.value("process_control_performed").toBool()
         ||!result.value("cleaned").isBool()||result.value("cleaned").toBool()!=(action_=="clean_storage")||!result.value("cache").isObject()))error="The storage helper returned an invalid maintenance result.";
-    if(!error.isEmpty()){if(onError)onError(componentUpdateFailureMessage(error));return;}
+    if(!error.isEmpty()){
+        recordDiagnostic(diagnosticOperation_,action_,{{"event","failed"},
+            {"reason",cancelled_?QString("cancelled"):timedOut_?QString("timed_out"):diagnosticFailure(error)}});
+        if(onError)onError(componentUpdateFailureMessage(error));return;
+    }
+    recordDiagnostic(diagnosticOperation_,action_,{{"event","completed"},{"sequence",result.value("sequence")},
+        {"publisher_verified",result.value("publisher_authenticated")}});
     auto observed=result;if(action_=="check")observed.insert("checked_at_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     if(onResult)onResult(observed);
 }

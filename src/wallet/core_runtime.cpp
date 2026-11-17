@@ -551,8 +551,38 @@ void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,
  },displayedWallet,30000,name.isNull()?QString(""):name);
 }
 void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::function<void(CoreRpcResult,QByteArray)> consume,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel){
+ static const QStringList observedMethods{"getblockchaininfo","getblockhash","getconnectioncount","getpeerinfo",
+    "getwalletinfo","listwallets","getpgnstate","getpgnleaderboard","getpgnworkview","stop","addnode"};
+ QElapsedTimer elapsed;elapsed.start();
+ const auto trace=[this,elapsed,method,timeoutMs,channel,watched=observedMethods.contains(method)]
+        (const QString& outcome,int transport,int http,std::optional<int> application,QJsonValue result=QJsonValue{}){
+  if(!watched)return;
+  QJsonObject event{{"method",method},{"outcome",outcome},{"elapsed_ms",elapsed.elapsed()},
+     {"deadline_ms",timeoutMs},{"channel",channel==CoreRpcChannel::Inspection?"inspection":"ordinary"},
+     {"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+  if(transport)event.insert("transport_code",transport);
+  if(http)event.insert("http_code",http);
+  if(application)event.insert("core_code",*application);
+  if(method=="getpeerinfo"&&result.isArray()){
+   const auto peers=result.toArray();
+   if(peers.size()<=512){
+    qint64 highest=-1;int activeDownloads=0;
+    for(const auto& row:peers){
+     const auto peer=row.toObject();
+     const auto height=peer.value("pgn_announced_height").toInteger(-1);
+     if(height>highest)highest=height;
+     if(peer.value("pgn_syncing").toBool()||!peer.value("inflight").toArray().isEmpty())++activeDownloads;
+    }
+    event.insert("peers",peers.size());
+    event.insert("peers_downloading",activeDownloads);
+    if(highest>=0)event.insert("highest_peer_height",highest);
+   }
+  }
+  diagnosticRpcHistory_.append(event);
+  while(diagnosticRpcHistory_.size()>48)diagnosticRpcHistory_.removeFirst();
+ };
  QFile cookie(profile_.networkDataDirectory()+"/.cookie");
- if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){consume({{},"Core RPC cookie is not ready"},{});return;}
+ if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){trace("credentials_unavailable",0,0,{});consume({{},"Core RPC cookie is not ready"},{});return;}
  const QString endpoint=wallet?walletRpcPath(walletName.isNull()?profile_.walletName:walletName):QString("/");
  QNetworkRequest request(QUrl::fromEncoded(("http://127.0.0.1:"+QString::number(profile_.rpcPort)+endpoint).toUtf8()));
  request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
@@ -560,11 +590,12 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
  const QString requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);
  auto* reply=network_.post(request,consoleRpcEnvelope(requestId,method,params),timeoutMs,channel);
- readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,consume=std::move(consume)](QByteArray bytes,bool oversized){
+ readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,trace,consume=std::move(consume)](QByteArray bytes,bool oversized){
   const auto error=reply->error();const auto http=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const auto detail=reply->errorString().left(160);reply->deleteLater();
-  if(oversized){consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
+  if(oversized){trace("response_limit",int(error),http,{});consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
   const auto decoded=decodeCoreRpcResponse(bytes,requestId,method);
-  if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
+  if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){trace("transport_error",int(error),http,{});consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
+  trace(decoded.error.isEmpty()?"ok":"rpc_error",int(error),http,decoded.applicationCode,decoded.value);
   consume(decoded,decoded.error.isEmpty()?bytes:QByteArray{});
  });
 }
@@ -1001,7 +1032,9 @@ void CoreRuntime::inspect(){
    if(managedUpgradePending_){
     // Adopt a manually rebuilt portable Core through the same verified RPC
     // shutdown path. No wallet/worker readiness is published for the old image.
-    checking_=false;restartAfterManagedUpgrade_=true;recoveryClock_.stop();stopOwned();return;
+    checking_=false;
+    if(managedUpgradeRetry_.isValid()&&managedUpgradeRetry_.elapsed()<5000)return;
+    restartAfterManagedUpgrade_=true;recoveryClock_.stop();stopOwned();return;
    }
     if(!walletManager_->ready())walletManager_->activate(profile_.genesisHash,profile_.chain,profile_.dataDirectory,profile_.walletName,runtimeDirectory_+"/wallet-view.json");
     ensurePeerBootstrap();
@@ -1027,6 +1060,7 @@ void CoreRuntime::inspect(){
 }
 void CoreRuntime::suspendRecoveryForMaintenance(){
  recovery_.suppress();recoveryClock_.stop();restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
+ managedUpgradeRetry_.invalidate();
 }
 void CoreRuntime::stop(){
  suspendRecoveryForMaintenance();stopOwned();
@@ -1034,14 +1068,23 @@ void CoreRuntime::stop(){
 void CoreRuntime::stopOwned(){
  if(!connected_||!processAlive()||stopping_)return;stopping_=true;clock_.start();
  const auto ownerEpoch=epoch();
+ const bool replacing=restartAfterManagedUpgrade_;
  rpc("stop",{},[this,ownerEpoch](QJsonValue,QString error){
   if(!ownerEpoch.matches(epoch())||!processAlive())return;
   if(!error.isEmpty()){
-   stopping_=false;managedUpgradePending_=false;restartAfterManagedUpgrade_=false;
+   stopping_=false;
+   if(restartAfterManagedUpgrade_&&managedUpgradePending_){
+    // A lost reply does not tell us whether the exact old process received
+    // stop. Preserve the handoff until that owner exits or can be rechecked.
+    managedUpgradeRetry_.start();
+    setLinkState(CoreLinkState::Starting,"Waiting for the previously verified Core to shut down");
+    report("CORE UPDATE WAITING · retrying the graceful shutdown of the previous Core");
+    return;
+   }
    report("Graceful Core stop unavailable; client left intact");
   }
   else report("CORE SHUTDOWN REQUESTED · waiting for actual process exit");
- });
+ },false,replacing?30000:3000,{},replacing?CoreRpcChannel::Inspection:CoreRpcChannel::General);
 }
 void CoreRuntime::ensurePeerBootstrap(){
  if(peerBootstrap_||profile_.chain!="test"||!profile_.peers.isEmpty()||!connected_||!processAlive())return;

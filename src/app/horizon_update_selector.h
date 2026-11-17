@@ -28,6 +28,15 @@ inline SelectedCohort selectedUpdateCohort(const QString& applicationDirectory,c
  try{
   const auto pointer=QJsonDocument::fromJson(read(store+"/current.json",128*1024)).object();
   require(pointer.value("schema")=="PGN_ACTIVE_COHORT_V1"&&pointer.value("network")==network&&pointer.value("genesis_hash")==genesis,"Update selection belongs to another network");
+  // The updater records the portable base before committing its first
+  // managed cohort. A baseline is never a destination for a shortcut.
+  if(pointer.value("previous").isNull()){
+   static const QRegularExpression inventoryDigest("^[0-9a-f]{64}$");
+   require(QFileInfo(pointer.value("cohort").toString()).isAbsolute()
+           &&inventoryDigest.match(pointer.value("inventory_sha256").toString()).hasMatch()
+           &&pointer.value("sequence").toInteger(-1)>=0,"Saved update baseline is invalid");
+   return {};
+  }
   const auto directory=QFileInfo(pointer.value("cohort").toString()).canonicalFilePath();
   require(!directory.isEmpty(),"Selected update is absent");
   if(directory==QFileInfo(applicationDirectory).canonicalFilePath())return {};
