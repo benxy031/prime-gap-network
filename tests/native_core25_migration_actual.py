@@ -1,7 +1,7 @@
 """Actual Core20 on-disk fixture -> ordinary Core25 startup, no repair flags."""
 from pathlib import Path,PurePosixPath
 import argparse,base64,hashlib,http.client,json,os,socket,subprocess,time,zipfile
-p=argparse.ArgumentParser();p.add_argument('--core',type=Path,required=True);p.add_argument('--fixture',type=Path,required=True);p.add_argument('--work',type=Path,required=True);p.add_argument('--receipt',type=Path,required=True);a=p.parse_args();a.core=a.core.resolve();a.work.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser();p.add_argument('--core',type=Path,required=True);p.add_argument('--fixture',type=Path,required=True);p.add_argument('--work',type=Path,required=True);p.add_argument('--receipt',type=Path,required=True);p.add_argument('--optional-check-level',type=int,choices=range(5));a=p.parse_args();a.core=a.core.resolve();a.work.mkdir(parents=True,exist_ok=False)
 with zipfile.ZipFile(a.fixture)as z:
  assert len(z.infolist())<256 and sum(i.file_size for i in z.infolist())<128*1024*1024
  for item in z.infolist():
@@ -15,7 +15,9 @@ rows=[]
 for cycle in ['migration','cold-restart']:
  port=free();cookie=a.work/'testnet/.cookie';assert not cookie.exists();log=a.work/'testnet/debug.log';before=log.stat().st_size if log.exists()else 0
  args=[str(a.core),'-datadir='+str(a.work.resolve()),'-testnet=1','-server=1','-rpcbind=127.0.0.1','-rpcallowip=127.0.0.1','-rpcport='+str(port),'-port='+str(free()),'-disablewallet=1','-listen=0','-connect=0','-dnsseed=0','-fixedseeds=0','-discover=0','-par=1','-dbcache=64']
- assert not any(x.startswith('-reindex')or x.startswith('-checklevel')for x in args)
+ if a.optional_check_level is not None:args.append('-checklevel='+str(a.optional_check_level))
+ assert not any(x.startswith('-reindex')for x in args)
+ assert [x for x in args if x.startswith('-checklevel')]==([]if a.optional_check_level is None else ['-checklevel='+str(a.optional_check_level)])
  env=dict(os.environ)
  if os.name=='nt':env['PATH']=os.environ['SystemRoot']+'/System32;'+os.environ['SystemRoot']
  out=(a.work/(cycle+'.stdout')).open('wb');err=(a.work/(cycle+'.stderr')).open('wb');started=time.monotonic();process=subprocess.Popen(args,stdout=out,stderr=err,env=env,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0));out.close();err.close()
@@ -35,7 +37,7 @@ for cycle in ['migration','cold-restart']:
   version=rpc('getnetworkinfo')['subversion'];assert '2026.11.16.25'in version
   with log.open('rb')as f:f.seek(before);newlog=f.read(16*1024*1024).decode('utf-8',errors='replace')
   count=newlog.count('Upgrading legacy PGN audit chainstate through complete block replay');assert count==(1 if cycle=='migration'else 0),(cycle,count)
-  rows.append(dict(cycle=cycle,seconds=time.monotonic()-started,height=chain['blocks'],tip=chain['bestblockhash'],muhash=coins['muhash'],utxos=coins['txouts'],automatic_rebuilds=count,version=version,verifychain4_50=True,no_repair_arguments=True))
+  rows.append(dict(cycle=cycle,seconds=time.monotonic()-started,height=chain['blocks'],tip=chain['bestblockhash'],muhash=coins['muhash'],utxos=coins['txouts'],automatic_rebuilds=count,version=version,verifychain4_50=True,no_repair_arguments=True,optional_check_level=a.optional_check_level))
  finally:
   if process.poll()is None:
    try:rpc('stop')
