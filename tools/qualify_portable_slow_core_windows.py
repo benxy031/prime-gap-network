@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-from struct import unpack
 import subprocess
 import sys
 import tempfile
@@ -16,7 +15,8 @@ import zipfile
 
 GENESIS = "710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314"
 ARCHIVE_HASH = "e9ae1479a2969356ff4a26af4c961046075d38d16fead9f27d446ed44d9f27d7"
-PUBLIC_HISTORY_SHA = "09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4"
+FIRST_BLOCK_SHA = "a7c18fa4cfd97546191ff77d7d9d648ca901addb71edab9e223e64040f71a90f"
+FIRST_BLOCK_HASH = "68808028e5eb36f83ec474aad32c115073752328f4acdd893e0219c49028dd1a"
 RELEASE = "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Windows.zip?qualification=default-wallet-core29"
 WALLET = "QA_Existing_Wallet"
 
@@ -41,16 +41,9 @@ def rpc(data, port, method, params, timeout=3):
     return value["result"]
 
 def next_public_block(path):
-    assert sha(path) == PUBLIC_HISTORY_SHA
-    with path.open("rb") as stream:
-        assert stream.read(23) == b"PGN-PUBLIC-HISTORY-249\x00"
-        for height in (0,1):
-            index,size = unpack("<II",stream.read(8))
-            block_hash,raw = stream.read(32).hex(),stream.read(size)
-            assert index == height and 0<size<=4000000 and len(raw)==size
-            if height==0:
-                assert block_hash==GENESIS
-    return block_hash,raw.hex()
+    raw=path.read_bytes()
+    assert len(raw)==184 and hashlib.sha256(raw).hexdigest()==FIRST_BLOCK_SHA
+    return FIRST_BLOCK_HASH,raw.hex()
 
 def stop_fixture_core(core, pid, data, port):
     try:
