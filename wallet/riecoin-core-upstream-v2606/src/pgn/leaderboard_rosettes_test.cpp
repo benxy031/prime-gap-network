@@ -53,6 +53,17 @@ int main(int argc,char** argv){try{
     need(!missing.complete[1]&&!missing.Json()["g"].exists("count"),"missing target never fake zero");
     LeaderboardRosettes bad;bad.Observe(example,std::string(64,'b'),true,hash);
     need(!bad.complete[0]&&!bad.Json()["q"].exists("count"),"changed root rejected");
+    need(!bad.largest_gap_complete&&!bad.LargestGapJson().exists("gap"),"bad commitment cannot invent largest gap");
+    need(missing.largest_gap_complete&&missing.largest_gap==1900,"largest gap does not depend on target classification");
+    need(replay.largest_gap_complete&&replay.largest_gap==1300,"largest gap exact after replay");
+    need(today.largest_gap_complete&&today.largest_gap==0,"earlier disclosure is not recounted in a new calendar window");
+    LeaderboardRosettes separate;
+    separate.Observe(example,root,true,hash,false);
+    need(separate.largest_gap_complete&&separate.largest_gap==0,"qualification date does not replace first disclosure date");
+    separate.Observe(body("150000000000000010001",1400),root,false,hash,true);
+    need(separate.largest_gap_complete&&separate.largest_gap==1400,"disclosure-window largest gap independent of qualification-window rosettes");
+    LeaderboardRosettes unrelated;unrelated.Observe(example,std::string(64,'b'),true,hash,false);
+    need(!unrelated.complete[0]&&unrelated.largest_gap_complete,"unavailable disclosure outside gap interval does not poison that interval");
     LeaderboardRosettes empty;for(size_t i=0;i<5;++i)need(empty.complete[i]&&empty.counts[i]==0,"known empty remains zero");
     need(empty.Json()["g"]["count"].get_str()=="0","RPC decimal string");
     need(sizeof(LeaderboardRosetteTotals)==48,"fifty thousand retained row summaries occupy 2.4MB");

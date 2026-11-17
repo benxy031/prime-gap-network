@@ -85,8 +85,8 @@ RPCMethod getpgnleaderboard(){
   {"offset",RPCArg::Type::NUM,RPCArg::Default{0},"First ranked operator"},
   {"limit",RPCArg::Type::NUM,RPCArg::Default{100},"Page size 1 through 100"},
   {"bestblockhash",RPCArg::Type::STR_HEX,RPCArg::Optional::OMITTED,"Retained canonical snapshot anchor for coherent continuation; reorganization or eviction requires restart"},
-  {"period",RPCArg::Type::STR,RPCArg::Default{"total"},"total or today_utc; Today uses canonical block-header timestamps"},
-  {"utc_start",RPCArg::Type::NUM,RPCArg::Optional::OMITTED,"Returned UTC midnight required with Today continuation; interval [start,start+86400)"}},
+  {"period",RPCArg::Type::STR,RPCArg::Default{"total"},"total, today_utc, hour_utc, week_utc or month_utc; calendar windows use canonical block-header timestamps and Monday weeks"},
+  {"utc_start",RPCArg::Type::NUM,RPCArg::Optional::OMITTED,"Returned calendar start required with fixed-anchor continuation; interval [utc_start,utc_end)"}},
  RPCResult{RPCResult::Type::OBJ,"","Native leaderboard snapshot",{
   {RPCResult::Type::STR,"schema","PGN_LEADERBOARD_V1"},
   {RPCResult::Type::STR_HEX,"genesis","Native genesis"},{RPCResult::Type::STR_HEX,"bestblockhash","Exact snapshot tip"},
@@ -109,17 +109,20 @@ RPCMethod getpgnleaderboard(){
    if(!expected||expected->GetHex()!=text)throw JSONRPCError(RPC_INVALID_PARAMETER,"Canonical snapshot tip required");
   }
   const auto period=request.params[3].isNull()?std::string{"total"}:request.params[3].get_str();
-  if(period!="total"&&period!="today_utc")throw JSONRPCError(RPC_INVALID_PARAMETER,"Leaderboard period must be total or today_utc");
+  const auto calendar=ParseLeaderboardPeriod(period);
+  if(period!="total"&&!calendar)throw JSONRPCError(RPC_INVALID_PARAMETER,"Unsupported leaderboard UTC period");
   LeaderboardUTCWindow window;bool allow_build=true;
-  if(period=="today_utc"){
-   const auto today=LeaderboardUTCWindow::TodayAt(GetTime());
-   if((expected||offset>0)&&request.params[4].isNull())throw JSONRPCError(RPC_INVALID_PARAMETER,"Today continuation requires fixed anchor and utc_start");
-   if(offset>0&&!expected)throw JSONRPCError(RPC_INVALID_PARAMETER,"Today continuation requires fixed anchor and utc_start");
-   try{window=request.params[4].isNull()?today:LeaderboardUTCWindow::FromStart(request.params[4].getInt<int64_t>());}
+  if(calendar){
+   LeaderboardUTCWindow current;
+   try{current=LeaderboardUTCWindow::At(*calendar,GetTime());}
    catch(const std::exception& error){throw JSONRPCError(RPC_INVALID_PARAMETER,error.what());}
-   if(!expected&&window!=today)throw JSONRPCError(RPC_INVALID_PARAMETER,"A new Today request must use the current UTC day");
-   allow_build=window==today; // prior-day continuation only if already retained
-  }else if(!request.params[4].isNull())throw JSONRPCError(RPC_INVALID_PARAMETER,"UTC interval is only available for today_utc");
+   if((expected||offset>0)&&request.params[4].isNull())throw JSONRPCError(RPC_INVALID_PARAMETER,"Calendar continuation requires fixed anchor and utc_start");
+   if(offset>0&&!expected)throw JSONRPCError(RPC_INVALID_PARAMETER,"Calendar continuation requires fixed anchor and utc_start");
+   try{window=request.params[4].isNull()?current:LeaderboardUTCWindow::FromStart(request.params[4].getInt<int64_t>(),*calendar);}
+   catch(const std::exception& error){throw JSONRPCError(RPC_INVALID_PARAMETER,error.what());}
+   if(!expected&&window!=current)throw JSONRPCError(RPC_INVALID_PARAMETER,"A new request must use the current UTC calendar interval");
+   allow_build=window==current; // Historical continuation only if already retained.
+  }else if(!request.params[4].isNull())throw JSONRPCError(RPC_INVALID_PARAMETER,"Total has no UTC interval");
   return NativeLeaderboardPage(*ReadLeaderboardSnapshot(EnsureAnyChainman(request.context),expected,window,allow_build),uint64_t(offset),unsigned(limit));
  }};
 }
