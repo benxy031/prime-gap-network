@@ -2,6 +2,7 @@
 // the existing anonymous namespace. No consensus caller or new global service.
 std::shared_ptr<const NativeLeaderboardSnapshot> ReadLeaderboardSnapshot(ChainstateManager& manager,const std::optional<uint256>& expected,LeaderboardUTCWindow window={},bool allow_build=true){
  static LeaderboardSnapshotCache cache;
+ static LeaderboardLogCache logarithms; // Access serialized by cache.build_mutex.
  const auto checkExpected=[&](const CBlockIndex& tip){
   if(expected&&*expected!=tip.GetBlockHash())throw JSONRPCError(RPC_INVALID_PARAMETER,"Leaderboard snapshot reset: anchor is reorganized or no longer retained; restart pagination");
  };
@@ -68,7 +69,7 @@ std::shared_ptr<const NativeLeaderboardSnapshot> ReadLeaderboardSnapshot(Chainst
   }
  }
  std::shared_ptr<const NativeLeaderboardSnapshot> snapshot;
- try{snapshot=std::make_shared<const NativeLeaderboardSnapshot>(BuildNativeLeaderboard(*ledger,*anchor,genesis,state,std::move(bindings),window));}
+ try{snapshot=std::make_shared<const NativeLeaderboardSnapshot>(BuildNativeLeaderboard(*ledger,*anchor,genesis,state,std::move(bindings),window,&logarithms));}
  catch(const std::exception& error){throw JSONRPCError(RPC_MISC_ERROR,error.what());}
  {
   LOCK(cs_main);

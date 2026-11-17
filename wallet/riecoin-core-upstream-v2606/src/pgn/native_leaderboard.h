@@ -97,7 +97,8 @@ inline int32_t LeaderboardQualificationHeight(const NativeAuditLedger& ledger,co
 // enters production. All big-integer sums and sorting run outside cs_main.
 inline NativeLeaderboardSnapshot BuildNativeLeaderboard(
     const NativeAuditLedger& ledger, const CBlockIndex& tip, const uint256& genesis,
-    const void* chainstate, LeaderboardBindings bindings,LeaderboardUTCWindow window={}) {
+    const void* chainstate, LeaderboardBindings bindings,LeaderboardUTCWindow window={},
+    LeaderboardLogCache* log_cache=nullptr) {
     NativeLeaderboardSnapshot result{chainstate, genesis, tip.GetBlockHash(), tip.nHeight, std::move(bindings), {}};
     result.window=window;
     for (const auto& [script, member] : ledger.participants) {
@@ -130,7 +131,7 @@ inline NativeLeaderboardSnapshot BuildNativeLeaderboard(
         const bool in_window=!window.utc_start||window.Contains(LeaderboardEventTime(tip,height));
         rosettes[owner].Observe(report.owner_reveal,report.report.commitment.root.GetHex(),in_window,
             [](std::string_view raw){return HexStr(AuditSha(Bytes{raw.begin(),raw.end()}));},
-            !window.utc_start||window.Contains(LeaderboardEventTime(tip,report.report.height)));
+            !window.utc_start||window.Contains(LeaderboardEventTime(tip,report.report.height)),log_cache);
     }
     for (const auto& [id, report] : ledger) {
         const auto* confirmation = tip.GetAncestor(report.report.height);

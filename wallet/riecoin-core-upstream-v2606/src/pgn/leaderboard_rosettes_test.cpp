@@ -17,8 +17,15 @@ int main(int argc,char** argv){try{
     // A separate Python Decimal(100 digits) oracle supplies boundary neighbours.
     std::ifstream f(argv[1]);std::string p,n,d;int64_t gap;int tier,q;unsigned rows{};
     const std::string root(64,'a');const auto hash=[&](std::string_view){return root;};
+    LeaderboardLogCache logarithms;
     while(f>>p>>gap>>n>>d>>tier>>q){
-        LeaderboardRosettes value;value.Observe(body(p,gap,n,d),root,true,hash);++rows;
+        const auto report=body(p,gap,n,d);
+        LeaderboardRosettes value,cold,warm;
+        value.Observe(report,root,true,hash);++rows;
+        cold.Observe(report,root,true,hash,std::nullopt,&logarithms);
+        warm.Observe(report,root,true,hash,std::nullopt,&logarithms);
+        need(cold.Json().write()==value.Json().write()&&warm.Json().write()==value.Json().write(),"exact cached boundary classification");
+        need(warm.LargestGapJson().write()==value.LargestGapJson().write(),"log reuse keeps exact largest gap");
         for(size_t i=0;i<5;++i)need(value.complete[i],"exact boundary classification");
         need(value.counts[0]==q,"independent Q oracle");
         for(size_t i=1;i<5;++i)need(value.counts[i]==(int(i)==tier?1:0),"exclusive tier oracle");
@@ -32,7 +39,7 @@ int main(int argc,char** argv){try{
             UniValue report{UniValue::VOBJ},computed{UniValue::VOBJ};computed.pushKV("best",records);
             report.pushKV("schema","PGN_NETWORK_RANGE_REPORT_V1");report.pushKV("computed",computed);
             report.pushKV("target_numerator",target_n);report.pushKV("target_denominator",target_d);
-            LeaderboardRosettes actual;actual.Observe(report.write(),root,true,hash);
+            LeaderboardRosettes actual;actual.Observe(report.write(),root,true,hash,std::nullopt,&logarithms);
             for(size_t i=0;i<5;++i)need(actual.complete[i]&&actual.counts[i]==expected[i],"multi-record monotone enclosure/fallback oracle");
         };
         while(batches>>group>>p>>gap>>n>>d>>tier>>q){

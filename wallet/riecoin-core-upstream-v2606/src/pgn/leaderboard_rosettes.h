@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -35,6 +36,21 @@ struct LeaderboardRosetteTotals {
     }
 };
 static_assert(sizeof(LeaderboardRosetteTotals)<=56,"Keep persistent per-miner medal summaries compact");
+// Exact bounds depend only on the lower prime and fixed precision, not the
+// report, operator, UTC window or branch. Overflow uses the same calculation.
+class LeaderboardLogCache {
+    std::map<Integer,LogBounds> entries_;
+public:
+    static LogBounds Exact(const Integer& lower){
+        return naturalLogBounds(lower,{192,128},{1024,256,256});
+    }
+    LogBounds Get(const Integer& lower){
+        if(const auto it=entries_.find(lower);it!=entries_.end())return it->second;
+        auto bounds=Exact(lower);
+        if(entries_.size()<8192)entries_.emplace(lower,bounds);
+        return bounds;
+    }
+};
 struct LeaderboardRosettes:LeaderboardRosetteTotals {
     std::set<std::pair<Integer,Integer>> seen;
     void Add(size_t index){
@@ -53,7 +69,7 @@ struct LeaderboardRosettes:LeaderboardRosetteTotals {
     // outside the requested time window, so a replay cannot earn a second row.
     // The caller authenticates report inclusion, owner, root and qualification.
     template<class Hash> void Observe(std::string_view disclosure,std::string_view root,
-                                      bool in_window,Hash&& hash,std::optional<bool> gap_window={}) {
+                                      bool in_window,Hash&& hash,std::optional<bool> gap_window={},LeaderboardLogCache* log_cache=nullptr) {
         const bool largest_in_window=gap_window.value_or(in_window);
         const auto unavailable=[&]{if(in_window)Unavailable();if(largest_in_window)largest_gap_complete=false;};
         if(disclosure.size()>65536||root.size()!=64||hash(disclosure)!=root){unavailable();return;}
@@ -83,16 +99,18 @@ struct LeaderboardRosettes:LeaderboardRosetteTotals {
         // ln is monotone. These two directed endpoints decide every ordinary
         // record in a narrow scientific range; only an interval-straddling
         // record needs its own logarithm. This is exact, never smoothing.
-        const auto minimum=naturalLogBounds(local.begin()->first,{192,128},{1024,256,256});
-        const auto maximum=local.begin()->first==local.rbegin()->first?minimum:
-            naturalLogBounds(local.rbegin()->first,{192,128},{1024,256,256});
+        const auto bounds=[&](const Integer& lower){
+            return log_cache?log_cache->Get(lower):LeaderboardLogCache::Exact(lower);
+        };
+        const auto minimum=bounds(local.begin()->first);
+        const auto maximum=local.begin()->first==local.rbegin()->first?minimum:bounds(local.rbegin()->first);
         for(const auto& key:local){
             std::optional<LogBounds> exact;
             const auto compare=[&](const Integer& n,const Integer& d){
                 const Integer value=(key.second*d)<<minimum.fractional_bits;
                 if(value>=n*maximum.upper)return MeritDecision::Meets;
                 if(value<n*minimum.lower)return MeritDecision::Below;
-                if(!exact)exact=naturalLogBounds(key.first,{192,128},{1024,256,256});
+                if(!exact)exact=bounds(key.first);
                 if(value>=n*exact->upper)return MeritDecision::Meets;
                 if(value<n*exact->lower)return MeritDecision::Below;
                 return MeritDecision::Indeterminate;
