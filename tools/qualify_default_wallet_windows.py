@@ -18,7 +18,7 @@ WALLET = "QA_Existing_Wallet"
 
 ROOT = Path.cwd()
 sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "src/update"), str(ROOT / "tests")]
-from horizon_windows_lifecycle import OwnedWindowsProcess, owned_ipc
+from horizon_windows_lifecycle import OwnedWindowsProcess, ProcessAbsentError, owned_ipc
 from native_grouped249_actual import Node
 
 def sha(path):
@@ -61,6 +61,9 @@ def use_portable_wallet(base, scratch, evidence):
     process = None
     owned = None
     visible = {}
+    managed_pid = None
+    listed = None
+    rpc_error = None
     with (evidence / "stdout.log").open("wb") as out, (evidence / "stderr.log").open("wb") as err:
         try:
             process = subprocess.Popen([str(exe),"--testnet","--start-minimized","--update-healthcheck"],cwd=base,env=env,
@@ -72,14 +75,19 @@ def use_portable_wallet(base, scratch, evidence):
                     state=owned_ipc(owned,"--inspect-owned")
                     visible={key:state.get(key) for key in ("pgn_wallet_connected","pgn_wallet_embedded","pgn_core_link_state",
                                                             "pgn_core_link_detail","pgn_wallet_frontend_error","pgn_wallet_embedded_pid")}
-                    loaded=rpc(data,port,"listwallets",[])
-                    if visible["pgn_wallet_connected"] and visible["pgn_wallet_embedded"] and loaded==[WALLET]:
+                    managed_pid=visible["pgn_wallet_embedded_pid"]
+                    listed=rpc(data,port,"listwallets",[])
+                    rpc_error=None
+                    # Wallet-side verified link plus the exact wallet on the
+                    # expected Core cookie/port are authoritative. The mining
+                    # canvas may be unmounted during a portable wallet launch.
+                    if visible["pgn_core_link_state"]=="ready" and visible["pgn_wallet_embedded"] and listed==[WALLET]:
                         break
-                except (RuntimeError,OSError,ValueError):
-                    pass
+                except (RuntimeError,OSError,ValueError) as error:
+                    rpc_error=type(error).__name__
                 time.sleep(.5)
             else:
-                raise RuntimeError(f"Existing default wallet failed to connect automatically: {visible}")
+                raise RuntimeError(f"Expected wallet did not attach: state={visible}, wallets={listed}, rpc_error={rpc_error}")
             assert rpc(data,port,"getblockhash",[0])==GENESIS
             assert visible["pgn_wallet_embedded_pid"]>0
             assert [p.name for p in (data / "testnet/wallets").iterdir() if (p / "wallet.dat").is_file()]==[WALLET]
@@ -97,6 +105,24 @@ def use_portable_wallet(base, scratch, evidence):
                     process.wait(timeout=15)
             if owned:
                 owned.close()
+            if managed_pid:
+                try:
+                    core_owner=OwnedWindowsProcess(managed_pid,core,sha(core))
+                except ProcessAbsentError:
+                    core_owner=None
+                if core_owner:
+                    try:
+                        second_deadline=time.monotonic()+15
+                        while not core_owner.exited() and time.monotonic()<second_deadline:
+                            time.sleep(.25)
+                        if not core_owner.exited():
+                            rpc(data,port,"stop",[])
+                            second_deadline=time.monotonic()+25
+                            while not core_owner.exited() and time.monotonic()<second_deadline:
+                                time.sleep(.25)
+                            assert core_owner.exited(),"Synthetic Core did not stop"
+                    finally:
+                        core_owner.close()
     assert process.returncode==0
     return receipt
 
@@ -104,7 +130,7 @@ def main():
     assert os.name=="nt" and os.environ.get("GITHUB_ACTIONS")=="true"
     evidence=ROOT / "default-wallet-evidence"
     evidence.mkdir()
-    with tempfile.TemporaryDirectory(prefix="pgn-qaw-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="pgn-qaw-",ignore_cleanup_errors=True) as tmp:
         scratch=Path(tmp)
         archive=scratch / "release.zip"
         with urlopen(RELEASE,timeout=120) as source, archive.open("xb") as dest:
