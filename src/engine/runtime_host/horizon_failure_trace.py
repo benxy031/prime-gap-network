@@ -93,13 +93,18 @@ def startup_failure_phase(error, step, cookie=None):
     """
     if step not in ('controller_startup', 'verifying_core'):
         return 'Needs attention'
+    return 'Waiting for connection' if core_connection_unavailable(error, cookie) else 'Needs attention'
+
+
+def core_connection_unavailable(error, cookie=None):
+    """Recognize transport loss without interpreting an application error's cause."""
     import errno
     from urllib.error import HTTPError, URLError
     from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
     seen = set()
     while isinstance(error, URLError) and not isinstance(error, HTTPError):
         if id(error) in seen:
-            return 'Needs attention'
+            return False
         seen.add(id(error))
         error = error.reason
     transient = isinstance(error, (ConnectionError, TimeoutError, CoreRpcUnavailable))
@@ -115,4 +120,4 @@ def startup_failure_phase(error, step, cookie=None):
         }
         if isinstance(error, FileNotFoundError) and cookie is not None and error.filename:
             transient = os.path.normcase(os.path.abspath(error.filename)) == os.path.normcase(os.path.abspath(cookie))
-    return 'Waiting for connection' if transient else 'Needs attention'
+    return transient

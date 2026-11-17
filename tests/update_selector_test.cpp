@@ -29,6 +29,20 @@ int main(int argc,char** argv){
  write(candidate+"/components.json",raw+" ");check(!select().error.isEmpty());write(candidate+"/components.json",raw);
  const auto outside=temp.path()+"/outside";QDir().mkpath(outside);
  pointer.insert("cohort",outside);publish();check(!select().error.isEmpty());
+ // An interrupted first update can leave a portable baseline recorded
+ // outside the store. Both an existing and a deleted old EXE must let the
+ // newly extracted package continue without a launch or a repair warning.
+ pointer.insert("previous",QJsonValue(QJsonValue::Null));
+ pointer.insert("sequence",1);
+ write(outside+"/"+primary,exe);write(outside+"/components.json",raw);
+ publish();check(select().executable.isEmpty()&&select().error.isEmpty());
+ pointer.insert("cohort",temp.path()+"/removed-portable");publish();
+ check(select().executable.isEmpty()&&select().error.isEmpty());
+ pointer.insert("inventory_sha256","unverified");publish();check(!select().error.isEmpty());
+ pointer.insert("inventory_sha256",sha(raw));
+ pointer.insert("cohort",outside);
+ pointer.insert("previous",QJsonObject{{"cohort",base}});publish();
+ check(select().executable.isEmpty()&&select().error.contains("outside its installation store"));
  pointer.insert("cohort",candidate);publish();check(select().error.isEmpty());
  check(pgn::app::selectedUpdateCohort(candidate,store,"testnet",QString(64,'5'),false).executable.isEmpty());
  // A fresh manual package must not be redirected back to an older managed

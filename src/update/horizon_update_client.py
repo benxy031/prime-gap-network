@@ -19,7 +19,6 @@ from tuf.ngclient.config import UpdaterConfig
 from tuf.api.exceptions import LengthOrHashMismatchError
 import stage_component_bundle as stage
 import horizon_update_progress as progress
-from tuf.ngclient.urllib3_fetcher import Urllib3Fetcher
 
 MAX_CATALOG = 128 * 1024
 # Retention target for disposable artifacts, not a lifetime or admission quota.
@@ -64,7 +63,9 @@ class AuthenticatedUpdates:
             (self.cache / '.owner').write_bytes(MARKER)
         self.bootstrap, self.bootstrap_sha256 = bootstrap, bootstrap_sha256
         self.metadata_url, self.target_url = metadata_url, target_url
-        self.fetcher=progress.ProgressFetcher(fetcher or Urllib3Fetcher(app_user_agent='PGN-Horizon-Updater'))
+        self.fetcher = progress.ProgressFetcher(
+            fetcher or progress.ResumableTargetFetcher(app_user_agent='PGN-Horizon-Updater')
+        )
         namespace=self.cache/bootstrap_sha256[:20]
         stage._plain_chain(namespace);namespace.mkdir(parents=True,exist_ok=True)
         marker=namespace/'.bootstrap-sha256';expected=(bootstrap_sha256+'\n').encode()

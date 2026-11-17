@@ -202,9 +202,16 @@ public:
    const auto key=pgn::wallet::coreLinkKey(state);
    setProperty("pgn_core_link_state",key);setProperty("pgn_core_link_detail",detail);
    auto history=property("pgn_core_link_transitions").toJsonArray();
-   history.append(QJsonObject{{"state",key},{"detail",detail},{"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+   const QJsonObject event{{"state",key},{"detail",detail},{"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+   history.append(event);
    while(history.size()>32)history.removeFirst();
    setProperty("pgn_core_link_transitions",history);
+   auto startup=property("pgn_core_first_transitions").toJsonArray();
+   if(startup.size()<16&&!property("pgn_core_first_ready").toBool()){
+    startup.append(event);
+    setProperty("pgn_core_first_transitions",startup);
+   }
+   if(state==pgn::wallet::CoreLinkState::Ready)setProperty("pgn_core_first_ready",true);
    if(state==pgn::wallet::CoreLinkState::Rejected){if(auto* pages=findChild<QStackedWidget*>("pgn-wallet-pages"))pages->setCurrentIndex(1);management_->showConnectionIssue(detail);setProperty("pgn_wallet_setup_required",true);if(startupAttention)startupAttention(detail);}
    if(state!=pgn::wallet::CoreLinkState::Ready)accountPanel_->setEnabled(false);
    else accountPanel_->setEnabled(runtime_->displayWalletReady()&&!runtime_->walletManager()->busy());
@@ -269,6 +276,10 @@ void readWalletAuditActivity(QWidget* widget,qint64 height,const QString& hash,c
 void readWalletAuditDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditDetails(id,std::move(consume));else consume({},"Wallet audit view unavailable");}
 void bindWalletStartupAttention(QWidget* widget,std::function<void(QString)> receive){if(auto* view=dynamic_cast<WalletCoreView*>(widget)){view->startupAttention=std::move(receive);if(view->property("pgn_wallet_setup_required").toBool()&&view->startupAttention)view->startupAttention("Wallet connection requires attention");}}
 void readWalletLocalConnection(QWidget* widget,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readLocalConnection(std::move(consume));else consume({},"Local wallet connection unavailable");}
+QJsonArray walletCoreRpcDiagnosticHistory(QWidget* widget){
+ if(auto* view=dynamic_cast<WalletCoreView*>(widget))return view->networkRuntime()->diagnosticRpcHistory();
+ return {};
+}
 void stopWalletCoreForUpdate(QWidget* widget,std::function<void(QString)> done){
  auto* view=dynamic_cast<WalletCoreView*>(widget);if(!view){done("Wallet runtime is unavailable");return;}
  const QPointer<pgn::wallet::CoreRuntime> core(view->networkRuntime());

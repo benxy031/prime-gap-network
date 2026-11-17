@@ -1,5 +1,7 @@
 """Network readiness before requesting work; never creates a private fork."""
-import re,time
+import re
+from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
+from horizon_failure_trace import core_connection_unavailable
 
 def _completed_inbound_header_exchange(peer):
  # Core leaves the PGN height hint absent after an empty HEADERS response.
@@ -55,12 +57,26 @@ def synchronized(rpc,height,expected_hash):
  return True
 
 def wait_for_network(worker):
- while not worker.quitting.is_set():
-  # Publication of already-computed reports must be able to resume after an
-  # application restart even when the user keeps the compute devices OFF.
-  # Compute/prefetch lanes still enforce running independently.
-  if synchronized(worker.rpc,worker.args.bootstrap_height,worker.args.bootstrap_hash):return True
-  if not worker.running.is_set():worker.message('Mining paused; no work requested','Paused')
-  else:worker.message('Synchronizing the testnet before requesting an automatic ticket','Synchronizing')
-  worker.quitting.wait(1)
- return False
+    retry_delay = 1
+    while not worker.quitting.is_set():
+        # This guard only reads Core. Mutating RPCs retain their own recovery
+        # rules because losing their reply does not establish their outcome.
+        try:
+            if synchronized(worker.rpc, worker.args.bootstrap_height, worker.args.bootstrap_hash):
+                return True
+        except (OSError, CoreRpcError, CoreRpcUnavailable) as error:
+            if not core_connection_unavailable(error, getattr(worker.args, 'cookie', None)):
+                raise
+            worker.message('Waiting for Core to respond before requesting work', 'Waiting for connection')
+            worker.quitting.wait(retry_delay)
+            retry_delay = min(15, retry_delay * 2)
+            continue
+        retry_delay = 1
+        # Paused devices can still publish already-computed reports once the
+        # checkpoint is verified. Compute and prefetch enforce ON separately.
+        if not worker.running.is_set():
+            worker.message('Mining paused; no work requested', 'Paused')
+        else:
+            worker.message('Synchronizing the testnet before requesting an automatic ticket', 'Synchronizing')
+        worker.quitting.wait(1)
+    return False

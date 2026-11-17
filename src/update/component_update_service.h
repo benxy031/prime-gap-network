@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPointer>
 #include <QStringList>
@@ -21,6 +22,7 @@ std::optional<int> componentVersionComparison(QString installed,QString availabl
 bool componentUpdateNeedsRecovery(const QString& genesis);
 bool validComponentUpdateProgress(const QJsonObject&);
 QString componentUpdateFailureMessage(const QString& detail);
+QJsonArray componentUpdateDiagnosticHistory();
 QJsonObject currentUpdateActivation(const QString& applicationRoot,const QString& mutableDataRoot);
 QString startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject& request);
 
@@ -45,6 +47,7 @@ private:
     QTimer* timer_{};
     QByteArray output_,errors_,progressBuffer_;
     QString action_;
+    QString diagnosticOperation_;
     QHash<QString, QPair<qint64, qint64>> downloadHighWater_;
     QMetaObject::Connection startedConnection_;
     bool settled_{true},cancelled_{},oversized_{},timedOut_{};
