@@ -551,8 +551,23 @@ void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,
  },displayedWallet,30000,name.isNull()?QString(""):name);
 }
 void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::function<void(CoreRpcResult,QByteArray)> consume,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel){
+ static const QStringList observedMethods{"getblockchaininfo","getblockhash","getconnectioncount","getpeerinfo",
+    "getwalletinfo","listwallets","getpgnstate","getpgnleaderboard","getpgnworkview","stop","addnode"};
+ QElapsedTimer elapsed;elapsed.start();
+ const auto trace=[this,elapsed,method,timeoutMs,channel,watched=observedMethods.contains(method)]
+        (const QString& outcome,int transport,int http,std::optional<int> application){
+  if(!watched)return;
+  QJsonObject event{{"method",method},{"outcome",outcome},{"elapsed_ms",elapsed.elapsed()},
+     {"deadline_ms",timeoutMs},{"channel",channel==CoreRpcChannel::Inspection?"inspection":"ordinary"},
+     {"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+  if(transport)event.insert("transport_code",transport);
+  if(http)event.insert("http_code",http);
+  if(application)event.insert("core_code",*application);
+  diagnosticRpcHistory_.append(event);
+  while(diagnosticRpcHistory_.size()>48)diagnosticRpcHistory_.removeFirst();
+ };
  QFile cookie(profile_.networkDataDirectory()+"/.cookie");
- if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){consume({{},"Core RPC cookie is not ready"},{});return;}
+ if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){trace("credentials_unavailable",0,0,{});consume({{},"Core RPC cookie is not ready"},{});return;}
  const QString endpoint=wallet?walletRpcPath(walletName.isNull()?profile_.walletName:walletName):QString("/");
  QNetworkRequest request(QUrl::fromEncoded(("http://127.0.0.1:"+QString::number(profile_.rpcPort)+endpoint).toUtf8()));
  request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
@@ -560,11 +575,12 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
  const QString requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);
  auto* reply=network_.post(request,consoleRpcEnvelope(requestId,method,params),timeoutMs,channel);
- readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,consume=std::move(consume)](QByteArray bytes,bool oversized){
+ readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,trace,consume=std::move(consume)](QByteArray bytes,bool oversized){
   const auto error=reply->error();const auto http=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const auto detail=reply->errorString().left(160);reply->deleteLater();
-  if(oversized){consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
+  if(oversized){trace("response_limit",int(error),http,{});consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
   const auto decoded=decodeCoreRpcResponse(bytes,requestId,method);
-  if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
+  if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){trace("transport_error",int(error),http,{});consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
+  trace(decoded.error.isEmpty()?"ok":"rpc_error",int(error),http,decoded.applicationCode);
   consume(decoded,decoded.error.isEmpty()?bytes:QByteArray{});
  });
 }

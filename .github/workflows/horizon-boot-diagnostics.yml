@@ -1,0 +1,163 @@
+name: Qualify startup, installation, update, and network diagnostics for Horizon
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/horizon-boot-diagnostics]
+permissions:
+  contents: read
+concurrency:
+  group: horizon-core-handoff-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    needs: windows-host
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/names286/
+            /qualification/names303/
+            /qualification/statistics309/
+            /qualification/social278-qt/
+            /qualification/social278-access/
+            /qualification/wallet285/
+            /qualification/cpu296/
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: horizon-engine-host87-windows
+          path: diagnostic-host
+      - name: Build the Windows application from the qualified sources
+        run: |
+          cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-app --target pgn-update-selector-test pgn-component-update-service-test pgn-core-rpc-stream-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^(update-selector|component-update-service|core-rpc-stream)$'
+          cmake --build build-app --target pgn-diagnostic-capture-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ./build-app/pgn-diagnostic-capture-test.exe ./diagnostic-host/dist/horizon-engine-host/horizon-engine-host.exe
+          cmake --build build-app --target PGN-Horizon pgn-component-updates-dialog-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^component-updates-dialog$'
+          mkdir -p horizon-core-handoff
+          cp build-app/PGN-Horizon.exe horizon-core-handoff/
+          printf '%s\n' "$GITHUB_SHA" > horizon-core-handoff/SOURCE.txt
+          qmake6 -query QT_VERSION > horizon-core-handoff/QT_VERSION.txt
+          sha256sum horizon-core-handoff/*.exe > horizon-core-handoff/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: horizon-boot-diagnostics-windows
+          path: horizon-core-handoff
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-host:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned engine host freezer
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-engine-host.txt
+      - name: Assert readiness does not abandon an ON request on timeout
+        run: python -B -m unittest discover -s tests -p "test_*network*.py"
+      - name: Retain pre-recording startup and compare installed program locations safely
+        run: python -B tests/test_diagnostic_installations.py -v
+      - name: Build the actual engine host
+        run: python -B tools/build_horizon_engine_host.py --output host87
+      - name: Verify the binary, its exact sources, and its audit-only self-test
+        shell: python
+        run: |
+          import hashlib, json, subprocess
+          from pathlib import Path
+          out = Path('host87')
+          binary = out/'dist/horizon-engine-host/horizon-engine-host.exe'
+          manifest = json.loads((out/'ENGINE-HOST-SOURCE.json').read_bytes())
+          assert manifest['component_version'] == '2026.11.17.87'
+          assert manifest['executable_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
+          for path, expected in manifest['sources'].items():
+              assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected, path
+          assert '2026.11.17.87' in subprocess.check_output([str(binary), '--version'], text=True, timeout=20)
+          result = json.loads(subprocess.check_output([str(binary), '--audit-batch-self-test'], text=True, timeout=60))
+          assert result['passed'] and result['checks'] == 17 and result['no_network'] and result['no_child_processes']
+          assert not result['cpu_activated'] and not result['scientific_qualification']
+          (out/'HOST-SELFTEST.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          (out/'SOURCE.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],text=True), encoding='utf-8')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-engine-host87-windows
+          path: |
+            host87/dist/horizon-engine-host
+            host87/ENGINE-HOST-SOURCE.json
+            host87/ENGINE-HOST-SOURCE.sha256
+            host87/HOST-SELFTEST.json
+            host87/SOURCE.txt
+          if-no-files-found: error
+          retention-days: 7

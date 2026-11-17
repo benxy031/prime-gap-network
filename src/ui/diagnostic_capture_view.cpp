@@ -8,6 +8,7 @@
 #include <QStandardPaths>
 #include <QSaveFile>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QTimer>
 #include <QJsonDocument>
 #include <QDateTime>
@@ -20,10 +21,13 @@ namespace pgn::ui {
 namespace {
 constexpr qsizetype CaptureBudget=2*1024*1024;
 constexpr int SampleLimit=1800;
+constexpr qsizetype ContextBudget=48*1024;
+constexpr qsizetype ContextReserve=96*1024;
 class DiagnosticCaptureView final:public QWidget {
  QString exporter_;std::function<QJsonObject()> sample_;QTimer timer_;QJsonArray samples_;qsizetype bytes_{};bool exporting_{};
  QLabel* status_{};QPushButton *start_{},*stop_{},*save_{};
  QLabel* storageStatus_{};QPushButton *inspectStorage_{},*cleanStorage_{};DiagnosticStorageRequest storageRequest_;bool storageBusy_{};quint64 storageGeneration_{};
+ std::function<QJsonObject()> context_;
  void storage(const QString& action){
   if(!storageRequest_||storageBusy_)return;
   storageBusy_=true;const auto generation=++storageGeneration_;inspectStorage_->setEnabled(false);cleanStorage_->setEnabled(false);
@@ -50,7 +54,7 @@ class DiagnosticCaptureView final:public QWidget {
  void capture(){
   auto value=sample_?sample_():QJsonObject{};value.insert("observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
   const auto encoded=QJsonDocument(value).toJson(QJsonDocument::Compact);
-  if(encoded.size()>65536||samples_.size()>=SampleLimit||bytes_+encoded.size()+1024>CaptureBudget){stop();state("Capture capacity reached · save the retained recording");return;}
+  if(encoded.size()>65536||samples_.size()>=SampleLimit||bytes_+encoded.size()+ContextReserve+1024>CaptureBudget){stop();state("Capture capacity reached · save the retained recording");return;}
   samples_.append(value);bytes_+=encoded.size()+1;state(QString("Recording · %1 samples · %2 KiB / 2048 KiB").arg(samples_.size()).arg((bytes_+1023)/1024));
  }
  void stop(){timer_.stop();start_->setEnabled(!exporting_);stop_->setEnabled(false);save_->setEnabled(!exporting_&&!samples_.isEmpty());state(QString("Stopped · %1 samples retained in memory").arg(samples_.size()));}
@@ -58,7 +62,7 @@ public:
  DiagnosticCaptureView(QString exporter,std::function<QJsonObject()> sample,QWidget* parent):QWidget(parent),exporter_(std::move(exporter)),sample_(std::move(sample)),timer_(this){
   setObjectName("pgn-test-diagnostics");auto* box=new QVBoxLayout(this);box->setContentsMargins(24,20,24,20);box->setSpacing(16);
   auto* title=new QLabel("Testnet diagnostics",this);title->setStyleSheet("font-size:22px;font-weight:600;color:#e7f9f1;");box->addWidget(title);
-  auto* description=new QLabel("Record application, network and device status, then save a ZIP for troubleshooting.\nThe capture stays in memory until you save it. Wallet files, keys, credentials, audit answers and gap tables are excluded.",this);description->setWordWrap(true);description->setStyleSheet("font-size:13px;color:#a8c7cc;");box->addWidget(description);
+  auto* description=new QLabel("Record application, network and device status, then save a ZIP. It includes startup events for this session and checks of the known installations.\nWallet files, keys, credentials, audit answers and gap tables are excluded.",this);description->setWordWrap(true);description->setStyleSheet("font-size:13px;color:#a8c7cc;");box->addWidget(description);
   auto* actions=new QHBoxLayout;start_=new QPushButton("Start recording",this);stop_=new QPushButton("Stop",this);save_=new QPushButton("Save ZIP",this);
   start_->setObjectName("pgn-diagnostics-start");stop_->setObjectName("pgn-diagnostics-stop");save_->setObjectName("pgn-diagnostics-save");
   for(auto* button:{start_,stop_,save_}){button->setMinimumHeight(36);button->setStyleSheet("font-size:12px;padding:6px 16px;");}
@@ -84,12 +88,28 @@ public:
   });
  }
  void setStorageActions(DiagnosticStorageRequest request){storageRequest_=std::move(request);inspectStorage_->setEnabled(bool(storageRequest_));cleanStorage_->setEnabled(false);storageStatus_->setText(storageRequest_?"Analyze storage to see its locations and reclaimable space.":"Storage maintenance is unavailable.");}
+ void setContextProvider(std::function<QJsonObject()> provider){context_=std::move(provider);}
  void exportTo(const QString& file){
   if(exporting_||samples_.isEmpty()||file.isEmpty())return;stop();
-  const auto input=QJsonDocument(QJsonObject{{"schema","PGN_DIAGNOSTIC_CAPTURE_V1"},{"samples",samples_}}).toJson(QJsonDocument::Compact);
+  QJsonObject capture{{"schema","PGN_DIAGNOSTIC_CAPTURE_V1"},{"samples",samples_}};
+  QJsonObject localPaths;
+  if(context_){
+   auto context=context_();
+   localPaths=context.take("local_paths").toObject();
+   if(QJsonDocument(context).toJson(QJsonDocument::Compact).size()<=ContextBudget)capture.insert("context",context);
+   else capture.insert("context",QJsonObject{{"context_budget_exceeded",true}});
+  }
+  const auto input=QJsonDocument(capture).toJson(QJsonDocument::Compact);
   if(input.size()>CaptureBudget){state("Capture exceeds the export budget; recording retained");return;}
   exporting_=true;setProperty("pgn_capture_saved",QVariant{});start_->setEnabled(false);save_->setEnabled(false);state("Saving diagnostic ZIP…");
   auto* process=new QProcess(this);auto* deadline=new QTimer(process);deadline->setSingleShot(true);
+  // An older bundled exporter may still be installed. It must never receive
+  // local path strings in the capture document that it will archive.
+  auto environment=QProcessEnvironment::systemEnvironment();
+  environment.remove("PGN_DIAGNOSTIC_LOCAL_PATHS");
+  if(!localPaths.isEmpty())environment.insert("PGN_DIAGNOSTIC_LOCAL_PATHS",
+      QString::fromUtf8(QJsonDocument(localPaths).toJson(QJsonDocument::Compact)));
+  process->setProcessEnvironment(environment);
   auto output=std::make_shared<QByteArray>(),errors=std::make_shared<QByteArray>();auto done=std::make_shared<bool>(false);
   const auto finish=[this,process,deadline,output,done,file](bool success,const QString& error){
    if(*done)return;*done=true;deadline->stop();if(process->state()!=QProcess::NotRunning)process->kill();
@@ -110,5 +130,6 @@ public:
 }
 QWidget* createDiagnosticCaptureView(QString exporter,std::function<QJsonObject()> sample,QWidget* parent){return new DiagnosticCaptureView(std::move(exporter),std::move(sample),parent);}
 void setDiagnosticStorageActions(QWidget* view,DiagnosticStorageRequest request){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->setStorageActions(std::move(request));}
+void setDiagnosticContextProvider(QWidget* view,std::function<QJsonObject()> provider){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->setContextProvider(std::move(provider));}
 void saveDiagnosticCapture(QWidget* view,const QString& filename){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->exportTo(filename);}
 }

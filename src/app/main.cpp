@@ -160,7 +160,15 @@ int main(int argc,char** argv) {
 #endif
  QApplication app(argc,argv);QCoreApplication::setOrganizationName("PGN");QCoreApplication::setApplicationName("PGN Horizon");
  QApplication::setWindowIcon(QIcon(":/frontier/app-icon.png"));
- pgn::ui::StartupWindow startupWindow(app.arguments().contains("--start-minimized"));startupWindow.step(1,"Reading configuration");app.processEvents(QEventLoop::ExcludeUserInputEvents);
+ pgn::ui::StartupWindow startupWindow(app.arguments().contains("--start-minimized"));
+ QElapsedTimer startupElapsed;startupElapsed.start();
+ QJsonArray startupHistory;
+ const auto markStartup=[&](int stage,const QString& label){
+  startupHistory.append(QJsonObject{{"stage",stage},{"message",label},{"elapsed_ms",startupElapsed.elapsed()},
+   {"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}});
+  startupWindow.step(stage,label);
+ };
+ markStartup(1,"Reading configuration");app.processEvents(QEventLoop::ExcludeUserInputEvents);
   QWidget* inspectCanvas=nullptr;QWidget* inspectArchive=nullptr;QWidget* inspectWallet=nullptr;QWidget* inspectEngineConfiguration=nullptr;QWidget* inspectRecords=nullptr;
  QLabel* inspectRuntimeStatus=nullptr;
  std::function<QJsonObject(const QString&)> showOwned;
@@ -333,7 +341,7 @@ int main(int argc,char** argv) {
  const bool explicitLegacyRoot=startupArguments.size()>1&&!startupArguments[1].startsWith("--");
  if(!pgn::app::bindMutableDataRoot(root,pgn::wallet::installedCoreGenesis(root),explicitLegacyRoot)){std::cerr<<"User-data path binding unavailable\n";return 7;}
  const auto updateState=pgn::update::updateStateDirectory(pgn::wallet::installedCoreGenesis(root));
- startupWindow.step(2,"Verifying the selected application components");
+ markStartup(2,"Verifying the selected application components");
  const auto updateSelection=updateState.isEmpty()?pgn::app::SelectedCohort{}:pgn::app::selectedUpdateCohort(applicationDirectory,updateState+"/installation",testnetMode?"testnet":"main",pgn::wallet::installedCoreGenesis(root),startupArguments.contains("--update-healthcheck"));
  if(!updateSelection.executable.isEmpty()){
   if(QProcess::startDetached(updateSelection.executable,startupArguments.mid(1),QFileInfo(updateSelection.executable).absolutePath()))return 0;
@@ -364,7 +372,7 @@ int main(int argc,char** argv) {
    QObject::connect(socket,&QLocalSocket::readyRead,&app,activate);QObject::connect(socket,&QLocalSocket::disconnected,socket,&QObject::deleteLater);if(socket->canReadLine())QTimer::singleShot(0,socket,activate);
   }
  });
- startupWindow.step(3,"Building the interface");
+ markStartup(3,"Building the interface");
  const bool legacyResidentViewer=startup.developerLegacy&&(startupArguments.contains("--resident-viewer")||startupArguments.contains("--observe-only"));
  QString config=startup.developerLegacy&&argc>2&&!QString::fromLocal8Bit(argv[2]).startsWith("--")?QString::fromLocal8Bit(argv[2]):QString{};
  if(startup.developerLegacy&&config.isEmpty()&&QFile::exists(root+"/evidence/native-transport-recovered-20261012.json"))
@@ -574,7 +582,7 @@ int main(int argc,char** argv) {
  auto* miningWorkspace=new QWidget;auto* miningBox=new QVBoxLayout(miningWorkspace);miningBox->setContentsMargins(0,0,0,0);miningBox->setSpacing(0);
  miningBox->addWidget(tabs,1);
  auto* major=new QStackedWidget;major->setObjectName("pgn-primary-workspaces");major->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Ignored);major->addWidget(miningWorkspace);
-  startupWindow.step(4,"Opening the wallet connection and device controls");
+  markStartup(4,"Opening the wallet connection and device controls");
   inspectWallet=pgn::ui::createWalletCoreView(root,[canvas,identity,networkObservation,displayNetwork](const auto& observation){
    *networkObservation=observation;displayNetwork();
   pgn::ui::presentNetwork(canvas,observation);
@@ -698,6 +706,35 @@ int main(int argc,char** argv) {
    const auto software=pgn::ui::diagnosticComponentSnapshot(components?components->property("pgn_component_local_snapshot").toJsonObject():QJsonObject{});
    return QJsonObject{{"network",network},{"software",software},{"hardware",canvas->property("pgn_diagnostic_hardware").toJsonObject()},{"cpu",cpus},{"mining_control",pgn::ui::diagnosticMiningStartup(canvas)},
     {"ticket",select(canvas->property("pgn_network_ticket_frame").toJsonObject(),{"ticket_number","ticket_id","work_role","phase","bits","start","end","positions","positions_total","current","minimum_gap","speed_rate","average_rate","compute_tests_rate","source_age_ns","network_notice"})}};
+  });
+  pgn::ui::setDiagnosticContextProvider(diagnostics,[&startupHistory,&window,inspectWallet,updateState,updateSelection]{
+   const auto linkHistory=[inspectWallet](const char* property){
+    static const QRegularExpression networkError(R"(Core RPC read failed \(([0-9]{1,3})\))");
+    QJsonArray trace;
+    for(const auto& entry:inspectWallet->property(property).toJsonArray()){
+     const auto event=entry.toObject();const auto detail=event.value("detail").toString();
+     QJsonObject safe{{"state",event.value("state")},{"observed_utc",event.value("observed_utc")}};
+     const auto code=networkError.match(detail);if(code.hasMatch())safe.insert("rpc_transport_code",code.captured(1).toInt());
+     if(detail.startsWith("getblockchaininfo:"))safe.insert("rpc_method","getblockchaininfo");
+     else if(detail.startsWith("getblockhash(0):"))safe.insert("rpc_method","getblockhash");
+     trace.append(safe);
+    }
+    return trace;
+   };
+   const auto selectorStatus=updateSelection.preferRunning?QString("portable_preferred"):
+      updateSelection.error.isEmpty()?QString("ordinary"):
+      updateSelection.error.contains("outside its installation store")?QString("outside_installation_store"):QString("saved_selection_unusable");
+   // Paths are only sent to the bundled exporter for bounded local checks.
+   // The exporter includes relation IDs and state, never these path strings.
+   const QJsonObject locations{{"program",QCoreApplication::applicationDirPath()},
+      {"installation",updateState.isEmpty()?QString{}:updateState+"/installation"},
+      {"core_runtime",window.property("pgn_update_core_runtime_directory").toString()},
+      {"application_data",window.property("pgn_update_data_root").toString()}};
+   return QJsonObject{{"startup",startupHistory},{"core_first",linkHistory("pgn_core_first_transitions")},
+     {"core_link_history",linkHistory("pgn_core_link_transitions")},{"selector_outcome",selectorStatus},
+     {"update_history",pgn::update::componentUpdateDiagnosticHistory()},
+     {"core_rpc_history",pgn::ui::walletCoreRpcDiagnosticHistory(inspectWallet)},
+     {"observed_core_pid",inspectWallet->property("pgn_wallet_embedded_pid").toLongLong()},{"local_paths",locations}};
   });
   pgn::ui::setDiagnosticStorageActions(diagnostics,[diagnostics,root,testnetMode](const QString& action,pgn::ui::DiagnosticStorageReply reply){
    try{
@@ -1523,9 +1560,9 @@ int main(int argc,char** argv) {
     ready->stop();ready->deleteLater();if(showWallet){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();}else{pgn->setChecked(true);tabs->setCurrentWidget(community);}
    });ready->start();});
  }
- startupWindow.step(5,"Preparing the audit view");
+ markStartup(5,"Preparing the audit view");
  QTimer::singleShot(0,&window,[&startupWindow,auditAnimation,networkWork]{
-  const auto ready=[&startupWindow]{startupWindow.step(6,"Interface ready");startupWindow.finish();};
+  const auto ready=[&startupWindow,&markStartup]{markStartup(6,"Interface ready");startupWindow.finish();};
   if(networkWork)networkWork->prepareStartupMap();if(auditAnimation)auditAnimation->prepareForStartup(ready);else ready();
  });
  return app.exec();

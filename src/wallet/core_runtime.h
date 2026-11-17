@@ -9,6 +9,7 @@
 #include "wallet/peer_bootstrap.h"
 #include "wallet/core_recovery_policy.h"
 #include <QObject>
+#include <QJsonArray>
 #include <QProcess>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -71,6 +72,7 @@ public:
  void readBlockTransactions(const QString& blockHash,int offset,std::function<void(QJsonObject,QString)>);
  void readDifficultyHeader(const ChainObservation& anchor,const QString& hash,std::function<void(QJsonObject,QString,QDateTime)>);
  qint64 processId() const {return pid_;}
+ QJsonArray diagnosticRpcHistory() const {return diagnosticRpcHistory_;}
  bool startPending()const{return launching_||orphanedStart_||verifier_.isRunning();}
  bool connected() const {return connected_;}
  bool walletReady()const{return walletReady_;}
@@ -142,6 +144,7 @@ private:
  bool checking_{},connected_{},launching_{},stopping_{},allowNew_{},orphanedStart_{};
  bool managedUpgradePending_{},restartAfterManagedUpgrade_{};
  QElapsedTimer managedUpgradeRetry_;
+ QJsonArray diagnosticRpcHistory_;
  bool walletChecking_{},walletReady_{};
  // UI/application network context is immutable; profiles cannot select it.
  social::RpcQueue* socialRpcQueue_{};
