@@ -1001,7 +1001,9 @@ void CoreRuntime::inspect(){
    if(managedUpgradePending_){
     // Adopt a manually rebuilt portable Core through the same verified RPC
     // shutdown path. No wallet/worker readiness is published for the old image.
-    checking_=false;restartAfterManagedUpgrade_=true;recoveryClock_.stop();stopOwned();return;
+    checking_=false;
+    if(managedUpgradeRetry_.isValid()&&managedUpgradeRetry_.elapsed()<5000)return;
+    restartAfterManagedUpgrade_=true;recoveryClock_.stop();stopOwned();return;
    }
     if(!walletManager_->ready())walletManager_->activate(profile_.genesisHash,profile_.chain,profile_.dataDirectory,profile_.walletName,runtimeDirectory_+"/wallet-view.json");
     ensurePeerBootstrap();
@@ -1027,6 +1029,7 @@ void CoreRuntime::inspect(){
 }
 void CoreRuntime::suspendRecoveryForMaintenance(){
  recovery_.suppress();recoveryClock_.stop();restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
+ managedUpgradeRetry_.invalidate();
 }
 void CoreRuntime::stop(){
  suspendRecoveryForMaintenance();stopOwned();
@@ -1034,14 +1037,23 @@ void CoreRuntime::stop(){
 void CoreRuntime::stopOwned(){
  if(!connected_||!processAlive()||stopping_)return;stopping_=true;clock_.start();
  const auto ownerEpoch=epoch();
+ const bool replacing=restartAfterManagedUpgrade_;
  rpc("stop",{},[this,ownerEpoch](QJsonValue,QString error){
   if(!ownerEpoch.matches(epoch())||!processAlive())return;
   if(!error.isEmpty()){
-   stopping_=false;managedUpgradePending_=false;restartAfterManagedUpgrade_=false;
+   stopping_=false;
+   if(restartAfterManagedUpgrade_&&managedUpgradePending_){
+    // A lost reply does not tell us whether the exact old process received
+    // stop. Preserve the handoff until that owner exits or can be rechecked.
+    managedUpgradeRetry_.start();
+    setLinkState(CoreLinkState::Starting,"Waiting for the previously verified Core to shut down");
+    report("CORE UPDATE WAITING · retrying the graceful shutdown of the previous Core");
+    return;
+   }
    report("Graceful Core stop unavailable; client left intact");
   }
   else report("CORE SHUTDOWN REQUESTED · waiting for actual process exit");
- });
+ },false,replacing?30000:3000,{},replacing?CoreRpcChannel::Inspection:CoreRpcChannel::General);
 }
 void CoreRuntime::ensurePeerBootstrap(){
  if(peerBootstrap_||profile_.chain!="test"||!profile_.peers.isEmpty()||!connected_||!processAlive())return;

@@ -1,0 +1,108 @@
+name: Qualify Windows Core ownership handoff and portable startup
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/horizon-core-handoff-retry]
+permissions:
+  contents: read
+concurrency:
+  group: horizon-core-handoff-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/names286/
+            /qualification/names303/
+            /qualification/statistics309/
+            /qualification/social278-qt/
+            /qualification/social278-access/
+            /qualification/wallet285/
+            /qualification/cpu296/
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+
+      - name: Build the Windows application from the qualified sources
+        run: |
+          cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-app --target pgn-update-selector-test pgn-component-update-service-test pgn-core-rpc-stream-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^(update-selector|component-update-service|core-rpc-stream)$'
+          cmake --build build-app --target PGN-Horizon pgn-component-updates-dialog-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^component-updates-dialog$'
+          mkdir -p horizon-core-handoff
+          cp build-app/PGN-Horizon.exe horizon-core-handoff/
+          printf '%s\n' "$GITHUB_SHA" > horizon-core-handoff/SOURCE.txt
+          qmake6 -query QT_VERSION > horizon-core-handoff/QT_VERSION.txt
+          sha256sum horizon-core-handoff/*.exe > horizon-core-handoff/SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: horizon-core-handoff-windows
+          path: horizon-core-handoff
+          if-no-files-found: error
+          retention-days: 7

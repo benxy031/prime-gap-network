@@ -141,6 +141,7 @@ private:
  QString linkDetail_;
  bool checking_{},connected_{},launching_{},stopping_{},allowNew_{},orphanedStart_{};
  bool managedUpgradePending_{},restartAfterManagedUpgrade_{};
+ QElapsedTimer managedUpgradeRetry_;
  bool walletChecking_{},walletReady_{};
  // UI/application network context is immutable; profiles cannot select it.
  social::RpcQueue* socialRpcQueue_{};
