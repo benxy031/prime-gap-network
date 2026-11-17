@@ -155,7 +155,11 @@ class NativeCohortLifecycle:
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,**self.launch_options())
         self.new_ui=self.own_process(process.pid,exe,files[self.ui_relative.casefold()]['sha256'])
         self.started=True;self.record('verifying_startup')
-        deadline=time.monotonic()+60
+        started=time.monotonic()
+        phase_limit=60
+        deadline=started+phase_limit
+        hard_deadline=started+5*phase_limit
+        confirmed_warmup=set()
         last_error=''
         while time.monotonic()<deadline:
             if self.new_ui.exited():raise RuntimeError('Updated UI exited before health confirmation')
@@ -167,8 +171,17 @@ class NativeCohortLifecycle:
                 raise RuntimeError('Updated Core identity was refused: '+str(state.get('pgn_core_link_detail',''))[:300])
             try:
                 if state.get('pgn_update_genesis')==self.store.context['genesis_hash'] and state.get('pgn_update_data_root')==str(self.data).replace('\\','/'):
-                    if not self.had_core or state.get('pgn_core_link_state')=='ready':
+                    link=state.get('pgn_core_link_state')
+                    if not self.had_core or link=='ready':
                         self.record('healthy');return True
+                    # The exact owned application reports a verified RPC -28
+                    # while its matching Core reads or verifies its chain.
+                    detail=str(state.get('pgn_core_link_detail',''))[:300]
+                    _, marker, warmup=detail.partition('Core RPC error (-28): ')
+                    if link=='rpc_unavailable' and marker and warmup and warmup not in confirmed_warmup:
+                        confirmed_warmup.add(warmup)
+                        deadline=min(hard_deadline,deadline+phase_limit)
+                    last_error=detail or 'Waiting for the expected Core to become ready'
             except (RuntimeError,OSError,ValueError) as error:last_error=str(error)
             time.sleep(.25)
         raise RuntimeError('Updated client health was not confirmed: '+last_error[:200])

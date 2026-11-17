@@ -74,6 +74,15 @@ int main(int argc,char** argv){
   check(!waiting.contains("ticket_id")&&!waiting.contains("positions")&&!waiting.contains("audit_service"),"Unverified prior assignment leaked into current synchronization presentation");
   render(waiting,"captures/waiting-assignment.png");
   check(rail.property("pgn_ticket_display_phase").toString()=="Synchronizing"&&!rail.property("pgn_ticket_progress_fraction").isValid(),"Actual widget displayed prior ticket progress before current assignment verification");
+  for(const auto* phase:{"Searching","Reconnecting","Waiting for connection","Disconnected","Needs attention"}){
+   auto stale=search;stale["phase"]=phase;stale["source_stale"]=true;
+   const auto checkpoint=stale;
+   const auto pending=currentAssignmentPresentation(stale);
+   check(stale==checkpoint,"Stale display modified the retained checkpoint");
+   check(pending.value("phase").toString()==QString::fromLatin1(phase)&&!pending.contains("ticket_id")&&!pending.contains("positions")&&!pending.contains("audit_service"),"Expired or unverified range appeared as current");
+   rail.present(pending);app.processEvents();
+   check(!rail.property("pgn_ticket_progress_fraction").isValid(),"Stale worker frame still appeared as active progress");
+  }
   check(currentAssignmentPresentation(search)==search&&currentAssignmentPresentation(paused)==paused,"Valid searching or paused checkpoint changed");
   render(search,"captures/assignment-restored.png");check(rail.property("pgn_ticket_progress_fraction").isValid(),"Fresh verified assignment could not restore progress");
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";

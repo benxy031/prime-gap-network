@@ -6,10 +6,10 @@
 #include <cmath>
 #include <optional>
 namespace pgn::ui {
-// Synchronization is not proof that a retained checkpoint is the current
-// assignment. Clear only this presentation copy; durable work stays intact.
+// A stale checkpoint does not establish a current ticket. Strip its
+// active range and progress from the presentation copy.
 inline QJsonObject currentAssignmentPresentation(const QJsonObject& frame){
- if(frame.value("phase")!="Synchronizing")return frame;
+ if(frame.value("phase")!="Synchronizing"&&!frame.value("source_stale").toBool())return frame;
  QJsonObject waiting;
  for(const auto* key:{"schema","phase","message","source_device","stream_id","local_sequence","observed_utc"})
   if(frame.contains(key))waiting.insert(key,frame.value(key));

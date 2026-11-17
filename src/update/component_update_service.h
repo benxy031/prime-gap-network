@@ -1,5 +1,6 @@
 #pragma once
 #include <QObject>
+#include <QHash>
 #include <QJsonObject>
 #include <QPointer>
 #include <QStringList>
@@ -44,6 +45,7 @@ private:
     QTimer* timer_{};
     QByteArray output_,errors_,progressBuffer_;
     QString action_;
+    QHash<QString, QPair<qint64, qint64>> downloadHighWater_;
     QMetaObject::Connection startedConnection_;
     bool settled_{true},cancelled_{},oversized_{},timedOut_{};
 };
