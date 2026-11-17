@@ -1,0 +1,64 @@
+name: Qualify the compiled Core31 runtime against deterministic interrupted data
+on:
+  push:
+    branches: [qualification/core31-exact-deterministic-replay]
+permissions:
+  contents: read
+  actions: read
+env:
+  PYTHONUTF8: '1'
+jobs:
+  reproduction:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: ubuntu
+            core: pgn-core
+          - runner: windows-latest
+            platform: windows
+            core: pgn-core.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 16
+    steps:
+      - name: Permit long paths in the disposable checkout
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tests
+            qualification/native-restart
+      - name: Fetch the signed public-history qualification inputs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history249.blocks
+          gh api repos/wizz13150/prime-gap-network/releases/assets/754436598 -H 'Accept: application/octet-stream' > legacy20.zip
+          python -c "from pathlib import Path;import hashlib;assert hashlib.sha256(Path('legacy20.zip').read_bytes()).hexdigest()=='33f5d5a206786715725ffbed770bfeba3b014898bf6c0e734419fbbb62a050c6';assert hashlib.sha256(Path('public-history249.blocks').read_bytes()).hexdigest()=='09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4'"
+      - name: Test native replay after controlled shutdown, normal restart and same wallet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tests/test_core31_exact_replay.py
+      - name: Run the remaining native history and monetary checks on the same executable
+        shell: bash
+        env:
+          CORE: exact-native-qa/Core/${{ matrix.core }}
+        run: |
+          set -euo pipefail
+          python tests/native_authority_cache_actual.py --core "$CORE" --history public-history249.blocks --receipt exact-native-qa/AUTHORITY-CACHE.json
+          python tests/native_core25_migration_actual.py --core "$CORE" --fixture legacy20.zip --work optional-core --receipt exact-native-qa/MIGRATION-OPTIONAL-OFF.json --optional-check-level 0
+          python tests/native_statistics_actual.py --core "$CORE" --history public-history249.blocks --receipt exact-native-qa/STATISTICS.json
+          python tests/native_grouped249_actual.py --core "$CORE" --history public-history249.blocks --legacy --receipt exact-native-qa/ACTUAL.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: exact-core31-${{ matrix.platform }}-${{ github.run_id }}
+          path: |
+            exact-native-qa/*.json
+            exact-native-qa/INTERRUPTED-ONCE.log
+          retention-days: 7
