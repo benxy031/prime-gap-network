@@ -1,0 +1,53 @@
+name: Verify portable Horizon keeps its existing wallet through slow local Core reads
+on:
+  push:
+    branches: [qualification/horizon-core-rpc-portable]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  wallet_default:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /tests/native_grouped249_actual.py
+      - name: Use the standard pinned updater and IPC dependencies
+        shell: pwsh
+        run: |
+          python -m venv .qa-wallet
+          if ($LASTEXITCODE -ne 0) { throw 'Could not prepare isolated Python' }
+          & .qa-wallet/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Acquire the exact compiled Windows candidate from its successful test run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 44183907297 --name horizon-rpc-resilience-windows --dir candidate
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history.blocks
+          if ($LASTEXITCODE -ne 0) { throw 'Authenticated public test block fixture missing' }
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Windows qualification artifact missing' }
+          if ((Get-Content -LiteralPath candidate/SOURCE.txt -Raw).Trim() -ne '6352fe64b2d82c4b9b8556b0ac225117f57fa57c') { throw 'Wrong compiled source' }
+          $pgnExpectation = ((Get-Content -LiteralPath candidate/SHA256SUMS.txt -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash -LiteralPath candidate/PGN-Horizon.exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pgnExpectation) { throw 'Wrong Windows executable digest' }
+      - name: Observe the production application before and after the exact patch
+        shell: pwsh
+        run: |
+          $pgnExpectation = ((Get-Content -LiteralPath candidate/SHA256SUMS.txt -Raw).Trim() -split '\s+')[0]
+          & .qa-wallet/Scripts/python.exe tools/qualify_portable_slow_core_windows.py candidate/PGN-Horizon.exe $pgnExpectation public-history.blocks
+          if ($LASTEXITCODE -ne 0) { throw 'Real isolated wallet/Core slow-read comparison did not pass' }
+      - name: Preserve synthetic test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: horizon-slow-core-portable-${{ github.run_id }}
+          path: default-wallet-evidence/
+          if-no-files-found: error
+          retention-days: 7
