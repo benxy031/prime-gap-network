@@ -90,9 +90,10 @@ class CutTheSignedBundle(ResumableTargetFetcher):
                 if first and offset>=8*1024*1024:
                     raise ProtocolError('Controlled end-to-end cut during the anonymous signed bundle transfer')
 
-def verify_slow_core_handoff(current_code, expected):
+def verify_slow_core_handoff(current_code, expected, runtime_directory):
     """Run a real portable GUI against the same recorded older owned process."""
-    profile_path,=list(local.rglob('wallet-core.json'))+list(roaming.rglob('wallet-core.json'))
+    profile_path=(Path(runtime_directory)/'wallet-core.json').resolve(strict=True)
+    assert profile_path.is_relative_to(QA.resolve())
     original=profile_path.read_bytes()
     profile=json.loads(original)
     assert Path(profile['data_directory']).resolve()==wallet_data.resolve()
@@ -246,8 +247,8 @@ ui['version']='2026.11.17.177'
 binary=next(e for e in ui['files'] if e['path']=='PGN-Horizon.exe')
 binary.update(bytes=candidate.stat().st_size,sha256=sha(candidate))
 manifest_path.write_text(json.dumps(manifest),encoding='utf-8')
-outputs['old']=verify_slow_core_handoff(base,False)
-outputs['candidate']=verify_slow_core_handoff(standin,True)
+outputs['old']=verify_slow_core_handoff(base,False,view['pgn_update_core_runtime_directory'])
+outputs['candidate']=verify_slow_core_handoff(standin,True,view['pgn_update_core_runtime_directory'])
 outputs['PASS']=True
 (E/'PLATFORM-PREFLIGHT.json').write_text(json.dumps(outputs,indent=2)+'\n',encoding='utf-8')
 print(json.dumps(outputs))
