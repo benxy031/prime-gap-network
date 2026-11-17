@@ -93,8 +93,8 @@ jobs:
           ctest --test-dir build-app -R '^core-rpc-stream$' --output-on-failure
       - name: Build the real application and protect actual wallet and identity paths
         run: |
-          cmake --build build-app --target PGN-Horizon pgn-core-rpc-test pgn-core-runtime-network-test pgn-wallet-setup-lifecycle-test pgn-managed-core-profile-test pgn-chain-observation-test --parallel 4
-          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app -R '^(core-rpc|core-runtime-network|wallet-setup-lifecycle|managed-core-profile|chain-observation)$' --output-on-failure
+          cmake --build build-app --target PGN-Horizon pgn-core-rpc-test pgn-core-runtime-network-test pgn-wallet-setup-test pgn-wallet-setup-change-test pgn-managed-core-profile-test pgn-chain-observation-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app -R '^(core-rpc|core-runtime-network|wallet-setup|wallet-setup-change|managed-core-profile|chain-observation)$' --output-on-failure
           mkdir -p horizon-rpc-qualification
           cp build-app/PGN-Horizon.exe horizon-rpc-qualification/
           printf '%s\n' "$GITHUB_SHA" > horizon-rpc-qualification/SOURCE.txt
