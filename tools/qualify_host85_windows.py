@@ -53,7 +53,9 @@ try:
     dependency_probe=subprocess.run([str(new/'Core/pgn-core.exe'),'-version'],capture_output=True,timeout=15)
     assert dependency_probe.returncode==0,dependency_probe.stderr.decode(errors='replace')[-1000:]
     assert versions==dict(ui='2026.11.17.174',core='2026.11.17.28',gpu='2026.11.17.85',cpu='2026.11.6.389')
-    assert candidate['selected']==['gpu']
+    assert candidate['selected']==['core','gpu','ui']
+    unchanged=lambda cohort:{c['id']:c for c in cohort['components'] if c['id']!='gpu'}
+    assert unchanged(old)==unchanged(manifest)
     assert {c['id']:c['version']for c in old['components']}==dict(ui='2026.11.17.174',core='2026.11.17.28',gpu='2026.11.15.84',cpu='2026.11.6.389')
     assert sha(new/'PGN-Horizon.exe')==sha(exe)
     assert sha(new/'Core/pgn-core.exe')==sha(base/'Core/pgn-core.exe')
@@ -82,7 +84,7 @@ try:
     assert life.new_ui.exited(),'New real GUI failed to close normally'
     current=store.current();reopened=CohortStore(QA/'installation',context,context_hash)
     assert reopened.current()==current and sha(sentinel)==saved
-    result=dict(PASS=True,public_updater=True,fixed_public_baseline=True,metadata_sequence=38,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Standard per-user Windows layout: actual download/authentication/cohort activation/Qt restart from public UI174/Core28/GPU84 with only GPU selected. Exact frozen host self-test passed after staging.')
+    result=dict(PASS=True,requested_components=['gpu'],selected_with_dependencies=candidate['selected'],public_updater=True,fixed_public_baseline=True,metadata_sequence=38,old_versions={c['id']:c['version']for c in old['components']},new_versions=versions,old_normal_exit=process.returncode,real_Qt_restart=True,new_pid=new_pid,new_normal_close=True,selector_retained=True,isolated_data_bytes_preserved=True,sections=seen,seconds=time.monotonic()-start,scope='Standard per-user Windows layout: actual download/authentication/cohort activation/Qt restart from public UI174/Core28/GPU84 with only GPU selected. Exact frozen host self-test passed after staging.')
 finally:
     active=life.new_ui if life and life.new_ui else own
     if active and not active.exited():
