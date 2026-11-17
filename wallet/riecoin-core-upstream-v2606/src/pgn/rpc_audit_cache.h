@@ -36,8 +36,14 @@ class RpcAuditSnapshotCache {
     const void* chainstate_{};
     Hash tip_{},genesis_{};
     std::shared_ptr<const Ledger> ledger_;
+    size_t charge_{};
+
+    void remember(const void* chainstate,const Hash& tip,const Hash& genesis,
+                  const std::shared_ptr<const Ledger>& ledger,size_t charge){
+        chainstate_=chainstate;tip_=tip;genesis_=genesis;ledger_=ledger;charge_=charge;
+    }
 public:
-    void reset(){chainstate_=nullptr;ledger_.reset();}
+    void reset(){chainstate_=nullptr;ledger_.reset();charge_=0;}
     std::shared_ptr<const Ledger> get(const void* chainstate,const Hash& tip,const Hash& genesis)const{
         if(chainstate_==chainstate&&tip_==tip&&genesis_==genesis)return ledger_;
         return {};
@@ -45,15 +51,20 @@ public:
     // A caller must supply its verified active child's exact parent. Build
     // outside the retained snapshot: failed/oversized successors cannot leak
     // partially applied events, and readers of the old snapshot stay coherent.
+    // An independently verified unchanged snapshot may keep its identity.
     template<class Builder>
     std::shared_ptr<const Ledger> advance(const void* chainstate,const Hash& parent,
         const Hash& tip,const Hash& genesis,Builder&& build,size_t budget=RpcAuditCacheBudget){
         auto previous=get(chainstate,parent,genesis);
+        const auto previous_charge=charge_;
         reset();
         if(!previous||parent==tip)return {};
-        auto next=std::forward<Builder>(build)(*previous);
-        if(!next)return {};
-        auto snapshot=std::make_shared<const Ledger>(std::move(*next));
+        std::shared_ptr<const Ledger> snapshot=std::forward<Builder>(build)(previous);
+        if(!snapshot)return {};
+        if(snapshot==previous){
+            if(previous_charge<=budget)remember(chainstate,tip,genesis,snapshot,previous_charge);
+            return snapshot;
+        }
         // A valid but oversized result can still be returned to this caller;
         // retain() enforces the original byte budget for future requests.
         retain(chainstate,tip,genesis,snapshot,budget);
@@ -62,8 +73,11 @@ public:
     bool retain(const void* chainstate,const Hash& tip,const Hash& genesis,
                 std::shared_ptr<const Ledger> ledger,size_t budget=RpcAuditCacheBudget){
         reset();
-        if(!ledger||!RpcAuditCacheCharge(*ledger,budget))return false;
-        chainstate_=chainstate;tip_=tip;genesis_=genesis;ledger_=std::move(ledger);return true;
+        if(!ledger)return false;
+        const auto charge=RpcAuditCacheCharge(*ledger,budget);
+        if(!charge)return false;
+        remember(chainstate,tip,genesis,ledger,*charge);
+        return true;
     }
 };
 }

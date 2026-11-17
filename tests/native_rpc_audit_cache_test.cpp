@@ -43,8 +43,9 @@ int main(){
  // Direct-child successors are transactional. Real native-ledger objects
  // exercise copy isolation and failure; these fixtures are not chain proofs.
  unsigned builds=0;
- const auto append=[&](const NativeAuditLedger& before)->std::optional<NativeAuditLedger>{
-  ++builds;auto next=before;next[key(77)].owner_reveal="new disclosure";return next;
+ const auto append=[&](const std::shared_ptr<const NativeAuditLedger>& before){
+  ++builds;auto next=*before;next[key(77)].owner_reveal="new disclosure";
+  return std::make_shared<const NativeAuditLedger>(std::move(next));
  };
  check(!cache.advance(&secondState,key(2),key(3),key(10),append));check(builds==0);
  check(!cache.get(&firstState,key(2),key(10)));
@@ -53,11 +54,11 @@ int main(){
  auto successor=cache.advance(&firstState,key(2),key(3),key(10),append);
  check(builds==1&&successor&&successor->size()==3);check(immutable->size()==2&&!immutable->contains(key(77)));
  check(!cache.get(&firstState,key(2),key(10)));check(cache.get(&firstState,key(3),key(10))==successor);
- const auto refused=[&](const NativeAuditLedger& before)->std::optional<NativeAuditLedger>{++builds;auto partial=before;partial.clear();return {};};
+ const auto refused=[&](const std::shared_ptr<const NativeAuditLedger>& before)->std::shared_ptr<const NativeAuditLedger>{++builds;auto partial=*before;partial.clear();return {};};
  check(!cache.advance(&firstState,key(3),key(4),key(10),refused));check(builds==2&&successor->size()==3);
  check(!cache.get(&firstState,key(4),key(10))&&!cache.get(&firstState,key(3),key(10)));
  check(cache.retain(&firstState,key(3),key(10),successor));
- bool threw=false;try{cache.advance(&firstState,key(3),key(4),key(10),[](const NativeAuditLedger&)->std::optional<NativeAuditLedger>{throw std::runtime_error("invalid event");});}catch(const std::runtime_error&){threw=true;}
+ bool threw=false;try{cache.advance(&firstState,key(3),key(4),key(10),[](const std::shared_ptr<const NativeAuditLedger>&)->std::shared_ptr<const NativeAuditLedger>{throw std::runtime_error("invalid event");});}catch(const std::runtime_error&){threw=true;}
  check(threw&&!cache.get(&firstState,key(4),key(10))&&successor->size()==3);
  check(cache.retain(&firstState,key(3),key(10),successor));
  check(!cache.advance(&firstState,key(3),key(3),key(10),append));check(builds==2);
@@ -66,5 +67,14 @@ int main(){
  check(cache.retain(&firstState,key(3),key(10),successor));
  auto uncached=cache.advance(&firstState,key(3),key(4),key(10),append,1);
  check(uncached&&uncached->size()==3&&!cache.get(&firstState,key(4),key(10)));
+ // A quiet, verified child reuses the snapshot and its original charge,
+ // but publishes it at the new anchor only and still honours a tighter budget.
+ const auto unchanged=[](const std::shared_ptr<const NativeAuditLedger>& before){return before;};
+ check(cache.retain(&firstState,key(4),key(10),ledger,*charge));
+ check(cache.advance(&firstState,key(4),key(5),key(10),unchanged,*charge)==ledger);
+ check(!cache.get(&firstState,key(4),key(10)));
+ check(cache.get(&firstState,key(5),key(10))==ledger);
+ check(cache.advance(&firstState,key(5),key(6),key(10),unchanged,*charge-1)==ledger);
+ check(!cache.get(&firstState,key(6),key(10)));
  std::cout<<"PASS "<<checks<<" native-ledger cache controls; 5000 reports charge "<<*charge<<" bytes; no live Core or throughput claim\n";
 }

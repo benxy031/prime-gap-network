@@ -81,7 +81,7 @@ std::shared_ptr<const NativeAuditLedger> ReadRpcAuditLedger(ChainstateManager& m
  const auto& budget=*manager.m_options.pgn_candidate_science_budget;
  if(tip.pprev){
   auto snapshot=saved.advance(&active,tip.pprev->GetBlockHash(),tip.GetBlockHash(),genesis,
-   [&](const NativeAuditLedger& previous){return AdvanceRpcAuditLedger(previous,active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature);});
+   [&](const std::shared_ptr<const NativeAuditLedger>& previous){return AdvanceRpcAuditLedger(previous,active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature);});
   if(snapshot){LogDebug(BCLog::RPC,"PGN RPC audit snapshot direct-child %s\n",tip.GetBlockHash().GetHex());return snapshot;}
  }
  saved.reset(); // Release the old retained ledger before rebuilding another tip.
