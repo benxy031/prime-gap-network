@@ -3,13 +3,13 @@
 #include "wallet/managed_core_profile.h"
 #include "wallet/wallet_manager.h"
 #include "wallet/core_rpc.h"
+#include "wallet/core_rpc_stream.h"
 #include "wallet/chain_observation.h"
 #include "wallet/core_link_state.h"
 #include "wallet/peer_bootstrap.h"
 #include "wallet/core_recovery_policy.h"
 #include <QObject>
 #include <QProcess>
-#include <QNetworkAccessManager>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -125,10 +125,11 @@ private:
  void failStart(const QString&);
  bool recoverOwned();
  bool persistOwned();
- void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={});
- void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName);
+ void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={},CoreRpcChannel channel=CoreRpcChannel::General);
+ void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel=CoreRpcChannel::General);
+ void inspectRpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,int timeoutMs=CoreInspectionTimeoutMs);
  WalletManager* walletManager_{};
- QString root_,runtimeDirectory_;CoreProfile profile_;QNetworkAccessManager network_;
+ QString root_,runtimeDirectory_;CoreProfile profile_;CoreRpcChannels network_;
  qint64 pid_{};void* processHandle_{};
  std::unique_ptr<QLockFile> ownershipLock_;
  QString processBirth_;

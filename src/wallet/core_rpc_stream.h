@@ -1,11 +1,36 @@
 #pragma once
 #include <QByteArray>
+#include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QObject>
+#include <algorithm>
 #include <functional>
 #include <memory>
 
 namespace pgn::wallet {
+enum class CoreRpcChannel { General, Inspection };
+inline constexpr int CoreInspectionTimeoutMs = 12000;
+
+class CoreRpcChannels {
+public:
+    CoreRpcChannels(){
+        general_.setProxy(QNetworkProxy::NoProxy);
+        inspection_.setProxy(QNetworkProxy::NoProxy);
+    }
+
+    QNetworkReply* post(QNetworkRequest request, const QByteArray& body,
+                        int timeout_ms, CoreRpcChannel channel = CoreRpcChannel::General){
+        request.setTransferTimeout(std::clamp(timeout_ms, 1000, 120000));
+        // Held wallet or scientific requests can occupy every ordinary HTTP connection.
+        auto& network = channel == CoreRpcChannel::Inspection ? inspection_ : general_;
+        return network.post(request, body);
+    }
+private:
+    QNetworkAccessManager general_, inspection_;
+};
+
 // Drain incrementally: a finished-only reader can fill Qt's buffer and then
 // wait forever for a server that cannot finish sending the remaining bytes.
 inline void readBoundedCoreRpcReply(QNetworkReply* reply,QObject* context,qsizetype maximum,

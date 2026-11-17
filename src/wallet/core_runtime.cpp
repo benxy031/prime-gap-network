@@ -168,7 +168,6 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
  clock_.setInterval(1000);connect(&clock_,&QTimer::timeout,this,[this]{inspect();});
  recoveryTime_.start();recoveryClock_.setInterval(5000);
  connect(&recoveryClock_,&QTimer::timeout,this,[this]{recoveryTick();});
- network_.setProxy(QNetworkProxy::NoProxy);
  walletManager_=new WalletManager([this](const QString& method,const QJsonArray& params,const QString& name,WalletReply consume){
   if(!connected_||!processAlive()){consume({},"Verified Core connection required");return;}
   const auto owner=epoch();rpc(method,params,[this,owner,consume=std::move(consume)](QJsonValue value,QString error){
@@ -532,8 +531,12 @@ void CoreRuntime::begin(bool allowNew,bool automatic){
     prepareManagedCoreProfile(root,runtime,chain,allowNew,coreOwnerPresence);
   }));
 }
-void CoreRuntime::rpc(const QString& method,const QJsonArray& params,std::function<void(QJsonValue,QString)> consume,bool wallet,int timeoutMs,const QString& walletName){
- rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),[consume=std::move(consume)](CoreRpcResult result,QByteArray){consume(result.value,result.error);},wallet,timeoutMs,walletName);
+void CoreRuntime::rpc(const QString& method,const QJsonArray& params,std::function<void(QJsonValue,QString)> consume,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel){
+ rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),[consume=std::move(consume)](CoreRpcResult result,QByteArray){consume(result.value,result.error);},wallet,timeoutMs,walletName,channel);
+}
+void CoreRuntime::inspectRpc(const QString& method,const QJsonArray& params,
+                             std::function<void(QJsonValue,QString)> consume,int timeoutMs){
+ rpc(method,params,std::move(consume),false,timeoutMs,{},CoreRpcChannel::Inspection);
 }
 void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,bool displayedWallet,std::function<void(QByteArray,QString)> consume){
   const auto validation=validateConsoleCommand(method,params);if(!validation.isEmpty()){consume({},validation);return;}
@@ -547,7 +550,7 @@ void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,
   consume(raw,result.error);
  },displayedWallet,30000,name.isNull()?QString(""):name);
 }
-void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::function<void(CoreRpcResult,QByteArray)> consume,bool wallet,int timeoutMs,const QString& walletName){
+void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::function<void(CoreRpcResult,QByteArray)> consume,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel){
  QFile cookie(profile_.networkDataDirectory()+"/.cookie");
  if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){consume({{},"Core RPC cookie is not ready"},{});return;}
  const QString endpoint=wallet?walletRpcPath(walletName.isNull()?profile_.walletName:walletName):QString("/");
@@ -555,9 +558,8 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
  request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
  request.setRawHeader("Authorization","Basic "+cookie.readAll().trimmed().toBase64());
  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
- request.setTransferTimeout(std::clamp(timeoutMs,1000,120000));
  const QString requestId=QUuid::createUuid().toString(QUuid::WithoutBraces);
- auto* reply=network_.post(request,consoleRpcEnvelope(requestId,method,params));
+ auto* reply=network_.post(request,consoleRpcEnvelope(requestId,method,params),timeoutMs,channel);
  readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,consume=std::move(consume)](QByteArray bytes,bool oversized){
   const auto error=reply->error();const auto http=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const auto detail=reply->errorString().left(160);reply->deleteLater();
   if(oversized){consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
@@ -985,13 +987,13 @@ void CoreRuntime::walletInitialized(const CoreEpoch& owner){
 void CoreRuntime::inspect(){
  if(!processAlive()||checking_||stopping_)return;checking_=true;
  const auto ownerEpoch=epoch();
- rpc("getblockchaininfo",{},[this,ownerEpoch](QJsonValue chain,QString error){
+ inspectRpc("getblockchaininfo",{},[this,ownerEpoch](QJsonValue chain,QString error){
   if(!ownerEpoch.matches(epoch())||!processAlive())return;
-   if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
+   if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,QStringLiteral("getblockchaininfo: ")+error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
   const auto observedUtc=QDateTime::currentDateTimeUtc();
-  rpc("getblockhash",{0},[this,chain,ownerEpoch,observedUtc](QJsonValue genesis,QString error){
+  inspectRpc("getblockhash",{0},[this,chain,ownerEpoch,observedUtc](QJsonValue genesis,QString error){
    if(!ownerEpoch.matches(epoch())||!processAlive())return;
-    if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
+    if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,QStringLiteral("getblockhash(0): ")+error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
    const auto projected=projectChainObservation(ownerEpoch,profile_,chain.toObject(),genesis.toString(),observedUtc);
     if(!projected.observation){checking_=false;connected_=false;clock_.stop();recovery_.attention();recoveryClock_.stop();setLinkState(CoreLinkState::Rejected,projected.error);if(onObservation)onObservation(std::nullopt);
     report(projected.error+" · refusing wallet integration/RPC mutations; client left intact");return;}
@@ -1004,7 +1006,7 @@ void CoreRuntime::inspect(){
     if(!walletManager_->ready())walletManager_->activate(profile_.genesisHash,profile_.chain,profile_.dataDirectory,profile_.walletName,runtimeDirectory_+"/wallet-view.json");
     ensurePeerBootstrap();
    if(!walletReady_&&!walletChecking_)ensureWallet(ownerEpoch);
-    rpc("getconnectioncount",{},[this,ownerEpoch,observation=*projected.observation](QJsonValue peers,QString)mutable{
+    inspectRpc("getconnectioncount",{},[this,ownerEpoch,observation=*projected.observation](QJsonValue peers,QString)mutable{
       if(!ownerEpoch.matches(epoch())||!processAlive())return;
      if(peers.isDouble()&&peers.toDouble()>=0&&peers.toInteger(-1)>=0&&double(peers.toInteger())==peers.toDouble())observation.peers=peers.toInteger();
       const auto publish=[this,ownerEpoch](const ChainObservation& value){
@@ -1015,11 +1017,11 @@ void CoreRuntime::inspect(){
       };
       if(!peerBootstrap_){publish(observation);return;}
       const auto endpoint=peerBootstrap_->localEndpoint();
-      rpc("getpeerinfo",{},[observation,endpoint,publish](QJsonValue value,QString error)mutable{
+      inspectRpc("getpeerinfo",{},[observation,endpoint,publish](QJsonValue value,QString error)mutable{
        if(!error.isEmpty()||!value.isArray()||value.toArray().size()>512){observation.synchronizing.reset();publish(observation);return;}
        publish(projectNativeSynchronization(observation,value.toArray(),endpoint));
-      });
-    });
+      },3000);
+    },3000);
   });
  });
 }
