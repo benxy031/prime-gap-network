@@ -10,10 +10,31 @@
 #include <limits>
 namespace pgn::social {
 enum class Section { Chat, Publications, Forum, Miners };
-enum class Window { AllTime, Day, Week, Month };
+enum class Window { AllTime, Day, Week, Month, Hour };
 inline QString windowLabel(Window w) {
-    switch(w) { case Window::Day:return QString::fromUtf8("Today (UTC)"); case Window::Week:return "Last 7 days";
-    case Window::Month:return "Last 30 days"; default:return "All time"; }
+    switch(w) { case Window::Day:return QString::fromUtf8("Today (UTC)"); case Window::Week:return "This week (UTC)";
+    case Window::Month:return "This month (UTC)";case Window::Hour:return "This hour (UTC)";default:return "All time"; }
+}
+inline QString leaderboardPeriodName(Window window){
+    switch(window){case Window::AllTime:return "total";case Window::Day:return "today_utc";
+    case Window::Week:return "week_utc";case Window::Month:return "month_utc";case Window::Hour:return "hour_utc";}
+    return {};
+}
+// Independent Qt calendar validation of the server interval; UTC throughout.
+inline std::optional<qint64> leaderboardWindowEnd(Window window,qint64 start){
+    if(window==Window::AllTime)return {};
+    if(window==Window::Month){
+        if(start<0||start>253402214400LL||start%86400)return {};
+        const auto date=QDateTime::fromSecsSinceEpoch(start,Qt::UTC);
+        if(!date.isValid()||date.date().day()!=1)return {};
+        const auto end=date.addMonths(1);if(!end.isValid())return {};return end.toSecsSinceEpoch();
+    }
+    const qint64 span=window==Window::Hour?3600:window==Window::Week?7*86400:86400;
+    if(window!=Window::Hour&&window!=Window::Week&&window!=Window::Day)return {};
+    if(start<(window==Window::Week?-3*86400:0)||start%(window==Window::Hour?3600:86400)
+        ||start>std::numeric_limits<qint64>::max()-span
+        ||(window==Window::Week&&(start/86400+3)%7))return {};
+    return start+span;
 }
 inline QStringList categories() { return {"General","Mining","Research","Support"}; }
 struct Identity {
@@ -92,7 +113,7 @@ inline bool publicLabel(const QString& value){
     for(const auto c:value)if(c.isNull()||c.category()==QChar::Other_Control||c.category()==QChar::Other_Format||c.category()==QChar::Separator_Line||c.category()==QChar::Separator_Paragraph)return false;
     return true;
 }
-struct Miner { QString id, name; Counter acceptedGold, validatedAudits; Activity lastActivity;QString socialMemberId;Counter ticketsReported,ticketsValidated,validatedSearchPositions,lastActivityHeight;std::optional<PublicIdentity> publicIdentity;std::array<Counter,5> rosettes;std::array<QString,5> rosetteReasons; };
+struct Miner { QString id, name; Counter acceptedGold, validatedAudits; Activity lastActivity;QString socialMemberId;Counter ticketsReported,ticketsValidated,validatedSearchPositions,lastActivityHeight;std::optional<PublicIdentity> publicIdentity;std::array<Counter,5> rosettes;std::array<QString,5> rosetteReasons;Counter largestRecordedGap;QString largestGapReason; };
 struct ReadRequest { Section section; Identity identity; Window window{Window::AllTime}; QString cursor; int limit{100};QString channel; };
 struct SendAvailability {bool allowed{};QString reason;};
 struct ConnectionSummary {QString networkLabel;int connectedPeers{};};
@@ -106,8 +127,7 @@ struct LeaderboardPeriod {
 inline bool validLeaderboardPeriod(const LeaderboardPeriod& p,Window window){
     if(!QRegularExpression("^[0-9a-f]{64}$").match(p.anchor).hasMatch()||p.height<0)return false;
     if(window==Window::AllTime)return !p.utcStart;
-    return window==Window::Day&&p.utcStart&&*p.utcStart>=0&&*p.utcStart%86400==0
-        &&*p.utcStart<=std::numeric_limits<qint64>::max()-86400;
+    return p.utcStart&&leaderboardWindowEnd(window,*p.utcStart).has_value();
 }
 struct Snapshot {
     Identity identity; Section section{}; bool authenticated{};
@@ -121,6 +141,8 @@ struct Snapshot {
     std::optional<SendAvailability> chatSend;
     std::optional<ConnectionSummary> connection;
     std::optional<LeaderboardPeriod> leaderboardPeriod;
+    QVector<Window> leaderboardWindows;
+    bool largestGapSupported{};
     // Existing native relay generation, not a new wire field. When nonempty,
     // entries are a window into one immutable-ID history, not its replacement.
     QString chatHistoryGeneration;
@@ -195,9 +217,12 @@ inline QString validate(const Snapshot& v,const ReadRequest& r,QDateTime now=QDa
                 if(p.operatorId!=m.id||(!p.displayName.isEmpty()&&!publicLabel(p.displayName))||p.signingScripts.size()>8||!validProvenance(p.provenance,r.identity,now))return "Public name identity or provenance invalid.";
                 QSet<QString> scripts;for(const auto& script:p.signingScripts){aliasBytes+=script.size();if(aliasBytes>32768||!publicScript(script)||scripts.contains(script))return "Public signing aliases are invalid or unbounded.";scripts.insert(script);}
             }
-            for(const auto* c:{&m.acceptedGold,&m.validatedAudits,&m.ticketsReported,&m.ticketsValidated,&m.validatedSearchPositions,&m.lastActivityHeight,&m.rosettes[0],&m.rosettes[1],&m.rosettes[2],&m.rosettes[3],&m.rosettes[4]})
+            for(const auto* c:{&m.acceptedGold,&m.validatedAudits,&m.ticketsReported,&m.ticketsValidated,&m.validatedSearchPositions,&m.lastActivityHeight,&m.rosettes[0],&m.rosettes[1],&m.rosettes[2],&m.rosettes[3],&m.rosettes[4],&m.largestRecordedGap})
                 if(c->value&&(!decimal.match(*c->value).hasMatch()||!validProvenance(c->provenance,r.identity,now)))
                     return "A miner counter lacks valid same-genesis provenance.";
+            if(m.largestGapReason.size()>256)return "Recorded-gap explanation exceeds display limits.";
+            if(m.largestRecordedGap.value){bool ok=false;const auto gap=m.largestRecordedGap.value->toULongLong(&ok);
+                if(!v.largestGapSupported||!ok||!gap||gap>4294967296ULL||gap%2)return "Invalid exact recorded-gap length or unsupported scope.";}
             if(m.lastActivity.value&&(!m.lastActivity.value->isValid()||*m.lastActivity.value>now.addSecs(60)
                 ||!validProvenance(m.lastActivity.provenance,r.identity,now)))
                 return "Miner last activity lacks valid same-genesis provenance.";

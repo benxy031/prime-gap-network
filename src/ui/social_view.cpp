@@ -96,11 +96,12 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             channelDescription_=text({});channelDescription_->setProperty("caption",true);channelDescription_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);tools->addWidget(channelDescription_,1);}
         if(i==3){
             p.filter=new SocialComboBox;p.filter->setObjectName("pgn-social-miner-window");p.filter->setAccessibleName("Miner observation window");
-            p.filter->addItem("Total");p.filter->addItem("Today (UTC)");p.filter->hide();
-            p.filter->setToolTip("Confirmed activity on the current chain. Today uses a fixed UTC interval and canonical block-header timestamps; no physical mining time inferred.");
+            p.filter->addItem("Total");for(const auto window:{social::Window::Day,social::Window::Week,social::Window::Month,social::Window::Hour})p.filter->addItem(social::windowLabel(window));p.filter->hide();
+            p.filter->setToolTip("Confirmed activity on the current chain. Fixed UTC calendar intervals; weeks start Monday. Canonical block-header timestamps, not physical mining time.");
             auto* periods=new QWidget;periods->setObjectName("pgn-social-periods");p.filter->setParent(periods);p.filter->hide();auto* periodBox=new QHBoxLayout(periods);periodBox->setContentsMargins(3,3,3,3);periodBox->setSpacing(2);
             auto* group=new QButtonGroup(periods);group->setExclusive(true);
-            for(int n=0;n<2;++n){auto* button=new QPushButton(n?"Today (UTC)":"Total");button->setObjectName(n?"pgn-social-period-today":"pgn-social-period-total");button->setAccessibleName(button->text()+" leaderboard period");button->setCheckable(true);button->setChecked(!n);button->setMinimumHeight(32);group->addButton(button,n);periodBox->addWidget(button);connect(button,&QPushButton::clicked,this,[this,n]{pages_[3].filter->setCurrentIndex(n);});}
+            const QStringList periodIds{"total","today","week","month","hour"};
+            for(int n=0;n<5;++n){auto* button=new QPushButton(n?social::windowLabel(static_cast<social::Window>(n)):QString("Total"));button->setObjectName("pgn-social-period-"+periodIds[n]);button->setAccessibleName(button->text()+" leaderboard period");button->setCheckable(true);button->setChecked(!n);button->setMinimumHeight(32);button->setVisible(n<2);group->addButton(button,n);periodBox->addWidget(button);connect(button,&QPushButton::clicked,this,[this,n]{pages_[3].filter->setCurrentIndex(n);});}
             connect(p.filter,&QComboBox::currentIndexChanged,group,[group](int n){if(group->button(n))group->button(n)->setChecked(true);});tools->addWidget(periods);
             p.windowInfo=text({});p.windowInfo->setObjectName("pgn-social-miner-interval");p.windowInfo->setProperty("caption",true);
         }
@@ -123,7 +124,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         if(i==3){
             p.ranking=new LeaderboardTable;p.ranking->setObjectName("pgn-social-miners");
             auto* header=new LeaderboardHeader(p.ranking);p.ranking->setHorizontalHeader(header);
-            p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block","Quadrigantium","Gold","Silver","Bronze","Rust"});
+            p.ranking->setHorizontalHeaderLabels({"Miner","Validated positions","Tickets reported","Tickets validated","Audits validated","Last activity · block","Quadrigantium","Gold","Silver","Bronze","Rust","Largest recorded gap"});
             header->setSectionResizeMode(0,QHeaderView::Stretch);const int widths[]{0,158,116,116,112,152};for(int col=1;col<6;++col){header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,widths[col]);}
             p.ranking->setAccessibleName("Leaderboard of authenticated network activity. Rank among loaded rows for the selected sort.");
             p.ranking->setStyleSheet("QTableWidget#pgn-social-miners{background:#f2f6f3;color:#203c43;border:0;border-radius:12px;padding:0;outline:0;}QTableWidget#pgn-social-miners::item{padding:0;border:0;}QTableWidget#pgn-social-miners QWidget{background:#f2f6f3;}QHeaderView{background:#e0ebe5;border:0;padding:0;}QScrollBar:vertical{background:#e1eaeb;width:8px;}QScrollBar::handle:vertical{background:#8ba6ab;min-height:24px;border-radius:4px;}");
@@ -132,7 +133,9 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             const MeritTier tiers[]{MeritTier::Gold,MeritTier::Silver,MeritTier::Bronze,MeritTier::NearMiss};
             for(int col=6;col<11;++col){auto* item=p.ranking->horizontalHeaderItem(col);item->setIcon(col==6?quadrigantiumRosetteIcon():gapRosetteIcon(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->text());item->setToolTip(col==6?QString::fromUtf8("Quadrigantium — merit 40"):gapRosetteDescription(tiers[col-7],false));item->setData(Qt::AccessibleTextRole,item->toolTip());item->setData(Qt::AccessibleDescriptionRole,item->toolTip()+" · Recorded discoveries from validated reports; not coin payments. Q is independent of G/S/B/R.");header->setSectionResizeMode(col,QHeaderView::Fixed);header->resizeSection(col,44);item->setSizeHint(QSize(44,58));}
             for(int n=0;n<5;++n)header->moveSection(header->visualIndex(6+n),1+n);
-            header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){if(col>=6)return;sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
+            header->moveSection(header->visualIndex(11),7);
+            p.ranking->horizontalHeaderItem(11)->setToolTip("Largest unique gap first disclosed in the selected UTC period by this miner, among currently qualified reports. Canonical publication header time; not physical discovery time or coin payments.");
+            header->setSortIndicator(1,Qt::DescendingOrder);header->onSort=[this](int col){if(leaderboardAwardColumn(col))return;sortDescending_=sortColumn_==col?!sortDescending_:col!=0;sortColumn_=col;renderMiners();};
             p.ranking->verticalHeader()->hide();p.ranking->setEditTriggers(QAbstractItemView::NoEditTriggers);p.ranking->setSelectionBehavior(QAbstractItemView::SelectRows);
             p.ranking->setSelectionMode(QAbstractItemView::SingleSelection);p.ranking->setWordWrap(false);p.ranking->verticalHeader()->setMinimumSectionSize(36);p.ranking->verticalHeader()->setMaximumSectionSize(36);p.ranking->verticalHeader()->setDefaultSectionSize(36);
             p.dataSlot->addWidget(p.ranking);
@@ -313,6 +316,10 @@ void SocialView::setIdentity(social::Identity identity){
     if(identity_.valid()){loadError_=store_.load(identity_,drafts_);loadFailed_=!loadError_.isEmpty();const auto key=store_.path(identity_);if(pending_.contains(key)){drafts_=pending_.value(key);dirty_=true;}else if(pending_.size()>=64){loadFailed_=true;loadError_="Recover pending drafts before editing another identity.";}}
     for(auto& p:pages_){++p.generation;++p.threadGeneration;p.threadBusy=false;if(p.thread)p.thread->clear();p.loaded=p.busy=p.replyMode=false;p.entries.clear();p.miners.clear();p.selectedId.clear();p.nextCursor.clear();p.chatHistoryGeneration.clear();p.observedUtc={};p.leaderboardPeriod.reset();if(p.windowInfo){p.windowInfo->clear();p.windowInfo->setToolTip({});}
         if(p.list){QSignalBlocker block(p.list);p.list->clear();}if(p.detail)p.detail->clear();if(p.ranking)p.ranking->setRowCount(0);if(p.journey)p.journey->setCurrentIndex(0);}
+    pages_[3].utcRefreshAttemptMs=0;static_cast<LeaderboardTable*>(pages_[3].ranking)->showLargestGap(false);
+    {QSignalBlocker block(pages_[3].filter);if(pages_[3].filter->currentIndex()>1)pages_[3].filter->setCurrentIndex(0);}
+    for(const auto* id:{"week","month","hour"})if(auto* button=findChild<QPushButton*>("pgn-social-period-"+QString::fromLatin1(id)))button->hide();
+    if(auto* button=findChild<QPushButton*>(pages_[3].filter->currentIndex()==0?"pgn-social-period-total":"pgn-social-period-today"))button->setChecked(true);
     updateAccess();for(int i=0;i<3;++i)loadEditor(i);read(tabs_->currentIndex());
 }
 void SocialView::pageState(int i,QString state,QString message,QString detail){
@@ -416,6 +423,14 @@ void SocialView::filter(int i){
     p.more->setEnabled(identity_.valid()&&bool(services_.read)&&!p.busy&&!p.nextCursor.isEmpty()&&total<LoadedLimit);
 }
 void SocialView::refresh(){read(tabs_->currentIndex());}
+void SocialView::refreshExpiredLeaderboardWindow(){
+    auto& p=pages_[3];if(!isVisible()||tabs_->currentIndex()!=3||p.busy||!p.loaded||!p.leaderboardPeriod||!p.leaderboardPeriod->utcStart)return;
+    const auto end=social::leaderboardWindowEnd(static_cast<social::Window>(p.filter->currentIndex()),*p.leaderboardPeriod->utcStart);
+    const auto now=QDateTime::currentMSecsSinceEpoch();
+    // One read at rollover; bounded retry if the local and Core clocks differ.
+    if(!end||now/1000<*end||now-p.utcRefreshAttemptMs<60000)return;
+    p.utcRefreshAttemptMs=now;read(3);
+}
 void SocialView::read(int i,bool more){
     auto& p=pages_[i];const int total=i==3?p.miners.size():p.entries.size();
     if(!identity_.valid()||!services_.read||p.busy||(more&&(p.nextCursor.isEmpty()||total>=LoadedLimit)))return;
@@ -449,7 +464,11 @@ void SocialView::present(int i,const social::Snapshot& data,bool append){
     if(historyChanged){static_cast<SocialChatList*>(p.list)->resetConversation();p.entries.clear();}if(i==0)p.chatHistoryGeneration=data.chatHistoryGeneration;
     p.loaded=true;p.observedUtc=data.observedUtc;p.nextCursor=data.nextCursor;
      if(i==3){p.leaderboardPeriod=data.leaderboardPeriod;
-         if(data.leaderboardPeriod&&data.leaderboardPeriod->utcStart){const auto start=QDateTime::fromSecsSinceEpoch(*data.leaderboardPeriod->utcStart,Qt::UTC),end=start.addDays(1);p.windowInfo->setText(start.toString("yyyy-MM-dd")+" → "+end.toString("yyyy-MM-dd")+" · UTC");p.windowInfo->setToolTip("Fixed interval ["+stamp(start)+", "+stamp(end)+"). Canonical block-header time, not physical execution time. Reports: inclusion; audits: first PASSED; validated volume: current qualification episode. Anchor: "+data.leaderboardPeriod->anchor);}
+         const auto window=static_cast<social::Window>(p.filter->currentIndex());
+         const auto supported=data.leaderboardWindows.isEmpty()?QVector<social::Window>{social::Window::AllTime,social::Window::Day}:data.leaderboardWindows;
+         const QStringList periodIds{"total","today","week","month","hour"};for(int n=0;n<5;++n)if(auto* button=findChild<QPushButton*>("pgn-social-period-"+periodIds[n]))button->setVisible(supported.contains(static_cast<social::Window>(n)));
+         static_cast<LeaderboardTable*>(p.ranking)->showLargestGap(data.largestGapSupported);
+         if(data.leaderboardPeriod&&data.leaderboardPeriod->utcStart){const auto start=QDateTime::fromSecsSinceEpoch(*data.leaderboardPeriod->utcStart,Qt::UTC);const auto end=QDateTime::fromSecsSinceEpoch(social::leaderboardWindowEnd(window,*data.leaderboardPeriod->utcStart).value(),Qt::UTC);const auto format=window==social::Window::Hour?QString("yyyy-MM-dd HH:mm"):QString("yyyy-MM-dd");p.windowInfo->setText(start.toString(format)+" → "+end.toString(format)+" · UTC");p.windowInfo->setToolTip("Fixed interval ["+stamp(start)+", "+stamp(end)+"). Canonical block-header time, not physical execution time. Reports and largest gap: disclosure; audits: first PASSED; validated volume: current qualification episode. Anchor: "+data.leaderboardPeriod->anchor);}
          else{p.windowInfo->clear();p.windowInfo->setToolTip({});}
          if(append)p.miners+=data.miners;else p.miners=data.miners;renderMiners();}
     else{if(i==0&&p.loaded&&!append&&!p.entries.isEmpty()){
@@ -473,7 +492,7 @@ void SocialView::present(int i,const social::Snapshot& data,bool append){
 }
 void SocialView::renderMiners(){
     auto& p=pages_[3];auto values=p.miners;const auto decimal=[](const QString& a,const QString& b){return a.size()!=b.size()?(a.size()<b.size()?-1:1):QString::compare(a,b);};
-    const auto counter=[](const social::Miner& m,int col)->const social::Counter&{switch(col){case 1:return m.validatedSearchPositions;case 2:return m.ticketsReported;case 3:return m.ticketsValidated;case 4:return m.validatedAudits;default:return m.lastActivityHeight;}};
+    const auto counter=[](const social::Miner& m,int col)->const social::Counter&{switch(col){case 1:return m.validatedSearchPositions;case 2:return m.ticketsReported;case 3:return m.ticketsValidated;case 4:return m.validatedAudits;case 11:return m.largestRecordedGap;default:return m.lastActivityHeight;}};
     std::stable_sort(values.begin(),values.end(),[this,&decimal,&counter](const auto& a,const auto& b){int compare=0;
         if(sortColumn_==0)compare=QString::compare(a.name,b.name,Qt::CaseInsensitive);
         else{const auto& x=counter(a,sortColumn_).value;const auto& y=counter(b,sortColumn_).value;if(bool(x)!=bool(y))return bool(x);if(x)compare=decimal(*x,*y);}
@@ -481,11 +500,11 @@ void SocialView::renderMiners(){
     p.ranking->horizontalHeader()->setSortIndicator(sortColumn_,sortDescending_?Qt::DescendingOrder:Qt::AscendingOrder);
     p.ranking->setRowCount(values.size());
     for(int row=0;row<values.size();++row){const auto& m=values[row];
-        for(int col=0;col<6;++col){const auto raw=col?counter(m,col).value.value_or(QString::fromUtf8("—")):m.name;auto* item=new QTableWidgetItem(col?social::leaderboardNumber(raw):raw);if(!col){item->setData(Qt::UserRole,m.id);item->setData(AuthorIdRole,m.socialMemberId);}if(col)item->setTextAlignment(Qt::AlignRight|Qt::AlignVCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);item->setData(LeaderboardRankRole,row+1);
+        for(int metric=0;metric<7;++metric){const int col=metric==6?11:metric;const auto raw=col?counter(m,col).value.value_or(QString::fromUtf8("—")):m.name;auto* item=new QTableWidgetItem(col?social::leaderboardNumber(raw):raw);if(!col){item->setData(Qt::UserRole,m.id);item->setData(AuthorIdRole,m.socialMemberId);}if(col)item->setTextAlignment(Qt::AlignRight|Qt::AlignVCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);item->setData(LeaderboardRankRole,row+1);
             QString info;if(!col)info="Miner identity: "+m.id+"\nGenesis: "+identity_.genesis;
             else{const auto& source=counter(m,col).provenance;
                 const bool present=bool(counter(m,col).value);
-                info=present?"Exact value: "+raw+"\n"+source.source+"\nObserved: "+stamp(source.observedUtc)+"\nGenesis: "+source.genesis:"Unavailable: no authenticated value supplied. No zero inferred.";}
+                info=present?"Exact value: "+raw+"\n"+source.source+"\nObserved: "+stamp(source.observedUtc)+"\nGenesis: "+source.genesis:col==11?"Unavailable: "+m.largestGapReason:"Unavailable: no authenticated value supplied. No zero inferred.";}
             item->setToolTip(safeTip(info));item->setData(Qt::AccessibleDescriptionRole,info);p.ranking->setItem(row,col,item);}
         for(int col=6;col<11;++col){const auto& counted=m.rosettes[col-6];const auto raw=counted.value.value_or(QString::fromUtf8("—"));auto* item=new QTableWidgetItem(raw);item->setTextAlignment(Qt::AlignCenter);item->setData(LeaderboardOwnRole,!m.socialMemberId.isEmpty()&&m.socialMemberId==identity_.subject);
           const QString scope="Recorded discoveries from validated reports; not coin payments. Unique disclosed gaps per operator; only disclosed records (V1 best list limited to100/report). Q is independent of G/S/B/R.";

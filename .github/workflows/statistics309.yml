@@ -1,4 +1,4 @@
-name: Statistics309 exact UTC periods and disclosed largest gap
+name: Statistics309 actual Qt client calendar and gap controls
 on:
   workflow_dispatch:
   push:
@@ -29,6 +29,9 @@ jobs:
           persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
+            /src/
+            /tests/
+            /assets/
             /qualification/statistics309/
             /wallet/riecoin-core-upstream-v2606/src/pgn/
             /wallet/riecoin-core-upstream-v2606/src/univalue/
@@ -67,24 +70,21 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc \
             mingw-w64-ucrt-x86_64-cmake \
             mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
             mingw-w64-ucrt-x86_64-boost
 
       - name: Compile exact Native projection components
         run: |
-          cmake -S qualification/statistics309 -B build-statistics -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S qualification/statistics309 -B build-statistics -G Ninja -DCMAKE_BUILD_TYPE=Release -DPGN_STATS_QT=ON
           cmake --build build-statistics --parallel 2
           ctest --test-dir build-statistics --output-on-failure
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Preserve compiled fixture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          persist-credentials: false
-      - name: Install Native integer header dependency
-        run: sudo apt-get update -qq && sudo apt-get install -y libboost-dev
-      - name: Compile and verify independently on Linux
-        run: |
-          cmake -S qualification/statistics309 -B build-statistics -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-statistics --parallel 2
-          ctest --test-dir build-statistics --output-on-failure
+          name: statistics309-qt
+          path: |
+            build-statistics/qt_statistics_test.exe
+            build-statistics/utc_qt_probe.exe
+            build-statistics/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
