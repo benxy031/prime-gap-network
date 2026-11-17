@@ -64,7 +64,8 @@ def main():
     assert file_sha(conf.history)=="09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4"
     baseline = conf.baseline.resolve()
     candidate = conf.candidate.resolve()
-    assert file_sha(baseline)=="a6187b4af5f7c164eeaa8b3a5976823aeb03543ca75c5a4feb452091df5bb6d4"
+    expected_sha="6e0d827229ab23fc36f0957f53e43548f6f05437d826b15e5ed98ea0825335ce" if baseline.suffix.lower()==".exe" else "a6187b4af5f7c164eeaa8b3a5976823aeb03543ca75c5a4feb452091df5bb6d4"
+    assert file_sha(baseline)==expected_sha
     assert file_sha(candidate)!=file_sha(baseline)
     frame=list(blocks(conf.history))
     sequence = [("baseline",baseline),("candidate",candidate),("candidate",candidate),("baseline",baseline)]
