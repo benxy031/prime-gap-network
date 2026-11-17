@@ -699,7 +699,16 @@ int main(int argc,char** argv) {
   auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkObservation,&window]{
    const auto select=[](const QJsonObject& source,std::initializer_list<const char*> keys){QJsonObject value;for(const auto* key:keys)if(source.contains(key))value.insert(key,source.value(key));return value;};
    QJsonObject network{{"status",canvas->property("pgn_global_network_status").toString()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
-   if(*networkObservation){const auto& observation=**networkObservation;network.insert("height",observation.height);network.insert("genesis",observation.genesis);network.insert("tip_hash",observation.tipHash);network.insert("peers",observation.peers?QJsonValue(*observation.peers):QJsonValue{});network.insert("synchronizing",observation.synchronizing?QJsonValue(*observation.synchronizing):QJsonValue{});}
+   if(*networkObservation){
+    const auto& observation=**networkObservation;
+    network.insert("height",observation.height);network.insert("genesis",observation.genesis);
+    network.insert("tip_hash",observation.tipHash);network.insert("peers",observation.peers?QJsonValue(*observation.peers):QJsonValue{});
+    network.insert("synchronizing",observation.synchronizing?QJsonValue(*observation.synchronizing):QJsonValue{});
+    network.insert("verified_utc",observation.observedUtc.toString(Qt::ISODateWithMs));
+    if(observation.headerHeight)network.insert("headers",*observation.headerHeight);
+    if(observation.coreInitialBlockDownload)network.insert("initial_block_download",*observation.coreInitialBlockDownload);
+    if(observation.tipTime)network.insert("tip_unix_time",*observation.tipTime);
+   }
    QJsonArray cpus;const auto controllers=canvas->property("pgn_cpu_controller_states").toJsonObject();
    for(auto it=controllers.begin();it!=controllers.end();++it){if(cpus.size()>=8)break;cpus.append(select(it.value().toObject(),{"state","host","device_id","enabled","controller_connected","requested_threads","threads_active","active_workers","resident_workers","machine_load_percent","positions_per_second","rate_positions_per_second","completed_positions","total_positions","inflight_pieces","buffered_closed_pieces","wall_active_seconds","error","cpu_telemetry","memory_pages"}));}
    const auto* components=window.findChild<QWidget*>("pgn-component-status-strip");
@@ -1561,7 +1570,7 @@ int main(int argc,char** argv) {
    });ready->start();});
  }
  markStartup(5,"Preparing the audit view");
- QTimer::singleShot(0,&window,[&startupWindow,auditAnimation,networkWork]{
+ QTimer::singleShot(0,&window,[&startupWindow,&markStartup,auditAnimation,networkWork]{
   const auto ready=[&startupWindow,&markStartup]{markStartup(6,"Interface ready");startupWindow.finish();};
   if(networkWork)networkWork->prepareStartupMap();if(auditAnimation)auditAnimation->prepareForStartup(ready);else ready();
  });

@@ -555,7 +555,7 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
     "getwalletinfo","listwallets","getpgnstate","getpgnleaderboard","getpgnworkview","stop","addnode"};
  QElapsedTimer elapsed;elapsed.start();
  const auto trace=[this,elapsed,method,timeoutMs,channel,watched=observedMethods.contains(method)]
-        (const QString& outcome,int transport,int http,std::optional<int> application){
+        (const QString& outcome,int transport,int http,std::optional<int> application,QJsonValue result=QJsonValue{}){
   if(!watched)return;
   QJsonObject event{{"method",method},{"outcome",outcome},{"elapsed_ms",elapsed.elapsed()},
      {"deadline_ms",timeoutMs},{"channel",channel==CoreRpcChannel::Inspection?"inspection":"ordinary"},
@@ -563,6 +563,21 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
   if(transport)event.insert("transport_code",transport);
   if(http)event.insert("http_code",http);
   if(application)event.insert("core_code",*application);
+  if(method=="getpeerinfo"&&result.isArray()){
+   const auto peers=result.toArray();
+   if(peers.size()<=512){
+    qint64 highest=-1;int activeDownloads=0;
+    for(const auto& row:peers){
+     const auto peer=row.toObject();
+     const auto height=peer.value("pgn_announced_height").toInteger(-1);
+     if(height>highest)highest=height;
+     if(peer.value("pgn_syncing").toBool()||!peer.value("inflight").toArray().isEmpty())++activeDownloads;
+    }
+    event.insert("peers",peers.size());
+    event.insert("peers_downloading",activeDownloads);
+    if(highest>=0)event.insert("highest_peer_height",highest);
+   }
+  }
   diagnosticRpcHistory_.append(event);
   while(diagnosticRpcHistory_.size()>48)diagnosticRpcHistory_.removeFirst();
  };
@@ -580,7 +595,7 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
   if(oversized){trace("response_limit",int(error),http,{});consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
   const auto decoded=decodeCoreRpcResponse(bytes,requestId,method);
   if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){trace("transport_error",int(error),http,{});consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
-  trace(decoded.error.isEmpty()?"ok":"rpc_error",int(error),http,decoded.applicationCode);
+  trace(decoded.error.isEmpty()?"ok":"rpc_error",int(error),http,decoded.applicationCode,decoded.value);
   consume(decoded,decoded.error.isEmpty()?bytes:QByteArray{});
  });
 }
