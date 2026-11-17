@@ -1,0 +1,42 @@
+name: Compare released and candidate Core over authenticated Horizon history
+on:
+  push:
+    branches: [qualification/horizon-audit-range-join-ab]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 27
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Acquire the exact archived release Core and verified public block history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/wizz13150/prime-gap-network/actions/artifacts/14367353642/zip > released-core29.zip
+          gh api repos/wizz13150/prime-gap-network/releases/assets/751563538 -H 'Accept: application/octet-stream' > public-history.blocks
+          echo '3f3b8bb0f7224250819839a5b64637c5ce2560d5c503270d07109454eb18c1ec  released-core29.zip' | sha256sum --check
+          echo '09f318bfa826fad3d2af199ead9bb321dad039308864e549e3b92e6db6cfb7e4  public-history.blocks' | sha256sum --check
+          unzip -p released-core29.zip core29/Core/pgn-core > released-core29
+          chmod 0755 released-core29
+      - name: Install native dependencies and compile the candidate
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_DAEMON=ON -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF -DPGN_DAEMON_OUTPUT_NAME=pgn-core
+          cmake --build build-native --parallel 3 --target riecoind
+      - name: Run exact A/B/B/A RPC and cold restart comparisons
+        run: python tests/native_audit_range_join_ab.py --baseline released-core29 --candidate build-native/bin/pgn-core --history public-history.blocks --receipt evidence/RESULT.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: horizon-audit-range-join-ab-${{ github.run_id }}
+          path: evidence/RESULT.json
+          if-no-files-found: error
+          retention-days: 7
