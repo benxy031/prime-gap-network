@@ -144,10 +144,13 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     // still used for every pre-activation historical record.
     for (const auto& chainstate : chainman.m_chainstates) {
         std::string hourly_error;
+        bool retained_forward_replay{false};
         try {
-            if (!pgn::core::VerifyLoadedNativeHourlyTargets(*chainstate, hourly_error)) {
+            if (!pgn::core::VerifyLoadedNativeHourlyTargets(*chainstate, hourly_error, retained_forward_replay)) {
                 LogError("Native hourly startup verification held: %s", hourly_error);
-                return {ChainstateLoadStatus::FAILURE, Untranslated("Authenticated hourly difficulty history could not be verified: " + hourly_error)};
+                const auto status = retained_forward_replay && !options.wipe_chainstate_db
+                    ? ChainstateLoadStatus::NATIVE_FORWARD_REPLAY : ChainstateLoadStatus::FAILURE;
+                return {status, Untranslated("Authenticated hourly difficulty history could not be verified: " + hourly_error)};
             }
         } catch (const std::exception& error) {
             LogError("Native hourly startup verification failed: %s", error.what());
