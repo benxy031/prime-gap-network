@@ -54,7 +54,8 @@ with zipfile.ZipFile(io.BytesIO(raw))as z:
     (out/'BUILD.json').write_text(json.dumps(build,indent=2)+'\n')
     (out/'MIGRATION.json').write_text(json.dumps(migration,indent=2)+'\n')
 core=runtime/('pgn-core.exe' if os.name=='nt' else 'pgn-core')
-assert subprocess.run([str(core),'-version'],capture_output=True,timeout=15).returncode==0
+version=subprocess.run([str(core),'-version'],capture_output=True,timeout=15)
+assert version.returncode==0,(version.returncode,version.stderr.decode(errors='replace')[-1000:])
 fixture=Path('qualification/native-restart/legacy-interrupted-public.zip')
 assert hashlib.sha256(fixture.read_bytes()).hexdigest()==expected
 partial=out/'partial'
