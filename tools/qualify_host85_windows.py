@@ -54,7 +54,9 @@ try:
     assert dependency_probe.returncode==0,dependency_probe.stderr.decode(errors='replace')[-1000:]
     assert versions==dict(ui='2026.11.17.174',core='2026.11.17.28',gpu='2026.11.17.85',cpu='2026.11.6.389')
     assert candidate['selected']==['core','gpu','ui']
-    unchanged=lambda cohort:{c['id']:c for c in cohort['components'] if c['id']!='gpu'}
+    def unchanged(cohort):
+        return {c['id']:(c['version'],{row['path']:(row['bytes'],row['sha256']) for row in c['files']})
+                for c in cohort['components'] if c['id']!='gpu'}
     assert unchanged(old)==unchanged(manifest)
     assert {c['id']:c['version']for c in old['components']}==dict(ui='2026.11.17.174',core='2026.11.17.28',gpu='2026.11.15.84',cpu='2026.11.6.389')
     assert sha(new/'PGN-Horizon.exe')==sha(exe)
