@@ -24,7 +24,7 @@ SocialAccessDialog::SocialAccessDialog(social::Identity identity,std::optional<s
     auto* heading=label("Roles & members");heading->setProperty("heading",true);box->addWidget(heading);
     box->addWidget(label("Moderator is the highest Social role. Changes require the service to verify current permissions."));
     auto* tabs=new QTabWidget;box->addWidget(tabs,1);
-    auth_=snapshot_?snapshot_->session:social::AuthSession{};
+    auth_=snapshot_?snapshot_->session:social::AuthSession{};verifiedCommunity_=snapshot_?snapshot_->community:QString{};
     auto* accountPage=new QWidget;auto* accountBox=new QVBoxLayout(accountPage);authStatus_=label(social::authStateLabel(auth_.state));authStatus_->setObjectName("pgn-social-auth-status");accountBox->addWidget(authStatus_);
     accountBox->addWidget(label("A public address or display name cannot recover moderator rights. The identity service verifies possession and account recovery."));
     devices_=new QListWidget;devices_->setAccessibleName("Registered devices reported by service");accountBox->addWidget(devices_,1);
@@ -77,6 +77,22 @@ social::AccessRequest SocialAccessDialog::request(social::AccessAction action)co
     if(action==social::AccessAction::KickMember||action==social::AccessAction::BanMember){r.target=itemId(members_);r.reason=reason_->text();}
     if(action==social::AccessAction::SetOverwrite){r.channel=channel_;r.target=overwriteRole_->currentData().toString();if(!overwriteRole_->currentData(Qt::UserRole+1).toBool())r.role=r.target;for(int i=0;i<overwrites_->count();++i){auto* p=overwrites_->item(i);if(p->checkState()==Qt::Checked)r.allow<<p->data(Qt::UserRole).toString();else if(p->checkState()==Qt::Unchecked)r.deny<<p->data(Qt::UserRole).toString();}}
     return r;
+}
+void SocialAccessDialog::observeAccess(const social::AccessSnapshot& value){
+    const auto error=social::validateAccess(value,identity_);
+    if(!error.isEmpty()){invalidateAccess(value.session,error);return;}
+    // A focused read can already be newer than the parent Chat cache.
+    if(snapshot_&&value.identity==identity_&&value.community==snapshot_->community
+        &&value.observedUtc<snapshot_->observedUtc)return;
+    const bool sameActor=auth_.identity==value.session.identity&&auth_.device==value.session.device
+        &&auth_.revocationRevision==value.session.revocationRevision;
+    // Each fresh proof has its own reference. It is not a policy/account change.
+    // Keep the focused availability and any unsaved edit; the service still
+    // authorizes each write using a new signed proof and current policy.
+    if(sameActor&&snapshot_&&snapshot_->community==value.community
+        &&snapshot_->revision==value.revision&&social::validateAccess(*snapshot_,identity_).isEmpty())return;
+    if(busy_&&(verifiedCommunity_.isEmpty()||(sameActor&&verifiedCommunity_==value.community)))return;
+    invalidateAccess(value.session,"Permissions or account changed · refresh the authenticated access view.");
 }
 void SocialAccessDialog::invalidateAccess(const social::AuthSession& session,QString reason){
     ++authGeneration_;++actionGeneration_;++readGeneration_;busy_=false;refreshPending_=false;snapshot_.reset();
@@ -168,7 +184,7 @@ void SocialAccessDialog::refreshAccess(){
         weak->refreshPending_=false;
         if(error.isEmpty())error=social::validateAccess(value,r.identity);
         if(!error.isEmpty()){weak->snapshot_.reset();weak->status_->setText("Roles unavailable · "+error.left(512));weak->updateActions();return;}
-        weak->auth_=value.session;weak->snapshot_=std::move(value);weak->populateAccess(member,role);
+        weak->auth_=value.session;weak->verifiedCommunity_=value.community;weak->snapshot_=std::move(value);weak->populateAccess(member,role);
         const auto assigned=weak->memberRole_->findData(assignmentRole);if(assigned>=0)weak->memberRole_->setCurrentIndex(assigned);
         for(int i=0;i<weak->overwriteRole_->count();++i)if(weak->overwriteRole_->itemData(i).toString()==overwriteTarget&&weak->overwriteRole_->itemData(i,Qt::UserRole+1).toBool()==overwriteMember){weak->overwriteRole_->setCurrentIndex(i);break;}
         weak->authStatus_->setText(social::authStateLabel(weak->auth_.state));

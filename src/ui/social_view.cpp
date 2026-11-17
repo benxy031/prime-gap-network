@@ -440,8 +440,8 @@ void SocialView::read(int i,bool more){
     });
 }
 void SocialView::present(int i,const social::Snapshot& data,bool append){
-    if(data.access){const auto error=social::validateAccess(*data.access,identity_);const bool changed=!access_||access_->revision!=data.access->revision||access_->session.reference!=data.access->session.reference||!error.isEmpty();
-        if(changed&&accessDialog_)if(auto* dialog=dynamic_cast<SocialAccessDialog*>(accessDialog_.data()))dialog->invalidateAccess(data.access->session,"Permissions or session changed · refresh the authenticated access view.");
+    if(data.access){const auto error=social::validateAccess(*data.access,identity_);
+        if(accessDialog_)if(auto* dialog=dynamic_cast<SocialAccessDialog*>(accessDialog_.data()))dialog->observeAccess(*data.access);
         if(error.isEmpty())access_=data.access;else access_.reset();}
     if(i==0){pages_[0].canSend=data.chatSend&&data.chatSend->allowed;pages_[0].sendWhy=data.chatSend?data.chatSend->reason:QString{};if(!append)chatDirectory(data);updateChatSend();}
     auto& p=pages_[i];const bool continuous=i==0&&!data.chatHistoryGeneration.isEmpty()&&p.chatHistoryGeneration==data.chatHistoryGeneration;

@@ -12,6 +12,7 @@ class SocialAccessDialog final:public QDialog {
 public:
     SocialAccessDialog(social::Identity identity,std::optional<social::AccessSnapshot> snapshot,
         social::Services services,QString channel,QString member,QWidget* parent=nullptr);
+    void observeAccess(const social::AccessSnapshot& snapshot);
     void invalidateAccess(const social::AuthSession& session,QString reason);
 private:
     social::Identity identity_;std::optional<social::AccessSnapshot> snapshot_;social::Services services_;QString channel_;
@@ -19,7 +20,7 @@ private:
     QLineEdit *name_{},*reason_{};QSpinBox* position_{};QComboBox *memberRole_{},*overwriteRole_{};
     QLabel *status_{},*roleInfo_{},*memberInfo_{};
     QPushButton* createRole_{};
-    social::AuthSession auth_;QLabel* authStatus_{};QListWidget* devices_{};
+    social::AuthSession auth_;QString verifiedCommunity_;QLabel* authStatus_{};QListWidget* devices_{};
     struct ActionButton{QPushButton* button;social::AccessAction action;};
     QVector<ActionButton> actions_;bool creating_{},busy_{},refreshPending_{};quint64 authGeneration_{},actionGeneration_{},readGeneration_{};
     social::AccessRequest request(social::AccessAction action)const;

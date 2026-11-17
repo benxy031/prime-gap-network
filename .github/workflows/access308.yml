@@ -1,0 +1,101 @@
+name: Access308 parent refresh negative control and authorization lifetime
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/access308-parent-refresh]
+permissions:
+  contents: read
+concurrency:
+  group: access308-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: UCRT64 all targets and isolated tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /data/
+            /qualification/names286/
+            /qualification/names303/
+            /qualification/access308/
+            /qualification/social278-qt/
+            /qualification/social278-access/
+            /qualification/wallet285/
+            /qualification/cpu296/
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+      - name: Compile and run the actual parent-dialog boundary offscreen
+        run: |
+          cmake -S qualification/access308 -B build-access308 -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-access308 --parallel 3
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-access308 --output-on-failure
+      - name: Preserve the regression binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: access308-windows
+          path: |
+            build-access308/access_original.exe
+            build-access308/access_fixed.exe
+          if-no-files-found: error
