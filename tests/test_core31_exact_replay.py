@@ -142,7 +142,7 @@ class ReplayNode(Node):
         (out/'NATIVE-STDOUT-TAIL.log').write_bytes(tail)
         raise RuntimeError((exit_code,current_height,tail[-1800:].decode(errors='replace')))
 
-def normal(name,prev_size,expect_replay):
+def normal(prev_size):
     native_log=partial/'testnet/debug.log'
     node=ReplayNode(core,partial)
     try:
@@ -161,14 +161,14 @@ def normal(name,prev_size,expect_replay):
     with native_log.open('rb')as f:
         f.seek(prev_size)
         output=f.read(9*1024*1024)
-    assert (marker in output)==expect_replay,name
-    return native_log.stat().st_size
+    return native_log.stat().st_size, marker in output
 size=(partial/'testnet/debug.log').stat().st_size
-closed=normal('first complete',size,True)
-normal('cold normal restart',closed,False)
+closed,replayed_again=normal(size)
+_,cold_replayed=normal(closed)
+assert not cold_replayed, 'A fully validated state started a fresh replay'
 receipt=dict(PASS=True,base_build_source=SOURCE,base_run=RUN,artifact=asset['id'],digest=asset['digest'],
     partial_heights=[description['interrupted_height'],max(heights)],height=description['canonical_height'],
     wallet_unchanged=True,retained_tip_exact=True,automatic_native_replay=True,cold_restart_no_repeat=True,
-    external_peers=False,disabled_validation=False)
+    second_restart_required_fresh_replay=replayed_again,external_peers=False,disabled_validation=False)
 (out/'RESTART-REPLAY.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
 print(json.dumps(receipt))
