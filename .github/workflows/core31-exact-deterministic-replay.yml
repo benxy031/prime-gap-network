@@ -16,6 +16,9 @@ jobs:
           - runner: ubuntu-24.04
             platform: ubuntu
             core: pgn-core
+          - runner: windows-latest
+            platform: windows
+            core: pgn-core.exe
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 16
     steps:
@@ -29,6 +32,7 @@ jobs:
             tests
             qualification/native-restart
       - name: Install the compiled Core runtime dependencies from its original build distribution
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
@@ -61,4 +65,6 @@ jobs:
           path: |
             exact-native-qa/*.json
             exact-native-qa/INTERRUPTED-ONCE.log
+            exact-native-qa/NATIVE-RESTART-TAIL.log
+            exact-native-qa/NATIVE-STDOUT-TAIL.log
           retention-days: 7

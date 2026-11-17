@@ -111,25 +111,35 @@ class ReplayNode(Node):
         last_progress=started
         current_height=0
         tail=b''
+        log_path=self.data/'owned.log'
         while self.process.poll() is None:
             try:
                 if self.rpc('getblockhash',[0])==GENESIS:return
             except (OSError,RuntimeError):pass
-            with (self.data/'owned.log').open('rb') as f:
+            with log_path.open('rb') as f:
                 f.seek(cursor)
-                tail=f.read(512*1024)
+                emitted=f.read(512*1024)
                 cursor=f.tell()
-            heights=[int(match[1]) for match in re.finditer(rb'height=(\d+)',tail)]
+            if emitted:
+                tail=(tail+emitted)[-32768:]
+            heights=[int(match[1]) for match in
+                     re.finditer(rb'(?:height=|verification at block #)(\d+)',emitted)]
             now=time.monotonic()
             if max(heights,default=0)>current_height:
                 current_height=max(heights);last_progress=now
-            if now-started>245 or now-last_progress>85:break
-            time.sleep(.22)
+            if now-started>390 or now-last_progress>140:break
+            time.sleep(.3)
         exit_code=self.process.poll()
         if exit_code is None:
             self.process.terminate()
             self.process.wait(timeout=15)
         self.log.close()
+        native=self.data/'testnet/debug.log'
+        if native.is_file():
+            with native.open('rb') as f:
+                f.seek(max(0,native.stat().st_size-49152))
+                (out/'NATIVE-RESTART-TAIL.log').write_bytes(f.read(49152))
+        (out/'NATIVE-STDOUT-TAIL.log').write_bytes(tail)
         raise RuntimeError((exit_code,current_height,tail[-1800:].decode(errors='replace')))
 
 def normal(name,prev_size,expect_replay):
