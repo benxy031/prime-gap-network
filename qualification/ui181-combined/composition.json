@@ -1,0 +1,27 @@
+{
+  "schema": "PGN_PACKAGED_COMPONENT_COMPOSITION_V1",
+  "source": "7af0b29ede822aa3d7b0ca8e91b37c89b9156e56",
+  "asset": {
+    "before": "1d4b89920bf391d267a03e5b7adf99cc45b22839daa4ac91134f7a8474d2bca6",
+    "after": "4829e814760188247db8f11c277e4e029b2309b529df9d5e9098650121317535",
+    "patch_sha": "de26f78f90b75437f638f06adb333c569553e82b9b31f774263434d75b494c0c"
+  },
+  "host": {
+    "EngineRuntime/network/horizon-engine-host.exe": {
+      "sha256": "defe674177084803896c5522c1f11f6e05e565e2b90d3ff5c1fc2f69a7c7e92a",
+      "previous_sha256": "d478cb06b8145e5f9c15cf9a80efcc71564a9a283bd87ff58bc6917609c2078a",
+      "bytes": 3450788
+    },
+    "EngineRuntime/network/_internal/base_library.zip": {
+      "sha256": "868bf320c25a3164508170a42a0943a763712a55a26d85b05cdb61c510bb2916",
+      "previous_sha256": "d9b0c9b01a38fef95cf38fe981ec175cff398ba50ecc7b556b30a53c0751bfb7",
+      "bytes": 1333717
+    }
+  },
+  "exe_sha256": "2bb34ae82100c932ede11d3519c376113379956cca599335e1fd6d49b3894c98",
+  "base_manifest_sha256": "afab85d91333a98096424a06b14038a0d475321f9fbf21061ba40e41bba52225",
+  "base_archive_sha256": "39d3e5b4d9a4c9a24937be699a309a83fea8e5eecf1fde23a3b3947fddeef6ee",
+  "host_artifact": 14463749668,
+  "host_run": 44383215852,
+  "portable_base_asset": 764669424
+}

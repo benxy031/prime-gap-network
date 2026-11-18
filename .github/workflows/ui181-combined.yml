@@ -1,0 +1,59 @@
+name: Horizon Windows integration of Atlas and Host91
+on:
+  push:
+    branches: [qualification/ui181-combined]
+permissions:
+  contents: read
+jobs:
+  windows:
+    permissions:
+      contents: write
+      actions: read
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - name: Allow long test source paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /tests/native_grouped249_actual.py
+            /qualification/ui177/legacy-chain.zip
+            /qualification/ui181-combined/
+      - name: Fetch the exact candidate from the unpublished draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download qa-ui181-win49 --repo $env:GITHUB_REPOSITORY --dir portable-ui181 --pattern "PGN-Windows-181.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification draft assets unavailable' }
+      - name: Fetch the exact previously qualified engine host
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 44383215852 --repo $env:GITHUB_REPOSITORY --name horizon-engine-host91-windows --dir host91-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified Host91 artifact unavailable' }
+      - name: Prepare pinned verification dependencies
+        shell: pwsh
+        run: |
+          python -m venv .qa-updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
+          & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Compose the verified files and open the same actual Windows program
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_combined_program.py
+          if ($LASTEXITCODE -ne 0) { throw 'Combined package qualification failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui181-combined-${{ github.run_id }}
+          path: ui181-combined-windows/evidence/
+          if-no-files-found: warn
+          retention-days: 7
