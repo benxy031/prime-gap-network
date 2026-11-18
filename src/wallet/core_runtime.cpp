@@ -1050,9 +1050,15 @@ void CoreRuntime::inspect(){
       };
       if(!peerBootstrap_){publish(observation);return;}
       const auto endpoint=peerBootstrap_->localEndpoint();
-      inspectRpc("getpeerinfo",{},[observation,endpoint,publish](QJsonValue value,QString error)mutable{
-       if(!error.isEmpty()||!value.isArray()||value.toArray().size()>512){observation.synchronizing.reset();publish(observation);return;}
-       publish(projectNativeSynchronization(observation,value.toArray(),endpoint));
+      inspectRpc("getpeerinfo",{},[this,ownerEpoch,observation,endpoint,publish](QJsonValue value,QString error)mutable{
+       if(!ownerEpoch.matches(epoch())||!processAlive())return;
+       if(!error.isEmpty()||!value.isArray()||value.toArray().size()>512||!peerBootstrap_||peerBootstrap_->localEndpoint()!=endpoint){
+        observation.synchronizing.reset();publish(observation);return;
+       }
+       const auto peers=value.toArray();
+       const auto projected=projectNativeSynchronization(observation,peers,endpoint);
+       if(projected.synchronizing.has_value())peerBootstrap_->reconcileAttachment(peers);
+       publish(projected);
       },3000);
     },3000);
   });
@@ -1100,15 +1106,16 @@ void CoreRuntime::ensurePeerBootstrap(){
   ;
  if(!QFileInfo::exists(program)){report("Integrated network component is unavailable");return;}
  peerBootstrap_=std::make_unique<PeerBootstrap>(program,value,this);
- peerBootstrap_->onReady=[this](const QString& peer){
-  if(!connected_||!processAlive())return;
-  const auto owner=epoch();rpc("addnode",{peer,"add"},[this,owner,peer](QJsonValue,QString error){
-   if(!owner.matches(epoch()))return;
-   if(!error.isEmpty())report("Core bootstrap attachment: "+error);
-   // Persistent addnode retry may be sleeping for60s after an older attempt.
-   // Attempt this verified local relay now; retain the persistent retry too.
+ peerBootstrap_->onAttach=[this](const QString& peer){
+  if(!connected_||!processAlive()||stopping_)return false;
+  const auto owner=epoch();rpc("addnode",{peer,"add"},[this,owner,peer](QJsonValue,QString){
+   if(!owner.matches(epoch())||!connected_||!processAlive()||stopping_||
+      !peerBootstrap_||peerBootstrap_->localEndpoint()!=peer)return;
+   // Registration may already exist. Try the current relay immediately,
+   // even while Core's persistent addnode scheduler is backing off.
    rpc("addnode",{peer,"onetry"},[](QJsonValue,QString){});
   });
+  return true;
  };
  peerBootstrap_->onRemoved=[this](const QString& peer){if(connected_&&processAlive())rpc("addnode",{peer,"remove"},[](QJsonValue,QString){});};
  peerBootstrap_->onStatus=[this](const QString& text){report(text);};peerBootstrap_->launch();
