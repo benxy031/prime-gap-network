@@ -1,0 +1,89 @@
+name: UI181 ordinary Windows package and native synchronization
+on:
+  push:
+    branches: [qualification/ui181-standalone-49]
+permissions:
+  contents: read
+jobs:
+  windows:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - name: Allow long test source paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /tests/native_grouped249_actual.py
+            /qualification/ui177/legacy-chain.zip
+      - name: Fetch the exact candidate from the unpublished draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download qa-ui181-win49 --repo $env:GITHUB_REPOSITORY --dir portable-ui181 --pattern "PGN-Windows-181.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification draft assets unavailable' }
+      - name: Prepare pinned verification dependencies
+        shell: pwsh
+        run: |
+          python -m venv .qa-updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
+          & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Open the exact short-name Windows package and resume sync
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_ui181_standalone.py
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone package qualification failed' }
+      - name: Check Defender using a text control and exact candidate files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = '39d3e5b4d9a4c9a24937be699a309a83fea8e5eecf1fde23a3b3947fddeef6ee'
+          $zip = Get-Item -LiteralPath "portable-ui181/PGN-Windows-181.zip"
+          if ((Get-FileHash -LiteralPath $zip.FullName).Hash.ToLowerInvariant() -ne $expected) { throw 'Signed target digest mismatch' }
+          $destination = (New-Item -ItemType Directory -Path scan-proof,scan-fixture/files)[1].FullName
+          $arc = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          try {
+            foreach ($path in @('PGN/PGN-Horizon.exe','PGN/EngineRuntime/network/horizon-engine-host.exe')) {
+              $entry = $arc.GetEntry($path)
+              if (!$entry) { throw 'Unexpected archive inventory' }
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,(Join-Path $destination $entry.Name),$false)
+            }
+          } finally { $arc.Dispose() }
+          $defender = Join-Path $env:ProgramData 'Microsoft/Windows Defender/Platform'
+          $command = Get-ChildItem -LiteralPath $defender -Directory | Where-Object {$_.Name -match '^[0-9]+\.'} |
+            Sort-Object LastWriteTime -Descending | ForEach-Object {Join-Path $_.FullName 'MpCmdRun.exe'} |
+            Where-Object {Test-Path -LiteralPath $_} | Select-Object -First 1
+          $control = Join-Path $destination 'control.txt'
+          Set-Content -LiteralPath $control 'PGN Horizon QA text control'
+          $results = @()
+          if ($command) {
+            foreach ($path in @($control,(Join-Path $destination 'PGN-Horizon.exe'),(Join-Path $destination 'horizon-engine-host.exe'),$zip.FullName)) {
+              $name = [IO.Path]::GetFileName($path)
+              $log = "scan-proof/$name.log"
+              & $command -Scan -ScanType 3 -File $path -DisableRemediation *> $log
+              $code = $LASTEXITCODE
+              $results += @{name=$name;exit_code=$code;sha256=(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()}
+              if ($code -ne 0) { break }
+            }
+          }
+          $pass = $results.Count -eq 4 -and @($results | Where-Object {$_.exit_code -ne 0}).Count -eq 0
+          @{PASS=$pass;scanner_available=[bool]$command;files=$results} |
+            ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 scan-proof/result.json
+          if (!$pass) { throw 'Exact Windows Defender qualification could not be completed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui181-standalone-${{ github.run_id }}
+          path: |
+            ui181-standalone-windows/evidence/
+            scan-proof/
+          if-no-files-found: warn
+          retention-days: 7
