@@ -170,7 +170,7 @@ try:
     while time.monotonic()<deadline and process.poll() is None:
         try:
             state=owned_ipc(owner,'--inspect-owned')
-            if state.get('pgn_core_link_state')=='ready' and state.get('pgn_network_height',0)>=legacy['canonical_height']:
+            if state.get('pgn_core_link_state')=='ready' and state.get('pgn_wallet_embedded_pid'):
                 break
         except (OSError,RuntimeError,ValueError):
             pass
@@ -193,7 +193,7 @@ try:
         try:
             state=owned_ipc(owner,'--inspect-owned')
             chain=rpc(wallet_data,wallet_port,'getblockchaininfo',[],timeout=8)
-            height=min(int(state.get('pgn_network_height',0)),chain['blocks'])
+            height=min(int(state.get('pgn_network_height') or 0),chain['blocks'])
             if height>legacy['canonical_height']:
                 assert rpc(wallet_data,wallet_port,'getaddressinfo',[address])['ismine'] is True
                 save('CATCHUP-PASS.json',readiness|dict(height=height,peers=len(rpc(wallet_data,wallet_port,'getpeerinfo',[]))))
@@ -205,6 +205,9 @@ try:
     else:
         raise AssertionError('Retained fixture did not advance on the public network in the isolated run')
 finally:
+    save('LAST-RUNTIME.json', {key:state.get(key) for key in ('pgn_core_link_state','pgn_network_height','pgn_wallet_embedded_pid')})
     if not owner.exited():
-        owned_ipc(owner,'--close-owned')
+        result=subprocess.run([str(owner.executable),'--close-owned',str(owner.pid)],capture_output=True,timeout=12)
+        if result.returncode!=0 and process.poll() is None:
+            process.terminate()
     process.wait(timeout=30)
