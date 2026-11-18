@@ -226,7 +226,7 @@ try:
     context,context_hash=stage.context_from_bytes(json.dumps(dict(
         schema='PGN_COMPONENT_STAGE_CONTEXT_V1',network='testnet',genesis_hash=GENESIS,
         platform='windows-x86_64',compatibility_set='pgn.epoch3.2026.11',minimum_sequence=44,
-        installed=[dict(id=c['id'],abi=c['abi'],version=c['version'])for c in old['components']],
+        installed=[dict(id=c['id'],abi='pgn.epoch3.2026.11',version=c['version'])for c in old['components']],
         protected_roots=[str(base),str(data)])).encode())
     fetcher=ExactDraftFetcher()
     client=AuthenticatedUpdates(QA/'downloads',root,ROOT_SHA,'https://windows-qualification.invalid/metadata/',
