@@ -1,0 +1,2153 @@
+{
+  "components": [
+    {
+      "files": [
+        {
+          "bytes": 915,
+          "path": "core-template.json",
+          "sha256": "94f170be0621c7e1fee0c75ffae0a85693017913bbc24e009b8d3b36c4bde415"
+        },
+        {
+          "bytes": 681231,
+          "path": "libgmp-10.dll",
+          "sha256": "c2567ccf3f410c3411ba7cd4b7ba14f393a0e70a1d0c0593297df6706b5fba96"
+        },
+        {
+          "bytes": 1602869,
+          "path": "libsqlite3-0.dll",
+          "sha256": "0b8ecbefff0fda8c6f8562f896df0935842396bff20bb746602b115172f3d526"
+        },
+        {
+          "bytes": 25572160,
+          "path": "pgn-core.exe",
+          "sha256": "3df925c084ad863521329fe438c804efa7d81905f7d350ad41981efa6402f25e"
+        }
+      ],
+      "id": "core",
+      "version": "2026.11.17.31"
+    },
+    {
+      "files": [
+        {
+          "bytes": 124544,
+          "path": "_internal/VCRUNTIME140.dll",
+          "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+        },
+        {
+          "bytes": 49792,
+          "path": "_internal/VCRUNTIME140_1.dll",
+          "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+        },
+        {
+          "bytes": 88880,
+          "path": "_internal/_bz2.pyd",
+          "sha256": "df5e5c6023daddba166b3d57265c89764817b3f60ec49d5b9421c4b93f42bccb"
+        },
+        {
+          "bytes": 131888,
+          "path": "_internal/_ctypes.pyd",
+          "sha256": "61546cbf4d68afdcdc6adb7c092d08776c738062b8696dd8e12b14092cc68c24"
+        },
+        {
+          "bytes": 263984,
+          "path": "_internal/_decimal.pyd",
+          "sha256": "285ed3ce2f35a250f7501cb3d45e38c157f99545dba277019f523d163329faa1"
+        },
+        {
+          "bytes": 70448,
+          "path": "_internal/_hashlib.pyd",
+          "sha256": "7947984cd95ac581dea8de194ecc3c8e7de05065b6fcca44746dd1d259ad126c"
+        },
+        {
+          "bytes": 168240,
+          "path": "_internal/_lzma.pyd",
+          "sha256": "a168fc517c3c150fc4fb95ce75aa3366fb58170d5c29556b1c04bcf890d4b3a1"
+        },
+        {
+          "bytes": 36144,
+          "path": "_internal/_queue.pyd",
+          "sha256": "6e38c7901f6a86d6e71dd3b92ceab917f998fdf10b26f5934c239e29811b5563"
+        },
+        {
+          "bytes": 87344,
+          "path": "_internal/_socket.pyd",
+          "sha256": "a985132c4618d509edf5c571c100e82786d30ff02cc0701e591a67025565b6d3"
+        },
+        {
+          "bytes": 29488,
+          "path": "_internal/_uuid.pyd",
+          "sha256": "5db074f32ef0dea31f129097e568a3301bebb181027742606b7a985d5e65ab73"
+        },
+        {
+          "bytes": 41264,
+          "path": "_internal/_wmi.pyd",
+          "sha256": "63f9c9db12e27dfc1d00dce37248d4ef13cfa3a37cb2f90faca06d45415bcdc4"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-console-l1-1-0.dll",
+          "sha256": "015bd08815c7b934a8952c3a7578e9ce59f21136e8a880d42bbd414bec2c6058"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-datetime-l1-1-0.dll",
+          "sha256": "5534812cdbdae94ba45cb216e5eb9af686b853948df54365103555abbbaf9d9a"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-debug-l1-1-0.dll",
+          "sha256": "837d2b1b2cd03e03fc6ccb050698b6b5763af17c201304872342a5eae9e0a2d2"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-errorhandling-l1-1-0.dll",
+          "sha256": "de43b165f568c276c00e95acd454e3092f352a18e95874595f4f4658c06d2ec7"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-fibers-l1-1-0.dll",
+          "sha256": "3cebc45bf479ad74cfabf2c6bfd4994d7ad639ed1221025981d19cedf9ce0416"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-fibers-l1-1-1.dll",
+          "sha256": "5ef70308bcca628ce6b0e2856b15b1c7ae340c3f9bbbc4c1071d8c191a34a5c3"
+        },
+        {
+          "bytes": 27008,
+          "path": "_internal/api-ms-win-core-file-l1-1-0.dll",
+          "sha256": "250ac829f2617bcac1c6e5b8c4f630462e20765863ba573526a3e11bbfb94a9a"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-file-l1-2-0.dll",
+          "sha256": "ae14079a114733f60ce87b92cba42acd8083c2cd67594e53bc37dc0b97a4b465"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-core-file-l2-1-0.dll",
+          "sha256": "914bf26a298713119477ea0a8e7bd43171b91344ebe24fb47ad77c49686e3d87"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-handle-l1-1-0.dll",
+          "sha256": "ab5489955e371b15f77906c08ec3c7affe2c7a46a08c514ca628768b4478974b"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-heap-l1-1-0.dll",
+          "sha256": "c70f9644d8377fa39c5b71f2e9734c1400d7598904fdeb772e8502099982dcb7"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-interlocked-l1-1-0.dll",
+          "sha256": "f8129710188e407bb0e6f46d30aeba277d67b947ece5fe09e883fde2323f3ae6"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+          "sha256": "5200b16cb2ddc61cfc07373a9a84aa85a3ab50806ca96c879c883275832944c1"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-libraryloader-l1-1-0.dll",
+          "sha256": "48786fb88b001dcd1f63acea903d3ca9cc0b3060d5a325e3f2f3cbc3bfd53166"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-localization-l1-2-0.dll",
+          "sha256": "9ec3898f7eba91faa28b51616c211a2689e3a13aeef8de6e13cb674e49d689eb"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-memory-l1-1-0.dll",
+          "sha256": "3a6cbc524c99e1cd80d5368f5601402a37ad602528b1ab628093573ef638eb3b"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-namedpipe-l1-1-0.dll",
+          "sha256": "97145ef89c44949fcf0f04ac834a8bc7d687ef49ee73ae9fc32f3c11136b7201"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-processenvironment-l1-1-0.dll",
+          "sha256": "8bc7c10b1851aea644e9c9f381cdb935e091fee6b0be3d3aedc6fffaac96adb7"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-core-processthreads-l1-1-0.dll",
+          "sha256": "d8030b777617c71f0f94564607699dbf7561487d779db9756aed378c5675213f"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-processthreads-l1-1-1.dll",
+          "sha256": "f5e676713340f73a03a3d41a6ec9883b431da7d16c7f07bd0a920fb80e6c0753"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-core-profile-l1-1-0.dll",
+          "sha256": "f023d47e44d3eea6b0743580f57e8c6ba81e79d5ebfa7da26250076c647b980e"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-rtlsupport-l1-1-0.dll",
+          "sha256": "9746d8930704153578a628c010638a5f818ffe5a927e25591b108e256dc6afca"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-string-l1-1-0.dll",
+          "sha256": "7c53ae24c982d16ffd1bf7f918d115b11b7f30e57bc7feaa18cb9781e4abb926"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-synch-l1-1-0.dll",
+          "sha256": "56d9d62ca5dba79a6581b8d574a7d8b2a64a5ecb71e47dcf06ed0285708b1859"
+        },
+        {
+          "bytes": 22888,
+          "path": "_internal/api-ms-win-core-synch-l1-2-0.dll",
+          "sha256": "f6482bbec5612c39ecb4822787a333f2b7570f7a5f922a4059be41ba957bb372"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-sysinfo-l1-1-0.dll",
+          "sha256": "272d02765fdd3582618236c2d309abba069642f9bc1062ede069d0c144e17007"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-core-sysinfo-l1-2-0.dll",
+          "sha256": "8a0900788859d0eb51c2f48f50cc6ed376a120b518100fa20e11d7702ccde260"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-timezone-l1-1-0.dll",
+          "sha256": "ff35de6c03812b332e140f17dade25c5dd4775156da9eeb1eaae3fddd27236ec"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-core-util-l1-1-0.dll",
+          "sha256": "191ef3e98641a57296f19d572d8eb62489470ff1ef6030d136af170c2f835173"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-crt-conio-l1-1-0.dll",
+          "sha256": "54ee5ec719a051496ff60aa00dbeaa94b9a7d2cdac27fe9b7317f1a666b6a2aa"
+        },
+        {
+          "bytes": 26992,
+          "path": "_internal/api-ms-win-crt-convert-l1-1-0.dll",
+          "sha256": "8b94662429171019fcd63c70bbf2095a075170599704a5e7dcdbe3da13f3a429"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-crt-environment-l1-1-0.dll",
+          "sha256": "39e5929593709e8af3bc9e0a75ec1155778d6f4a247f4cdfc58928ad6db88434"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-crt-filesystem-l1-1-0.dll",
+          "sha256": "5a8ecebac32edf4e1f3c5c6c1c8ea1a1add6cda4f9c9cb26f752fb295bea6865"
+        },
+        {
+          "bytes": 22872,
+          "path": "_internal/api-ms-win-crt-heap-l1-1-0.dll",
+          "sha256": "c71080cbcb43bf1f8f3e391deb12a582eb0abefc80946f340675a2c616e4feb4"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-crt-locale-l1-1-0.dll",
+          "sha256": "6c68648e524187e03c4ad9aaa4a99113c6ee9f29fb39cc0ed93f951975138e63"
+        },
+        {
+          "bytes": 31064,
+          "path": "_internal/api-ms-win-crt-math-l1-1-0.dll",
+          "sha256": "d4fbcccbe29371cbce431e43b2eb4f7ba9a6f04a3d740a071f02457a505e9dc8"
+        },
+        {
+          "bytes": 76120,
+          "path": "_internal/api-ms-win-crt-private-l1-1-0.dll",
+          "sha256": "29bf3d90617d3781d19b332d6ceb9f20ba5ce082ec74bf6c34d5d4aee56e48a1"
+        },
+        {
+          "bytes": 22896,
+          "path": "_internal/api-ms-win-crt-process-l1-1-0.dll",
+          "sha256": "47c1935942e3ac0812e4dcf18c0e265e565f0194a3349111c299712f5565f7ac"
+        },
+        {
+          "bytes": 26968,
+          "path": "_internal/api-ms-win-crt-runtime-l1-1-0.dll",
+          "sha256": "72adc1b3677e0814d9c4ebf0964000e84bb2acf67336c8963061665e44f78029"
+        },
+        {
+          "bytes": 26968,
+          "path": "_internal/api-ms-win-crt-stdio-l1-1-0.dll",
+          "sha256": "900afc3989673c9bb1a687ed38c192f46db9e6ba6d11a668898a539e7fc23798"
+        },
+        {
+          "bytes": 26968,
+          "path": "_internal/api-ms-win-crt-string-l1-1-0.dll",
+          "sha256": "fcf12466cc12fd3b73611fc0763a5a1f9d44e90349513c34a0c83b0f36421793"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-crt-time-l1-1-0.dll",
+          "sha256": "886e57c4a6adb299b38f02945369f590a67da4e79a798359fc60aaa067212d7c"
+        },
+        {
+          "bytes": 22912,
+          "path": "_internal/api-ms-win-crt-utility-l1-1-0.dll",
+          "sha256": "5f8f26b216ade615b67a41f6fbbb910972fc6153315a65bb8f09912be50215b1"
+        },
+        {
+          "bytes": 1333490,
+          "path": "_internal/base_library.zip",
+          "sha256": "6ed27ba344657ab911610199a677cfb04ab3e2495aa8aeebbcc0727909c0e854"
+        },
+        {
+          "bytes": 8003376,
+          "path": "_internal/libcrypto-3-x64.dll",
+          "sha256": "c1823e279b5cfd40c5c46e082d14b5d20d2884102079254b2b016f59266d76c7"
+        },
+        {
+          "bytes": 43824,
+          "path": "_internal/libffi-8.dll",
+          "sha256": "c5ae4dad3cfd76b1ca59b87505079382072f8eb1cde719fcd7c729fceebf898b"
+        },
+        {
+          "bytes": 2936349,
+          "path": "_internal/native/horizon-cpu-inventory.exe",
+          "sha256": "6df31ea78036ed3ef8ab0b5b8f70401252fdfaa9cd940ccdca6a445a2ac619f0"
+        },
+        {
+          "bytes": 3272811,
+          "path": "_internal/native/horizon-cpu-shared68-worker.exe",
+          "sha256": "2745fd47c0bfd9314bb97fb4f666252c3aebd62ea3d2b40460fa21d3f18acf70"
+        },
+        {
+          "bytes": 6985520,
+          "path": "_internal/python312.dll",
+          "sha256": "0ca3acbf9ce7165a4e3779fa9ddececa652af781b22c2bd2ba377d0d6b4c9c01"
+        },
+        {
+          "bytes": 34608,
+          "path": "_internal/select.pyd",
+          "sha256": "161357b19a682cb7a40c103a7dcc1e4a1a604ca10d9c069da4a451540b6f2638"
+        },
+        {
+          "bytes": 1362264,
+          "path": "_internal/ucrtbase.dll",
+          "sha256": "3239227d27667ba20d10a880751924e5719de0078f9fce232d149d383f7681f6"
+        },
+        {
+          "bytes": 1143600,
+          "path": "_internal/unicodedata.pyd",
+          "sha256": "f27c02636e6006f6dd074ea2e054e133efaed32b101a973c9bb9dd999bee3207"
+        },
+        {
+          "bytes": 1809235,
+          "path": "horizon-cpu-controller.exe",
+          "sha256": "389f0a44f76606e9269bd8b1340026bd2d32057389157344a3600b965ecdebbd"
+        }
+      ],
+      "id": "cpu",
+      "version": "2026.11.6.389"
+    },
+    {
+      "files": [
+        {
+          "bytes": 573952,
+          "path": "bin/cudart64_12.dll",
+          "sha256": "9d9b868955149875ac4ef43442aaaa8913d4a7b3e4d6dd60ee871626aa045768"
+        },
+        {
+          "bytes": 800419,
+          "path": "bin/pgn-gap-evidence.exe",
+          "sha256": "3ba06f922ff3828ba2069c8e5e4c25e3355d1a9f6ae79b8f833cb1f5a3c2fd15"
+        },
+        {
+          "bytes": 24540160,
+          "path": "bin/prime-gap-worker-sm120-k16.exe",
+          "sha256": "23d8396fcbabe2955cf947be399ffd8b707d8734bcf3bb11f97f1fc356339ced"
+        },
+        {
+          "bytes": 484,
+          "path": "bin/prime-gap-worker-sm120-k16.exe.module.json",
+          "sha256": "c62cb15ba9770571dd560d3adeecddc5264dd32469d26f055213e4edd55ff589"
+        },
+        {
+          "bytes": 24540160,
+          "path": "bin/prime-gap-worker-sm120-k32.exe",
+          "sha256": "23d8396fcbabe2955cf947be399ffd8b707d8734bcf3bb11f97f1fc356339ced"
+        },
+        {
+          "bytes": 484,
+          "path": "bin/prime-gap-worker-sm120-k32.exe.module.json",
+          "sha256": "b9cd81c3079edd70ca3182f3af088fc922dab5b0a20e8740eb3cce6dfdab87b9"
+        },
+        {
+          "bytes": 24540160,
+          "path": "bin/prime-gap-worker-sm120-k64.exe",
+          "sha256": "23d8396fcbabe2955cf947be399ffd8b707d8734bcf3bb11f97f1fc356339ced"
+        },
+        {
+          "bytes": 484,
+          "path": "bin/prime-gap-worker-sm120-k64.exe.module.json",
+          "sha256": "4bda83fc3f4748199f7cff84762707b577b4e7d24f0afa324903b3e4a995e079"
+        },
+        {
+          "bytes": 24540160,
+          "path": "bin/prime-gap-worker-sm120-k8.exe",
+          "sha256": "23d8396fcbabe2955cf947be399ffd8b707d8734bcf3bb11f97f1fc356339ced"
+        },
+        {
+          "bytes": 483,
+          "path": "bin/prime-gap-worker-sm120-k8.exe.module.json",
+          "sha256": "2f31c9c99a310fcc92a3502a43e19d7c47fe59f59fe4e2d91cbe78d4eec8f59e"
+        },
+        {
+          "bytes": 22742528,
+          "path": "bin/prime-gap-worker-sm86-k16.exe",
+          "sha256": "f0b9f81b3f8b8316beadab8f04e90a85c412d6dabe2793548f05d66d1af80dd5"
+        },
+        {
+          "bytes": 483,
+          "path": "bin/prime-gap-worker-sm86-k16.exe.module.json",
+          "sha256": "c7b2637178cc785e5cf13395eac48b7325e58fb2db50236b92370c11561574a0"
+        },
+        {
+          "bytes": 22742528,
+          "path": "bin/prime-gap-worker-sm86-k32.exe",
+          "sha256": "f0b9f81b3f8b8316beadab8f04e90a85c412d6dabe2793548f05d66d1af80dd5"
+        },
+        {
+          "bytes": 483,
+          "path": "bin/prime-gap-worker-sm86-k32.exe.module.json",
+          "sha256": "9399d71dfe30329fba161734f885360a2ab3272a9eaca73e06815febf86e5277"
+        },
+        {
+          "bytes": 22742528,
+          "path": "bin/prime-gap-worker-sm86-k64.exe",
+          "sha256": "f0b9f81b3f8b8316beadab8f04e90a85c412d6dabe2793548f05d66d1af80dd5"
+        },
+        {
+          "bytes": 483,
+          "path": "bin/prime-gap-worker-sm86-k64.exe.module.json",
+          "sha256": "7e4c478e5da5dd00b4458ad0e3f47ed2f8c85d3abaf4ad7a8d54e3cb90beba37"
+        },
+        {
+          "bytes": 22742528,
+          "path": "bin/prime-gap-worker-sm86-k8.exe",
+          "sha256": "f0b9f81b3f8b8316beadab8f04e90a85c412d6dabe2793548f05d66d1af80dd5"
+        },
+        {
+          "bytes": 482,
+          "path": "bin/prime-gap-worker-sm86-k8.exe.module.json",
+          "sha256": "505d17b49637ab20818bec83a36278d24997c508e8aab2ae64112d9421409ddd"
+        },
+        {
+          "bytes": 14088988,
+          "path": "lib/proof/windows/libflint.20.0.0-325ff13fcb92fb5a438579ecfff5f1da.dll",
+          "sha256": "76c9b206b94a409dc6c4f683b38efe952fee6bb354a5c669b85684550a59395a"
+        },
+        {
+          "bytes": 76288,
+          "path": "lib/proof/windows/libgcc_s_seh-1-bd1ea0fd3c3e2849e3e33dd77813f715.dll",
+          "sha256": "b443e0ad17713750105675f317f5f5c7790282f551dd76279aaaabb71543ac3a"
+        },
+        {
+          "bytes": 1264345,
+          "path": "lib/proof/windows/libgmp-10-3f2a57fb670147a982ef47f4f710bb31.dll",
+          "sha256": "0032daafb74e92c1a423fe1169fa4a3cb2604634d977ee0d2e85d5f48fbd32fc"
+        },
+        {
+          "bytes": 3074300,
+          "path": "lib/proof/windows/libmpfr-6-a244575d2981d61d439ca14ed667bc72.dll",
+          "sha256": "79e4b2d050f6039eb055b341e9ee6fdf736c0fd68f06db318b8cd8e478bf30d7"
+        },
+        {
+          "bytes": 52224,
+          "path": "lib/proof/windows/libwinpthread-1-cde765bd2b668ec30cb82d72611f9720.dll",
+          "sha256": "5bbef249a0d00e2d32c699d0bbe89f714ebeb872b3990a5cbeccb1d89f63e5e8"
+        },
+        {
+          "bytes": 1293,
+          "path": "lib/proof/windows/manifest.json",
+          "sha256": "644757bfd0525fa65e5f2d479e4d0f734a5a714cafb3097c9ebac47467832f19"
+        },
+        {
+          "bytes": 74096,
+          "path": "network/_internal/_asyncio.pyd",
+          "sha256": "c77de90cad749087a0c5dc5e19d78d24f6ef44e7e5ac19b8420cfc0cea62395d"
+        },
+        {
+          "bytes": 86896,
+          "path": "network/_internal/_bz2.pyd",
+          "sha256": "65f610646d10d5babea080e060d244b546ec52c54012e5e937dc72dcc2e2e7bc"
+        },
+        {
+          "bytes": 127480,
+          "path": "network/_internal/_ctypes.pyd",
+          "sha256": "0e56107a891100535f2da79d85a5ae65ff1227b4765bd108f8593ac1a1110d81"
+        },
+        {
+          "bytes": 262000,
+          "path": "network/_internal/_decimal.pyd",
+          "sha256": "aeacfead2befcc0768063a037bb64bd32109ae09cb144e5f571b04dd7965db9d"
+        },
+        {
+          "bytes": 68976,
+          "path": "network/_internal/_hashlib.pyd",
+          "sha256": "03d233dbace599168eaffec823de6ed7beec8c2a4ebfe9b8a3d8e042a59af3ba"
+        },
+        {
+          "bytes": 161136,
+          "path": "network/_internal/_lzma.pyd",
+          "sha256": "e3deecc1f59a3b811c608861decd84de1e8df8bafd5e2b39188861318c5a38cf"
+        },
+        {
+          "bytes": 37368,
+          "path": "network/_internal/_multiprocessing.pyd",
+          "sha256": "2c636df7059cb0dd7e978dd735c7c5c8ddb09cf94754cf9e232296b96c5c545a"
+        },
+        {
+          "bytes": 57336,
+          "path": "network/_internal/_overlapped.pyd",
+          "sha256": "662126ff80c3a1b4cedf74074029c12ae4743e6d3b37376e39ac70aacb7d4d3c"
+        },
+        {
+          "bytes": 33784,
+          "path": "network/_internal/_queue.pyd",
+          "sha256": "48e76e0ad63f6932b4a77b5819f41c1e7595636ca8d9e824f0943a14b8bb5035"
+        },
+        {
+          "bytes": 85496,
+          "path": "network/_internal/_socket.pyd",
+          "sha256": "3efa4636cf9e350856f6927d67a4c2564bf9bd2758a00bbf17d3aece5b60016d"
+        },
+        {
+          "bytes": 126184,
+          "path": "network/_internal/_sqlite3.pyd",
+          "sha256": "64b51df2805c58b023a875e8ae3be7ac7f61ef664f32ca6c90f6315da47ef0bc"
+        },
+        {
+          "bytes": 179432,
+          "path": "network/_internal/_ssl.pyd",
+          "sha256": "0bc527d2dbc50009f43b2ed5d5982c4f63f4b647647ffa9eda612dcda80f6040"
+        },
+        {
+          "bytes": 27128,
+          "path": "network/_internal/_uuid.pyd",
+          "sha256": "acce4f281d7ffb2dec0997527faf25b1df62ad7bd3032c568ddcf65c90edc867"
+        },
+        {
+          "bytes": 40304,
+          "path": "network/_internal/_wmi.pyd",
+          "sha256": "a980f1e7a29842bd946863fc2693fbeb555a9dc0f9e1630dfed9a2fcdef3ece2"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-console-l1-1-0.dll",
+          "sha256": "88ace577a9c51061cb7d1a36babbbefa48212fadc838ffde98fdfff60de18386"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-datetime-l1-1-0.dll",
+          "sha256": "1bd81dfd19204b44662510d9054852fb77c9f25c1088d647881c9b976cc16818"
+        },
+        {
+          "bytes": 21944,
+          "path": "network/_internal/api-ms-win-core-debug-l1-1-0.dll",
+          "sha256": "591358eb4d1531e9563ee0813e4301c552ce364c912ce684d16576eabf195dc3"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-core-errorhandling-l1-1-0.dll",
+          "sha256": "d56ce7b1cd76108ad6c137326ec694a14c99d48c3d7b0ace8c3ff4d9bcee3ce8"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-fibers-l1-1-0.dll",
+          "sha256": "91d249d7bc0e38ef6bcb17158b1fdc6dd8888dc086615c9b8b750b87e52a5fb3"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-fibers-l1-1-1.dll",
+          "sha256": "fc9d86cec621383eab636ebc87ddd3f5c19a3cb2a33d97be112c051d0b275429"
+        },
+        {
+          "bytes": 26152,
+          "path": "network/_internal/api-ms-win-core-file-l1-1-0.dll",
+          "sha256": "1ca895aba4e7435563a6b43e85eba67a0f8c74aa6a6a94d0fc48fa35535e2585"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-file-l1-2-0.dll",
+          "sha256": "4cadbc0c39da7c6722206fdcebd670abe5b8d261e7b041dd94f9397a89d1990d"
+        },
+        {
+          "bytes": 21960,
+          "path": "network/_internal/api-ms-win-core-file-l2-1-0.dll",
+          "sha256": "93c624b366ba16c643fc8933070a26f03b073ad0cf7f80173266d67536c61989"
+        },
+        {
+          "bytes": 21944,
+          "path": "network/_internal/api-ms-win-core-handle-l1-1-0.dll",
+          "sha256": "39095f59c41d76ec81bb2723d646fde4c148e7cc3402f4980d2ade95cb9c84f9"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-heap-l1-1-0.dll",
+          "sha256": "8f105771b236dbcb859de271f0a6822ce1cb79c36988dd42c9e3f6f55c5f7eb9"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-interlocked-l1-1-0.dll",
+          "sha256": "53b25e753ca785bf8b695d89dde5818a318890211dc992a89146f16658f0b606"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+          "sha256": "a9b13a1cd1b8c19b0c6b4afcd5bb0dd29c0e2288231ac9e6db8510094ce68ba6"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-libraryloader-l1-1-0.dll",
+          "sha256": "7f39ba298b41e4963047341288cab36b6a241835ee11ba4ad70f44dacd40906c"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-core-localization-l1-2-0.dll",
+          "sha256": "6ee44dd0d8510dc024c9f7c79b1b9fa88c987b26b6beb6653ddd11751c34e5dc"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-memory-l1-1-0.dll",
+          "sha256": "0512a35316ec9180437f86696a84c5c06a7e4e82e050055a656e5bf9fca206f9"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-core-namedpipe-l1-1-0.dll",
+          "sha256": "c05f1fffe3b5a2738ea54ce9485cca026fb9635f982626fba1e1dcc531897273"
+        },
+        {
+          "bytes": 21968,
+          "path": "network/_internal/api-ms-win-core-processenvironment-l1-1-0.dll",
+          "sha256": "c4eca98c3c67b6395d5b005b00ac1eb0318b86b23aa71035a44c2b1602befba9"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-core-processthreads-l1-1-0.dll",
+          "sha256": "5ccb89e93d67bc3288d4e84649c5346e66e15e3d7cd65d989daf3f4cb584be9a"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-processthreads-l1-1-1.dll",
+          "sha256": "4ad565a8ba3ef0ea8ab87221ad11f83ee0bc844ce236607958406663b407333e"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-core-profile-l1-1-0.dll",
+          "sha256": "7809160932f44e59b021699f5bc68799eb7293ee1fa926d6fcca3c3445302e61"
+        },
+        {
+          "bytes": 21960,
+          "path": "network/_internal/api-ms-win-core-rtlsupport-l1-1-0.dll",
+          "sha256": "9dc1e91e71c7c054854bd1487cb4e6946d82c9f463430f1c4e8d1471005172b1"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-string-l1-1-0.dll",
+          "sha256": "60fc31d2a0c634412f529dba76af3b9bf991352877c6dae528186d3935704cfd"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-synch-l1-1-0.dll",
+          "sha256": "3a72b4f29f39a265d32ad12f0ce15dbf60129c840e10d84d427829ede45e78ad"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-core-synch-l1-2-0.dll",
+          "sha256": "efc1e4460984a73cf47a3def033af1c8f3b1dbc1a56cd27781d3aacf3e3330cb"
+        },
+        {
+          "bytes": 22072,
+          "path": "network/_internal/api-ms-win-core-sysinfo-l1-1-0.dll",
+          "sha256": "b203d862ddef1dd62bf623fc866c7f7a9c317c1c2ae30d1f52cb41f955b5698e"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-core-sysinfo-l1-2-0.dll",
+          "sha256": "2703635d835396afd0f138d7c73751afe7e33a24f4225d08c1690b0a371932c0"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-core-timezone-l1-1-0.dll",
+          "sha256": "33f4fddc181066fce06b2227bded813f95e94ed1f3d785e982c6b6b56c510c57"
+        },
+        {
+          "bytes": 21944,
+          "path": "network/_internal/api-ms-win-core-util-l1-1-0.dll",
+          "sha256": "6eda016742a6171205a387a14b3c0b331841567740376f56768f8c151724207d"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-crt-conio-l1-1-0.dll",
+          "sha256": "b762061b688aae679afe788904d2c9970f74a7dac98f3b42463d08f25e483d3f"
+        },
+        {
+          "bytes": 26056,
+          "path": "network/_internal/api-ms-win-crt-convert-l1-1-0.dll",
+          "sha256": "ebb2ae5535a64f65daeab8235585114fc9dd2cf1a49f5852d446250b998b6ae4"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-crt-environment-l1-1-0.dll",
+          "sha256": "17d63275d00bdd8670422b95bd264c532998e0a1b041079e54fce4b6b7a55819"
+        },
+        {
+          "bytes": 22056,
+          "path": "network/_internal/api-ms-win-crt-filesystem-l1-1-0.dll",
+          "sha256": "9a9e2a65a281644e368d0f272b95ba5f6b445d1c35910d06056c5ebeb77402db"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-crt-heap-l1-1-0.dll",
+          "sha256": "bab9ac3ec83e380ae51e4295ef3bf2c738627812d3a49d1e713661abbc8dc57a"
+        },
+        {
+          "bytes": 22080,
+          "path": "network/_internal/api-ms-win-crt-locale-l1-1-0.dll",
+          "sha256": "bd14c67ea28e21d6257ad780a37122c9b5773f69e693f5db6bffaee4d839526e"
+        },
+        {
+          "bytes": 30248,
+          "path": "network/_internal/api-ms-win-crt-math-l1-1-0.dll",
+          "sha256": "606d66d82db562ea7979179d06486a0f94d079941d26b80a1e2c49d29959df6f"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-crt-process-l1-1-0.dll",
+          "sha256": "f6156b1020380ec4f0e48577ebedaaef5fb1ab1f337d8b4e72e6a33a7567a9cc"
+        },
+        {
+          "bytes": 26152,
+          "path": "network/_internal/api-ms-win-crt-runtime-l1-1-0.dll",
+          "sha256": "c5902934d026d7e15fbe9917d474f3322846a41a25e66f4b2b1f758801879f4b"
+        },
+        {
+          "bytes": 26168,
+          "path": "network/_internal/api-ms-win-crt-stdio-l1-1-0.dll",
+          "sha256": "a9c5a153d8c0286f9b41a2b1c65854ad9e6471b8755b7de87bae4470e60bcab6"
+        },
+        {
+          "bytes": 26176,
+          "path": "network/_internal/api-ms-win-crt-string-l1-1-0.dll",
+          "sha256": "25b8f83a7767211b11132775a0e27a45aa4ec8ab4e6572599f9c172ae3606b40"
+        },
+        {
+          "bytes": 22096,
+          "path": "network/_internal/api-ms-win-crt-time-l1-1-0.dll",
+          "sha256": "7c7f6393f06de11750adb09cc5698ae55cd9fb27b2e51e207286feb1b5b2b156"
+        },
+        {
+          "bytes": 21952,
+          "path": "network/_internal/api-ms-win-crt-utility-l1-1-0.dll",
+          "sha256": "d8ba5f17b9ffcbf3aeaf3fa1da226832d2fa90f81acce0cd669464e76ce434ac"
+        },
+        {
+          "bytes": 1333717,
+          "path": "network/_internal/base_library.zip",
+          "sha256": "868bf320c25a3164508170a42a0943a763712a55a26d85b05cdb61c510bb2916"
+        },
+        {
+          "bytes": 5231472,
+          "path": "network/_internal/libcrypto-3.dll",
+          "sha256": "ccfffddcd3defb8d899026298af9af43bc186130f8483d77e97c93233d5f27d7"
+        },
+        {
+          "bytes": 39696,
+          "path": "network/_internal/libffi-8.dll",
+          "sha256": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a"
+        },
+        {
+          "bytes": 794992,
+          "path": "network/_internal/libssl-3.dll",
+          "sha256": "007142039f04d04e0ed607bda53de095e5bc6a8a10d26ecedde94ea7d2d7eefe"
+        },
+        {
+          "bytes": 205304,
+          "path": "network/_internal/pyexpat.pyd",
+          "sha256": "d615e193d1affcdbfe504e90d3621cbdcff94bf72b79d899126534507fd6d27a"
+        },
+        {
+          "bytes": 6945272,
+          "path": "network/_internal/python312.dll",
+          "sha256": "9a0e3435aaa680d868150f87ab3e388ad2eebc22f87e036155c7b4eda8cd2120"
+        },
+        {
+          "bytes": 33136,
+          "path": "network/_internal/select.pyd",
+          "sha256": "d4d7181b11db0bd22a6cd5cda6f8583d1f5c77615fd0a6ca33350619d6e0438a"
+        },
+        {
+          "bytes": 1583608,
+          "path": "network/_internal/sqlite3.dll",
+          "sha256": "8daa45684bf6688fca28d956b2e8942f2fa98f656675ce68e6d61dd869848a7a"
+        },
+        {
+          "bytes": 1361448,
+          "path": "network/_internal/ucrtbase.dll",
+          "sha256": "2e5fb14b7bf8540278f3614a12f0226e56a7cc9e64b81cbd976c6fcf2f71cbfb"
+        },
+        {
+          "bytes": 1140592,
+          "path": "network/_internal/unicodedata.pyd",
+          "sha256": "208ee1cd3cbad0828433ca7246b05be2b1ff5569983d27d296c0b38888585488"
+        },
+        {
+          "bytes": 120400,
+          "path": "network/_internal/VCRUNTIME140.dll",
+          "sha256": "052ad6a20d375957e82aa6a3c441ea548d89be0981516ca7eb306e063d5027f4"
+        },
+        {
+          "bytes": 49776,
+          "path": "network/_internal/VCRUNTIME140_1.dll",
+          "sha256": "6a99bc0128e0c7d6cbbf615fcc26909565e17d4ca3451b97f8987f9c6acbc6c8"
+        },
+        {
+          "bytes": 314,
+          "path": "network/bootstrap.json",
+          "sha256": "419d3645e3479914a93d10f62d3d509aadd1b30c7476f45e0810f34dff156442"
+        },
+        {
+          "bytes": 3450788,
+          "path": "network/horizon-engine-host.exe",
+          "sha256": "defe674177084803896c5522c1f11f6e05e565e2b90d3ff5c1fc2f69a7c7e92a"
+        },
+        {
+          "bytes": 1056,
+          "path": "THIRD-PARTY-LICENSES/final-linux-rich-15.0.0.dist-info-LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        },
+        {
+          "bytes": 46841,
+          "path": "THIRD-PARTY-LICENSES/final-windows-numpy-2.3.5.dist-info-LICENSE.txt",
+          "sha256": "596b953e1dcbe829b32ae444387efa15003fc6abdeca8a2179f364a6364c286e"
+        },
+        {
+          "bytes": 1056,
+          "path": "THIRD-PARTY-LICENSES/final-windows-rich-15.0.0.dist-info-LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        },
+        {
+          "bytes": 5199,
+          "path": "THIRD-PARTY-LICENSES/MANIFEST.json",
+          "sha256": "c4241651beef52c5c5160c3785757f5782dc06ae25250079ef64778324cdcdb0"
+        },
+        {
+          "bytes": 1078,
+          "path": "THIRD-PARTY-LICENSES/Markdown-it-py-LICENSE",
+          "sha256": "4a2260d6e2cd0f5a151a1e86dbfe7d3ed552b1e2beabf9941c1ba5c49cbce484"
+        },
+        {
+          "bytes": 1073,
+          "path": "THIRD-PARTY-LICENSES/Markdown-it-py-LICENSE.markdown-it",
+          "sha256": "792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473"
+        },
+        {
+          "bytes": 2338,
+          "path": "THIRD-PARTY-LICENSES/mdurl-LICENSE",
+          "sha256": "7c605df6e28667a9603118e98274f64a49ce3eed0d26fccce9534a345e0ef955"
+        },
+        {
+          "bytes": 59262,
+          "path": "THIRD-PARTY-LICENSES/NVIDIA-CUDA-Runtime-12.8.90-License.txt",
+          "sha256": "ad6f5853fba0ca0d159d0f58d49ae49830c2f8c93f7a92648b9ce90adb4c6ccd"
+        },
+        {
+          "bytes": 59262,
+          "path": "THIRD-PARTY-LICENSES/NVIDIA-NVRTC-12.8.93-License.txt",
+          "sha256": "ad6f5853fba0ca0d159d0f58d49ae49830c2f8c93f7a92648b9ce90adb4c6ccd"
+        },
+        {
+          "bytes": 24642,
+          "path": "THIRD-PARTY-LICENSES/proof-runtime/linux/python_flint-0.7.1.dist-info/LICENSE",
+          "sha256": "92876ec27338b1d0d994eaa85d7837b916671c871e37d56e4676caf7cb134843"
+        },
+        {
+          "bytes": 28397,
+          "path": "THIRD-PARTY-LICENSES/proof-runtime/windows/python_flint-0.7.1.dist-info/LICENSE",
+          "sha256": "489707f58e1e11b9c8b59a434272b6c7acf75fdb380d3be95a3f72c5291fb79c"
+        },
+        {
+          "bytes": 11048,
+          "path": "THIRD-PARTY-LICENSES/Pygments-AUTHORS",
+          "sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f"
+        },
+        {
+          "bytes": 1331,
+          "path": "THIRD-PARTY-LICENSES/Pygments-LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        },
+        {
+          "bytes": 32604,
+          "path": "THIRD-PARTY-LICENSES/PyInstaller-COPYING.txt",
+          "sha256": "0598064c7d2718e38d7914a7d08343b2fa008e3bea9ebba2aa7a6ffa5900dd64"
+        },
+        {
+          "bytes": 25066,
+          "path": "THIRD-PARTY-LICENSES/Python-Windows-LICENSE.txt",
+          "sha256": "886a0ead2d89030ee62dbff52b04e47ab91998341295bb9c56fb952b4e081c7a"
+        },
+        {
+          "bytes": 1056,
+          "path": "THIRD-PARTY-LICENSES/Rich-LICENSE",
+          "sha256": "deed7c17a4318158190a3ea239cc879a5a50271cebb98ae7025f48fbe58dca15"
+        },
+        {
+          "bytes": 69100,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-gcc-13-base-copyright.txt",
+          "sha256": "08c6f3dee4c19aa1e57eb7d4ad45829b2e99656313bd07fa0922e2553f500be5"
+        },
+        {
+          "bytes": 2228,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libbz2-1.0-copyright.txt",
+          "sha256": "832ed535ff3c3d025a8d2348eb1b697b89addcf2eaadbc17650262040b9145e2"
+        },
+        {
+          "bytes": 1756,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libexpat1-copyright.txt",
+          "sha256": "60919fe1a156395ff14511bb6ff79756c50ade2fff59ac60c9bae1d8a7fe6292"
+        },
+        {
+          "bytes": 10165,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libffi8-copyright.txt",
+          "sha256": "737ff68f0eb104d3b0d96b291c3a8f40a775a3ec2b53f9b2e4bcfe3188bde118"
+        },
+        {
+          "bytes": 15465,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-liblzma5-copyright.txt",
+          "sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8"
+        },
+        {
+          "bytes": 4314,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libreadline8t64-copyright.txt",
+          "sha256": "854c6f5f249a109a913e1e58528445c4fec96f063ae8ba496bfb2b460bcc6866"
+        },
+        {
+          "bytes": 1833,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libsqlite3-0-copyright.txt",
+          "sha256": "78e9df8f8153c91c762ec970b82d224ac4d30f05aa7773e7e17e268141e53873"
+        },
+        {
+          "bytes": 2543,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libssl3t64-copyright.txt",
+          "sha256": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
+        },
+        {
+          "bytes": 4670,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libtinfo6-copyright.txt",
+          "sha256": "7c9d2c8dbee48b6f4bbbffb1f370cc5858de11cc4f5a70c5c622c274917e1c65"
+        },
+        {
+          "bytes": 1639,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-libyaml-0-2-copyright.txt",
+          "sha256": "64609fa7e24f1daa7c78a84e571d5c385350534ead8830158e0744c64f0497b6"
+        },
+        {
+          "bytes": 49855,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-python3.12-copyright.txt",
+          "sha256": "f1cbf908e1daa8789b389fdcf17811ed36b675d736b39a103591399861350382"
+        },
+        {
+          "bytes": 2927,
+          "path": "THIRD-PARTY-LICENSES/Ubuntu-zlib1g-copyright.txt",
+          "sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6"
+        },
+        {
+          "bytes": 3669,
+          "path": "THIRD-PARTY-NOTICES.txt",
+          "sha256": "390d9ad78c1b0431104eb87befbd212ed5c4fef8c3a30b99e62c2ca6cce50a56"
+        },
+        {
+          "bytes": 625152,
+          "path": "vanity/pgn-vanity-gpu.dll",
+          "sha256": "a719a4250b27f51935e998cf415469db0d55044bbac624ecd788adc7a1544233"
+        },
+        {
+          "bytes": 400,
+          "path": "vanity/runtime.json",
+          "sha256": "2ff73c6d01aa807ab68c28c5325b13711cf1491b86516303c1598b37bdf75d25"
+        }
+      ],
+      "id": "gpu",
+      "version": "2026.11.18.91"
+    },
+    {
+      "files": [
+        {
+          "bytes": 79043982,
+          "path": "assets/audit-animation.rcc",
+          "sha256": "4829e814760188247db8f11c277e4e029b2309b529df9d5e9098650121317535"
+        },
+        {
+          "bytes": 844683,
+          "path": "data/reference/prime-gap-records.json",
+          "sha256": "157f500b5702757acde634f6785dac41ce55242c11b953cd28a3516c6404b691"
+        },
+        {
+          "bytes": 97406,
+          "path": "generic/qtuiotouchplugin.dll",
+          "sha256": "49405336af5ab0781a9e1bf53fb50a1c260d9d4d0bd8a8583a46a55b5eb663ec"
+        },
+        {
+          "bytes": 39864,
+          "path": "imageformats/qgif.dll",
+          "sha256": "12414b06372c95e0369d24f5c3c93ad68329da98c88a6bb900336eb5adb255f2"
+        },
+        {
+          "bytes": 43599,
+          "path": "imageformats/qico.dll",
+          "sha256": "b35c893f6118c8c9c41681c6e30ce255bbd52d35c9ad57788c89e35440b65066"
+        },
+        {
+          "bytes": 66381,
+          "path": "imageformats/qjpeg.dll",
+          "sha256": "f21d8f9bd1b8d22fdd9e0c6d85bdaf0cfef658f033dd50444eb90f27f5c5e516"
+        },
+        {
+          "bytes": 35323,
+          "path": "libb2-1.dll",
+          "sha256": "01bbf64090367d511f41d9fc8f34c557f61d4a227b7c9e47ce04052cbfdc3e7d"
+        },
+        {
+          "bytes": 140697,
+          "path": "libbrotlicommon.dll",
+          "sha256": "7b0047dc16dd92a7932124dfd5a6e698d342f533a15d37d61f710def66091436"
+        },
+        {
+          "bytes": 60224,
+          "path": "libbrotlidec.dll",
+          "sha256": "c4c987a01597ddf969d93023f933f999a20f285588b0decb4deeb780c9e9cdf8"
+        },
+        {
+          "bytes": 107741,
+          "path": "libbz2-1.dll",
+          "sha256": "1790bf6473c9d48db14c1f0ee8124142327556d281299ea2a72ee361118ee01a"
+        },
+        {
+          "bytes": 78480,
+          "path": "libdouble-conversion.dll",
+          "sha256": "aecc5a09c4657a969be2969269029664898b3d1ac037b0795614d685a7ca6c1e"
+        },
+        {
+          "bytes": 33108,
+          "path": "libffi-8.dll",
+          "sha256": "5f515b95604d71f7b26b84f52a33350332a52992300396c33c90563716325ab6"
+        },
+        {
+          "bytes": 808305,
+          "path": "libfreetype-6.dll",
+          "sha256": "19604dde573cbb8a13053fc231eee99b91cd972e0e9a3e1465f44ad6985e83ee"
+        },
+        {
+          "bytes": 150025,
+          "path": "libgcc_s_seh-1.dll",
+          "sha256": "44f6318f96eb2aaf6e90400bb1178ab6d55b01ae2cf24846d6b30d96e87e89dd"
+        },
+        {
+          "bytes": 1919044,
+          "path": "libgio-2.0-0.dll",
+          "sha256": "1256cbd7cb48df5ecea1646343d617c8e41a434216fdbb88ccfd78fe498442c8"
+        },
+        {
+          "bytes": 1568604,
+          "path": "libglib-2.0-0.dll",
+          "sha256": "3a1abec0184b238db54399cb9243393d9436d96b8fdb9bd9f2875da207c5b458"
+        },
+        {
+          "bytes": 23440,
+          "path": "libgmodule-2.0-0.dll",
+          "sha256": "5833f90d3c7a627d4d1b541e873bf0b10bca2204be89666213b3c48f6a57422d"
+        },
+        {
+          "bytes": 681231,
+          "path": "libgmp-10.dll",
+          "sha256": "c2567ccf3f410c3411ba7cd4b7ba14f393a0e70a1d0c0593297df6706b5fba96"
+        },
+        {
+          "bytes": 358171,
+          "path": "libgobject-2.0-0.dll",
+          "sha256": "d12b1c34335cf605809af3b9bbed80a05c3334a9dbd02c0d398c1618d47f1d21"
+        },
+        {
+          "bytes": 167857,
+          "path": "libgraphite2.dll",
+          "sha256": "93953e4744bcfce9a7bc439b956544bc213095cb1349c3602a58370f32b25c18"
+        },
+        {
+          "bytes": 1892473,
+          "path": "libharfbuzz-0.dll",
+          "sha256": "f3bfe34ffac38f82fb542e65244668d0bd49aa43880b1004772797d43f5e4269"
+        },
+        {
+          "bytes": 1139262,
+          "path": "libiconv-2.dll",
+          "sha256": "9824e9f78e76ad513e5ba0d697c60de2fb24a21c20922bc2f918c86998a08cab"
+        },
+        {
+          "bytes": 33121942,
+          "path": "libicudt78.dll",
+          "sha256": "29b2f925adf4531d7b3ee0edc037f3559996de499dff663819f07000a79d72fa"
+        },
+        {
+          "bytes": 3179936,
+          "path": "libicuin78.dll",
+          "sha256": "cb87dfb05ae183ea96f2295174d993430094cc0f0d6ba99fd4f253d5079b0890"
+        },
+        {
+          "bytes": 1995258,
+          "path": "libicuuc78.dll",
+          "sha256": "9d5fd51a4647f759067568ae82dc391b56af144966a588cd98aab77ef045835a"
+        },
+        {
+          "bytes": 298164,
+          "path": "libintl-8.dll",
+          "sha256": "0e5a178731e6be6d115442a6ade3df7f03265cd1fc4338f8b6f86a8001cbf582"
+        },
+        {
+          "bytes": 963471,
+          "path": "libjpeg-8.dll",
+          "sha256": "22286acc18b907d03eec1177c99f54a802a6f8437888d1abb79e65a7ecd14605"
+        },
+        {
+          "bytes": 93595,
+          "path": "libmd4c.dll",
+          "sha256": "9331ed00963781cea1059bbb7c6102b85cf714196f2e38ec4557a05daf1129b1"
+        },
+        {
+          "bytes": 646599,
+          "path": "libpcre2-16-0.dll",
+          "sha256": "0daf3ef8645f738efdb5e67d92b4059bbd50434ba3047e46f9196b003c9a1f00"
+        },
+        {
+          "bytes": 706022,
+          "path": "libpcre2-8-0.dll",
+          "sha256": "82bfffeb1f5cab5d1919b3bf4f744602ecbbdab7332d5e80eda469a9138dba80"
+        },
+        {
+          "bytes": 254777,
+          "path": "libpng16-16.dll",
+          "sha256": "28db7a8c6fcc579ce621729d27f1952324cd3a2b4e24da121611bb586346e732"
+        },
+        {
+          "bytes": 1602869,
+          "path": "libsqlite3-0.dll",
+          "sha256": "0b8ecbefff0fda8c6f8562f896df0935842396bff20bb746602b115172f3d526"
+        },
+        {
+          "bytes": 2659194,
+          "path": "libstdc++-6.dll",
+          "sha256": "098e4964e3c8179847f7a1c313d2e8020ca12df3f1d18878a417a8f54d41505a"
+        },
+        {
+          "bytes": 73308,
+          "path": "libwinpthread-1.dll",
+          "sha256": "94a9a4e2fe27b4bc827a4b209e9deb4cc3dc34bc025df06b849144f9d4c588f8"
+        },
+        {
+          "bytes": 148154,
+          "path": "libz-1.dll",
+          "sha256": "934103c50623302548a1cf66fbc22f0029e4eb4556343252a505e2fc005e835f"
+        },
+        {
+          "bytes": 1217412,
+          "path": "libzstd.dll",
+          "sha256": "48368ab0ca622d0ec12f41ce85d91f22866bf5da92c77a69a06483564c93816c"
+        },
+        {
+          "bytes": 1208,
+          "path": "LICENSES/CORE-COPYING.txt",
+          "sha256": "de7235489f3ed62c93f397e777ebb860f02714fbb2aa6ee68938ef0d35d34d40"
+        },
+        {
+          "bytes": 11358,
+          "path": "LICENSES/model-viewer.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "bytes": 28124,
+          "path": "LICENSES/renderer-notices.txt",
+          "sha256": "7e6ba5a73765f999f77eb4ad697601349f7ac6907a5bf9567e03407c357ce2fd"
+        },
+        {
+          "bytes": 1084,
+          "path": "LICENSES/runtime/brotli/LICENSE",
+          "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+        },
+        {
+          "bytes": 1527,
+          "path": "LICENSES/runtime/double-conversion/LICENSE",
+          "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+        },
+        {
+          "bytes": 6743,
+          "path": "LICENSES/runtime/freetype/FTL.TXT",
+          "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f"
+        },
+        {
+          "bytes": 17994,
+          "path": "LICENSES/runtime/freetype/GPLv2.TXT",
+          "sha256": "c4120c6752c910c299e3bd9cb3a46ff262c268303ca2069b61f92f10a5656c18"
+        },
+        {
+          "bytes": 26527,
+          "path": "LICENSES/runtime/gcc-libs/COPYING.LIB",
+          "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861"
+        },
+        {
+          "bytes": 3324,
+          "path": "LICENSES/runtime/gcc-libs/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "bytes": 35147,
+          "path": "LICENSES/runtime/gcc-libs/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "bytes": 236,
+          "path": "LICENSES/runtime/gcc-libs/README",
+          "sha256": "33400d067fa3e2bd670a0868dcdb60c9486e8f559b675cf9ff1ff55d4e0d06ab"
+        },
+        {
+          "bytes": 495,
+          "path": "LICENSES/runtime/gettext-runtime/COPYING",
+          "sha256": "7ef2cdfe58e0c0460657b6598b49af29d4e03c1e41cbaf0e1da1eb8ad74b95d0"
+        },
+        {
+          "bytes": 26419,
+          "path": "LICENSES/runtime/gettext-runtime/intl/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        {
+          "bytes": 65,
+          "path": "LICENSES/runtime/gettext-runtime/libasprintf/COPYING",
+          "sha256": "03133addae5b99a6148c538300e6d97074453089be1423b741bd081f18e2b298"
+        },
+        {
+          "bytes": 26419,
+          "path": "LICENSES/runtime/gettext-runtime/libasprintf/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        {
+          "bytes": 1971,
+          "path": "LICENSES/runtime/harfbuzz/COPYING",
+          "sha256": "ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64"
+        },
+        {
+          "bytes": 6556,
+          "path": "LICENSES/runtime/libb2/LICENSE",
+          "sha256": "6a1ee543e5282cd9061881edf462e6fdab181f328da71fc2c9a6950a80e94d01"
+        },
+        {
+          "bytes": 35147,
+          "path": "LICENSES/runtime/libiconv/COPYING",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "bytes": 26419,
+          "path": "LICENSES/runtime/libiconv/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        {
+          "bytes": 26419,
+          "path": "LICENSES/runtime/libiconv/libcharset/COPYING.LIB",
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        {
+          "bytes": 5741,
+          "path": "LICENSES/runtime/libiconv/README",
+          "sha256": "4ae66e61d1c6593c84c47105b368d579bcee1af566dbb959ec63a0c48425dcf4"
+        },
+        {
+          "bytes": 5345,
+          "path": "LICENSES/runtime/libpng/LICENSE",
+          "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+        },
+        {
+          "bytes": 1096,
+          "path": "LICENSES/runtime/md4c/LICENSE.md",
+          "sha256": "d30937367d5413e7eaa218b1640b8946ff76fd34d97152f6979fd96169d5d0fc"
+        },
+        {
+          "bytes": 97,
+          "path": "LICENSES/runtime/pcre2/COPYING",
+          "sha256": "99272c55f3dcfa07a8a7e15a5c1a33096e4727de74241d65fa049fccfdd59507"
+        },
+        {
+          "bytes": 4011,
+          "path": "LICENSES/runtime/pcre2/LICENCE.md",
+          "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811"
+        },
+        {
+          "bytes": 1644,
+          "path": "LICENSES/runtime/pywin32-ctypes/LICENSE.txt",
+          "sha256": "dfa83b3e2709adfcdb838d9ad55823ca674abb780e60563d9dd9544ccbf785e9"
+        },
+        {
+          "bytes": 8948,
+          "path": "LICENSES/runtime/qt6-base/AFL-2.1.txt",
+          "sha256": "93bb4f7417aa775bab9026cc3d0af28aeb64451fc5a8ec651876785edd8eaf9b"
+        },
+        {
+          "bytes": 10398,
+          "path": "LICENSES/runtime/qt6-base/Apache-2.0.txt",
+          "sha256": "e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+        },
+        {
+          "bytes": 8816,
+          "path": "LICENSES/runtime/qt6-base/Bitstream-Vera.txt",
+          "sha256": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93"
+        },
+        {
+          "bytes": 244,
+          "path": "LICENSES/runtime/qt6-base/blessing.txt",
+          "sha256": "592db1199aab67aafe4515db9808b420db122083807c5329b2f061951e79acbe"
+        },
+        {
+          "bytes": 1276,
+          "path": "LICENSES/runtime/qt6-base/BSD-2-Clause.txt",
+          "sha256": "8fda146749ca071ac9cdce2e24d25444676ea48d1f9dccc2b7c15c054b717db8"
+        },
+        {
+          "bytes": 1469,
+          "path": "LICENSES/runtime/qt6-base/BSD-3-Clause.txt",
+          "sha256": "9f0490f18656c6f2435bd14f603ef0c96434d1825615363dce43abb42ed1dcce"
+        },
+        {
+          "bytes": 1672,
+          "path": "LICENSES/runtime/qt6-base/BSD-4-Clause.txt",
+          "sha256": "83faa0d205c316ce3efeafee465b6a165914fb29595968c08dc6437021b7b6fd"
+        },
+        {
+          "bytes": 1340,
+          "path": "LICENSES/runtime/qt6-base/BSL-1.0.txt",
+          "sha256": "3abd6471b9a9a08d65ce771143f8e278bb4c1aeb10c1c2d476935a6b049653f5"
+        },
+        {
+          "bytes": 7048,
+          "path": "LICENSES/runtime/qt6-base/CC0-1.0.txt",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        },
+        {
+          "bytes": 6743,
+          "path": "LICENSES/runtime/qt6-base/FTL.txt",
+          "sha256": "08c135755dd589039470f1fdbb400daaabaaa50d0b366d19cebff4d22986baa1"
+        },
+        {
+          "bytes": 22955,
+          "path": "LICENSES/runtime/qt6-base/GFDL-1.3-no-invariants-only.txt",
+          "sha256": "110535522396708cea37c72a802c5e7e81391139f5f7985631c93ef242b206a4"
+        },
+        {
+          "bytes": 18092,
+          "path": "LICENSES/runtime/qt6-base/GPL-2.0-only.txt",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 18092,
+          "path": "LICENSES/runtime/qt6-base/GPL-2.0-or-later.txt",
+          "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+        },
+        {
+          "bytes": 35147,
+          "path": "LICENSES/runtime/qt6-base/GPL-3.0-only.txt",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "bytes": 1188,
+          "path": "LICENSES/runtime/qt6-base/HPND.txt",
+          "sha256": "67ac968431270291f5e9cd3ed76705e1169f57082ee102093b2543b28cef63cf"
+        },
+        {
+          "bytes": 1815,
+          "path": "LICENSES/runtime/qt6-base/IJG.txt",
+          "sha256": "1cb448f5e2e6d3aca60943f4eee1a04675628dc0266a074a42bc1560ebc28d61"
+        },
+        {
+          "bytes": 1986,
+          "path": "LICENSES/runtime/qt6-base/Imlib2.txt",
+          "sha256": "8846f2baba1a7f4c36f7ca19a923a000d8a21afa37cf0fe006f6ce88a6058a89"
+        },
+        {
+          "bytes": 11789,
+          "path": "LICENSES/runtime/qt6-base/IPL-1.0.txt",
+          "sha256": "d5328e672fb1bff47ee18e890784541453380081cf3771bb7b3c06fc19c7d503"
+        },
+        {
+          "bytes": 25906,
+          "path": "LICENSES/runtime/qt6-base/LGPL-2.1-or-later.txt",
+          "sha256": "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"
+        },
+        {
+          "bytes": 7651,
+          "path": "LICENSES/runtime/qt6-base/LGPL-3.0-only.txt",
+          "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+        },
+        {
+          "bytes": 5345,
+          "path": "LICENSES/runtime/qt6-base/libpng-2.0.txt",
+          "sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e"
+        },
+        {
+          "bytes": 4120,
+          "path": "LICENSES/runtime/qt6-base/Libpng.txt",
+          "sha256": "58fe669792f9b4e0740bf75ecfe90b5326128bb2ce7e27e1c342abd9db4d8ea6"
+        },
+        {
+          "bytes": 1852,
+          "path": "LICENSES/runtime/qt6-base/LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception.txt",
+          "sha256": "0526625fcc746a42d3f19a0ab357d3dc8479fdbe3bfd168825498f50215c7a63"
+        },
+        {
+          "bytes": 463,
+          "path": "LICENSES/runtime/qt6-base/LicenseRef-ICC-License.txt",
+          "sha256": "9e34ff47b3a44814e183342e7e198d127a6740e29d20e8381fba7688dafc79dd"
+        },
+        {
+          "bytes": 139,
+          "path": "LICENSES/runtime/qt6-base/LicenseRef-Lcs-Telegraphics.txt",
+          "sha256": "c10225ebbd5191bfdd761b0d7752c785f2453ab665d6c454473fb12d254668aa"
+        },
+        {
+          "bytes": 462,
+          "path": "LICENSES/runtime/qt6-base/LicenseRef-Qt-Commercial.txt",
+          "sha256": "9b1f50aae6267f9d5e0ceb6775ee86450262c25ec7c0573e151fe5d3f18a4700"
+        },
+        {
+          "bytes": 144,
+          "path": "LICENSES/runtime/qt6-base/LicenseRef-SHA1-Public-Domain.txt",
+          "sha256": "65d86b8ec6b1cd8b8f6e64fd8710274ba00d6a3c520e00dfdcd1c3d2071f3305"
+        },
+        {
+          "bytes": 624,
+          "path": "LICENSES/runtime/qt6-base/Linux-syscall-note.txt",
+          "sha256": "3f9e477523febab58de8b716ccfbcf02e6ef1c8e7728953905e8558637abe2a9"
+        },
+        {
+          "bytes": 1306,
+          "path": "LICENSES/runtime/qt6-base/MIT-Khronos-old.txt",
+          "sha256": "3c58021633974f9ed3c3d445a374240a5244fd039628f4d7f6f3e674bc8e6694"
+        },
+        {
+          "bytes": 897,
+          "path": "LICENSES/runtime/qt6-base/MIT-open-group.txt",
+          "sha256": "c55d2ab72d8a4f9e9cd8fbd1379268e575e8cfa16874affa5899b75a6d754514"
+        },
+        {
+          "bytes": 1111,
+          "path": "LICENSES/runtime/qt6-base/MIT.txt",
+          "sha256": "d040359701c01996a017d5c515678929cd1b0625e64cb86db44025fbb6cdf1fc"
+        },
+        {
+          "bytes": 16726,
+          "path": "LICENSES/runtime/qt6-base/MPL-2.0.txt",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+        },
+        {
+          "bytes": 965,
+          "path": "LICENSES/runtime/qt6-base/Qt-GPL-exception-1.0.txt",
+          "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2"
+        },
+        {
+          "bytes": 23547,
+          "path": "LICENSES/runtime/qt6-base/SPL-1.0.txt",
+          "sha256": "f58f2f30909982445f97f1a61667261920a7caeab21ef5bea1b740f5b144d141"
+        },
+        {
+          "bytes": 1995,
+          "path": "LICENSES/runtime/qt6-base/Unicode-3.0.txt",
+          "sha256": "80bb6294022d8764adb36a9d65ebb6bd94efb1865918a71e31e6c247607d7634"
+        },
+        {
+          "bytes": 1338,
+          "path": "LICENSES/runtime/qt6-base/X11.txt",
+          "sha256": "e2936c6509784b4f0ec27bac74182393866fad9422b29a70e085ff14aba87193"
+        },
+        {
+          "bytes": 965,
+          "path": "LICENSES/runtime/qt6-base/Xerox.txt",
+          "sha256": "b6bc52205d01e10cf43dbb7b8aec06dcaa3b21d1486e7c9c0bec329ee8244d8d"
+        },
+        {
+          "bytes": 1465,
+          "path": "LICENSES/runtime/qt6-base/Zlib.txt",
+          "sha256": "d7e3139972874dc8abdbbfce27ec1e6f942b28279dd7d27453630a8b4610e080"
+        },
+        {
+          "bytes": 1528,
+          "path": "LICENSES/runtime/sqlite3/LICENSE",
+          "sha256": "0b76663a90e034f3d7f2af5bfada4cedec5ebc275361899eccc5c18e6f01ff1f"
+        },
+        {
+          "bytes": 1002,
+          "path": "LICENSES/runtime/zlib/LICENSE",
+          "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+        },
+        {
+          "bytes": 1549,
+          "path": "LICENSES/runtime/zstd/LICENSE",
+          "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+        },
+        {
+          "bytes": 1081,
+          "path": "LICENSES/threejs.txt",
+          "sha256": "bfe119ea4fd413f5f7ca3fcd63adb0c4a073ed39daa2fe7d3e6b769e21272601"
+        },
+        {
+          "bytes": 1487,
+          "path": "LICENSES/WebView2.txt",
+          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+        },
+        {
+          "bytes": 2150,
+          "path": "LIMITS.txt",
+          "sha256": "3903f97e9236e02594f80fb4b00054ec272951255acaeec5dd42a75427dd20cc"
+        },
+        {
+          "bytes": 25662,
+          "path": "networkinformation/qglib.dll",
+          "sha256": "ff1687b99806058749ca75b17dab25eab8d6bb2c30221e1c85414eb662f757f9"
+        },
+        {
+          "bytes": 154582,
+          "path": "networkinformation/qnetworklistmanager.dll",
+          "sha256": "630f9eca6feddf697adde18715687c77de71406d1e0e5bca24bc42c599aa37a0"
+        },
+        {
+          "bytes": 15027290,
+          "path": "PGN-Horizon.exe",
+          "sha256": "2bb34ae82100c932ede11d3519c376113379956cca599335e1fd6d49b3894c98"
+        },
+        {
+          "bytes": 650687,
+          "path": "pgn-native-gap-evidence.exe",
+          "sha256": "8fbd5d17f7d3f3e4c1b74c74f16cf18f8049a2d3663a24b0a19559e3c7ca6165"
+        },
+        {
+          "bytes": 8402958,
+          "path": "pgn-vanity-session.exe",
+          "sha256": "5f977a1e5348923629e41a9a1c80d40c80435b48f66e839acd6433f87df3ea53"
+        },
+        {
+          "bytes": 1528543,
+          "path": "platforms/qwindows.dll",
+          "sha256": "0d8373fbf3a2bb409b49303ad8cbf74d78be401e0b97e60003490d7b080e3d69"
+        },
+        {
+          "bytes": 7462437,
+          "path": "Qt6Core.dll",
+          "sha256": "bcfa6e5a8996340bd2b3a633629f97114e018f73658f15848e6a9e82645c386c"
+        },
+        {
+          "bytes": 10828274,
+          "path": "Qt6Gui.dll",
+          "sha256": "2318ad5e8e3d6eb97283289364506b2f4200aa779c47af843f14f2b568a41822"
+        },
+        {
+          "bytes": 2182670,
+          "path": "Qt6Network.dll",
+          "sha256": "ee96fdb6b33a12f485506ba2da247165858bcc6d9e755e1c66e4af6f862e5496"
+        },
+        {
+          "bytes": 353454,
+          "path": "Qt6Sql.dll",
+          "sha256": "7c6643500be85a077b5d03d8b8550e648193976997030b9e39061fd226441664"
+        },
+        {
+          "bytes": 7855853,
+          "path": "Qt6Widgets.dll",
+          "sha256": "0b065a22ba4d3c327335daefe74a5150bc2ce03016c6ea90e155b0dd79ae6425"
+        },
+        {
+          "bytes": 535,
+          "path": "README.txt",
+          "sha256": "628f4bdfb76d63ab3c891641bde667f5c949cf5ddaeb798094472171c510b1a0"
+        },
+        {
+          "bytes": 116845,
+          "path": "sqldrivers/qsqlite.dll",
+          "sha256": "e5decaab142004f70695e50b028fb80efac8c401be2c2809b2108ab85bed4a11"
+        },
+        {
+          "bytes": 300557,
+          "path": "styles/qmodernwindowsstyle.dll",
+          "sha256": "56fe25e33e17fc1ca864fe7fc660366329eb7d2701897222f8297d1518d7d4c7"
+        },
+        {
+          "bytes": 1113,
+          "path": "TESTING.txt",
+          "sha256": "2c939bcccc23528e84c254af89cb88aed4dd2165063f3d6a760d482b11669ccd"
+        },
+        {
+          "bytes": 111106,
+          "path": "tls/qcertonlybackend.dll",
+          "sha256": "8a67776e89074ce8bd389f0abd0b7bd68637e7e33278ddbceaf978b9d3d44547"
+        },
+        {
+          "bytes": 312136,
+          "path": "tls/qschannelbackend.dll",
+          "sha256": "b677ba5df631db8f402026f52d07732c2c2287693d736999fb16531b0af1e915"
+        },
+        {
+          "bytes": 88880,
+          "path": "UpdateRuntime/_internal/_bz2.pyd",
+          "sha256": "073ceeb45bbd016250b4408d84fd7164b4e58b41df3c46e036a61125fbea9789"
+        },
+        {
+          "bytes": 181248,
+          "path": "UpdateRuntime/_internal/_cffi_backend.cp312-win_amd64.pyd",
+          "sha256": "9af5e4f68a41f26b726f2e9424f9d58a4f5666189f6a48be95f406b257102aec"
+        },
+        {
+          "bytes": 131888,
+          "path": "UpdateRuntime/_internal/_ctypes.pyd",
+          "sha256": "f9fe2f1981ebc2d5453471324e2e9608fb8beaf7a78060b35711f9872b8cfff2"
+        },
+        {
+          "bytes": 263984,
+          "path": "UpdateRuntime/_internal/_decimal.pyd",
+          "sha256": "209aa996d8e01983eef817bf19fca5feadd6a178ac2ed16755c4d6def07f04ba"
+        },
+        {
+          "bytes": 70448,
+          "path": "UpdateRuntime/_internal/_hashlib.pyd",
+          "sha256": "13b497fa22af0f705cfa41ba52adec7d15589a023ed1a7d43b707e4fd5d65c13"
+        },
+        {
+          "bytes": 168240,
+          "path": "UpdateRuntime/_internal/_lzma.pyd",
+          "sha256": "a6b591f8997456649e18149e0df0dac576ddb9cee13b4d6a7bbff5a2b34ca006"
+        },
+        {
+          "bytes": 36144,
+          "path": "UpdateRuntime/_internal/_queue.pyd",
+          "sha256": "b75f975075162ff9ba06d6eed23d4d7cb8902bee047fde341cfc71f3d9a1dda0"
+        },
+        {
+          "bytes": 87344,
+          "path": "UpdateRuntime/_internal/_socket.pyd",
+          "sha256": "fff06107deaa2ba79674f5a1ffc49a0984e01453b18f5dad9e1ae0acd38eafa8"
+        },
+        {
+          "bytes": 180528,
+          "path": "UpdateRuntime/_internal/_ssl.pyd",
+          "sha256": "71fe41df1946017636f16b6828ce8a533409c4072c9cac1cecab0b8f665450f0"
+        },
+        {
+          "bytes": 29488,
+          "path": "UpdateRuntime/_internal/_uuid.pyd",
+          "sha256": "8b0a3828d9fa8cb1fbbbbed902556bcc533c7d0a97296faedf077af02a81c3d1"
+        },
+        {
+          "bytes": 41264,
+          "path": "UpdateRuntime/_internal/_wmi.pyd",
+          "sha256": "90bd33d87dc63f2f89b9f8c8f063a5d7a1660e14dbfeee406656c49b154e7865"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-console-l1-1-0.dll",
+          "sha256": "015bd08815c7b934a8952c3a7578e9ce59f21136e8a880d42bbd414bec2c6058"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-datetime-l1-1-0.dll",
+          "sha256": "5534812cdbdae94ba45cb216e5eb9af686b853948df54365103555abbbaf9d9a"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-debug-l1-1-0.dll",
+          "sha256": "837d2b1b2cd03e03fc6ccb050698b6b5763af17c201304872342a5eae9e0a2d2"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-errorhandling-l1-1-0.dll",
+          "sha256": "de43b165f568c276c00e95acd454e3092f352a18e95874595f4f4658c06d2ec7"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-fibers-l1-1-0.dll",
+          "sha256": "3cebc45bf479ad74cfabf2c6bfd4994d7ad639ed1221025981d19cedf9ce0416"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-fibers-l1-1-1.dll",
+          "sha256": "5ef70308bcca628ce6b0e2856b15b1c7ae340c3f9bbbc4c1071d8c191a34a5c3"
+        },
+        {
+          "bytes": 27008,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-file-l1-1-0.dll",
+          "sha256": "250ac829f2617bcac1c6e5b8c4f630462e20765863ba573526a3e11bbfb94a9a"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-file-l1-2-0.dll",
+          "sha256": "ae14079a114733f60ce87b92cba42acd8083c2cd67594e53bc37dc0b97a4b465"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-file-l2-1-0.dll",
+          "sha256": "914bf26a298713119477ea0a8e7bd43171b91344ebe24fb47ad77c49686e3d87"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-handle-l1-1-0.dll",
+          "sha256": "ab5489955e371b15f77906c08ec3c7affe2c7a46a08c514ca628768b4478974b"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-heap-l1-1-0.dll",
+          "sha256": "c70f9644d8377fa39c5b71f2e9734c1400d7598904fdeb772e8502099982dcb7"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-interlocked-l1-1-0.dll",
+          "sha256": "f8129710188e407bb0e6f46d30aeba277d67b947ece5fe09e883fde2323f3ae6"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+          "sha256": "5200b16cb2ddc61cfc07373a9a84aa85a3ab50806ca96c879c883275832944c1"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-libraryloader-l1-1-0.dll",
+          "sha256": "48786fb88b001dcd1f63acea903d3ca9cc0b3060d5a325e3f2f3cbc3bfd53166"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-localization-l1-2-0.dll",
+          "sha256": "9ec3898f7eba91faa28b51616c211a2689e3a13aeef8de6e13cb674e49d689eb"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-memory-l1-1-0.dll",
+          "sha256": "3a6cbc524c99e1cd80d5368f5601402a37ad602528b1ab628093573ef638eb3b"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-namedpipe-l1-1-0.dll",
+          "sha256": "97145ef89c44949fcf0f04ac834a8bc7d687ef49ee73ae9fc32f3c11136b7201"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-processenvironment-l1-1-0.dll",
+          "sha256": "8bc7c10b1851aea644e9c9f381cdb935e091fee6b0be3d3aedc6fffaac96adb7"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-processthreads-l1-1-0.dll",
+          "sha256": "d8030b777617c71f0f94564607699dbf7561487d779db9756aed378c5675213f"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-processthreads-l1-1-1.dll",
+          "sha256": "f5e676713340f73a03a3d41a6ec9883b431da7d16c7f07bd0a920fb80e6c0753"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-profile-l1-1-0.dll",
+          "sha256": "f023d47e44d3eea6b0743580f57e8c6ba81e79d5ebfa7da26250076c647b980e"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-rtlsupport-l1-1-0.dll",
+          "sha256": "9746d8930704153578a628c010638a5f818ffe5a927e25591b108e256dc6afca"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-string-l1-1-0.dll",
+          "sha256": "7c53ae24c982d16ffd1bf7f918d115b11b7f30e57bc7feaa18cb9781e4abb926"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-synch-l1-1-0.dll",
+          "sha256": "56d9d62ca5dba79a6581b8d574a7d8b2a64a5ecb71e47dcf06ed0285708b1859"
+        },
+        {
+          "bytes": 22888,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-synch-l1-2-0.dll",
+          "sha256": "f6482bbec5612c39ecb4822787a333f2b7570f7a5f922a4059be41ba957bb372"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-sysinfo-l1-1-0.dll",
+          "sha256": "272d02765fdd3582618236c2d309abba069642f9bc1062ede069d0c144e17007"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-sysinfo-l1-2-0.dll",
+          "sha256": "8a0900788859d0eb51c2f48f50cc6ed376a120b518100fa20e11d7702ccde260"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-timezone-l1-1-0.dll",
+          "sha256": "ff35de6c03812b332e140f17dade25c5dd4775156da9eeb1eaae3fddd27236ec"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-core-util-l1-1-0.dll",
+          "sha256": "191ef3e98641a57296f19d572d8eb62489470ff1ef6030d136af170c2f835173"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-conio-l1-1-0.dll",
+          "sha256": "54ee5ec719a051496ff60aa00dbeaa94b9a7d2cdac27fe9b7317f1a666b6a2aa"
+        },
+        {
+          "bytes": 26992,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-convert-l1-1-0.dll",
+          "sha256": "8b94662429171019fcd63c70bbf2095a075170599704a5e7dcdbe3da13f3a429"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-environment-l1-1-0.dll",
+          "sha256": "39e5929593709e8af3bc9e0a75ec1155778d6f4a247f4cdfc58928ad6db88434"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-filesystem-l1-1-0.dll",
+          "sha256": "5a8ecebac32edf4e1f3c5c6c1c8ea1a1add6cda4f9c9cb26f752fb295bea6865"
+        },
+        {
+          "bytes": 22872,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-heap-l1-1-0.dll",
+          "sha256": "c71080cbcb43bf1f8f3e391deb12a582eb0abefc80946f340675a2c616e4feb4"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-locale-l1-1-0.dll",
+          "sha256": "6c68648e524187e03c4ad9aaa4a99113c6ee9f29fb39cc0ed93f951975138e63"
+        },
+        {
+          "bytes": 31064,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-math-l1-1-0.dll",
+          "sha256": "d4fbcccbe29371cbce431e43b2eb4f7ba9a6f04a3d740a071f02457a505e9dc8"
+        },
+        {
+          "bytes": 22896,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-process-l1-1-0.dll",
+          "sha256": "47c1935942e3ac0812e4dcf18c0e265e565f0194a3349111c299712f5565f7ac"
+        },
+        {
+          "bytes": 26968,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-runtime-l1-1-0.dll",
+          "sha256": "72adc1b3677e0814d9c4ebf0964000e84bb2acf67336c8963061665e44f78029"
+        },
+        {
+          "bytes": 26968,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-stdio-l1-1-0.dll",
+          "sha256": "900afc3989673c9bb1a687ed38c192f46db9e6ba6d11a668898a539e7fc23798"
+        },
+        {
+          "bytes": 26968,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-string-l1-1-0.dll",
+          "sha256": "fcf12466cc12fd3b73611fc0763a5a1f9d44e90349513c34a0c83b0f36421793"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-time-l1-1-0.dll",
+          "sha256": "886e57c4a6adb299b38f02945369f590a67da4e79a798359fc60aaa067212d7c"
+        },
+        {
+          "bytes": 22912,
+          "path": "UpdateRuntime/_internal/api-ms-win-crt-utility-l1-1-0.dll",
+          "sha256": "5f8f26b216ade615b67a41f6fbbb910972fc6153315a65bb8f09912be50215b1"
+        },
+        {
+          "bytes": 1333490,
+          "path": "UpdateRuntime/_internal/base_library.zip",
+          "sha256": "ed03c6b150c8fa88c30537ee0cd749cc86f1fbdc85fc5ee3c6e824426ff17892"
+        },
+        {
+          "bytes": 132,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/entry_points.txt",
+          "sha256": "a6b6108011f8e27050fe5269bba88c8051b414697880d3b0b6fbe3a03a0b001c"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 1123,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/licenses/LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        },
+        {
+          "bytes": 2594,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/METADATA",
+          "sha256": "67b6a7595df7ede2195016a05d285faa7d362a8f57c238984edb8bb674b5770d"
+        },
+        {
+          "bytes": 3511,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/RECORD",
+          "sha256": "7b68b68987435661eb45e07b6e98e4ca32f55a4e4d673840bc0c5af10e35d277"
+        },
+        {
+          "bytes": 19,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/top_level.txt",
+          "sha256": "ac4ed6477ad97cd2b1588f7e8e7ea1b0708097b303901f859ae41bc568c57a14"
+        },
+        {
+          "bytes": 101,
+          "path": "UpdateRuntime/_internal/cffi-2.1.1.dist-info/WHEEL",
+          "sha256": "f767fbbf21c4fc6662c119c3d88d39bc24ff4b7f54be4472ba0b980c028e19bf"
+        },
+        {
+          "bytes": 906,
+          "path": "UpdateRuntime/_internal/codex-rejected-cas.pem",
+          "sha256": "c916ce1b14ed8ca69e9b5c9fab22799a900dd610d6d4ec9b1347f4fd48e53718"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 197,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/licenses/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "bytes": 11360,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "bytes": 1532,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        },
+        {
+          "bytes": 4394,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/METADATA",
+          "sha256": "047cfc71226409de4318b360aef15c63a2adf609731e3dcf7fe932f14ea042ee"
+        },
+        {
+          "bytes": 17959,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/RECORD",
+          "sha256": "a3891bd341f4c6624b9f4d0bb94033a8d013439dba26c889f01f171ce1bbef83"
+        },
+        {
+          "bytes": 45629,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/sboms/cryptography-rust.cyclonedx.json",
+          "sha256": "246af194b4c524807c5aaffd2b7ff86c2c9bee3eb3fceeac987709ad76e4e7ef"
+        },
+        {
+          "bytes": 1223,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/sboms/sbom.json",
+          "sha256": "5b5eea08dd952a16eef188f7a85ad439a4409efa0e2bce9ca339a4de9c8db3f0"
+        },
+        {
+          "bytes": 96,
+          "path": "UpdateRuntime/_internal/cryptography-50.0.2.dist-info/WHEEL",
+          "sha256": "9efe56059dbb731c438c822ac4132a2b670e174db90f09059aa246a8bdd2a575"
+        },
+        {
+          "bytes": 9897472,
+          "path": "UpdateRuntime/_internal/cryptography/hazmat/bindings/_rust.pyd",
+          "sha256": "1d4332a447cab13dec8e3a533ad579e0e562b79e40822c931f33769758fc7156"
+        },
+        {
+          "bytes": 8003376,
+          "path": "UpdateRuntime/_internal/libcrypto-3-x64.dll",
+          "sha256": "fde70fa9cf3b621192b7f2a735d7fa282a98165e46ae4cd28b0a3450cd60a8ef"
+        },
+        {
+          "bytes": 43824,
+          "path": "UpdateRuntime/_internal/libffi-8.dll",
+          "sha256": "86d18b329e672b4aca08d21306f0ee0852e38245abb583ea66204a7dacc0b4f6"
+        },
+        {
+          "bytes": 1599280,
+          "path": "UpdateRuntime/_internal/libssl-3-x64.dll",
+          "sha256": "bfc6554932583976ab1f8b275f0f67ca1a99b657e74bcbb1f023e0c2067d3182"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 1543,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/licenses/LICENSE",
+          "sha256": "0a9e78156ae8b96caf1b4f11ac2df424b83de29736f9e757630548a6272fdf90"
+        },
+        {
+          "bytes": 9709,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/METADATA",
+          "sha256": "ad8db5fe2b0e0a3b0e8419fe5041b80be92470a40b06bd9c1462a0a8bb637c92"
+        },
+        {
+          "bytes": 1491,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/RECORD",
+          "sha256": "e9ec7a54646268297ba417f7c6a6d8a41543c197bbdd4ed1492f676063b3c28c"
+        },
+        {
+          "bytes": 10,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/top_level.txt",
+          "sha256": "73e94f712ef82fff0aa07ec813a3d0179a1fca2ad140d57856191b48520f7963"
+        },
+        {
+          "bytes": 91,
+          "path": "UpdateRuntime/_internal/pycparser-3.12.dist-info/WHEEL",
+          "sha256": "98e75747d0b7c0c568bfb71263c3d8f970b3a374a6996087bc642be5cb09a1aa"
+        },
+        {
+          "bytes": 71984,
+          "path": "UpdateRuntime/_internal/python3.dll",
+          "sha256": "f8e043655d60d6ab270cf06dadb592bf20764def2fd4947d483a2d51c1a3254d"
+        },
+        {
+          "bytes": 6985520,
+          "path": "UpdateRuntime/_internal/python312.dll",
+          "sha256": "ab4df28cbbf44ed15c3d48484dc8a3483ad385e7132c3bb17d04c4c5b47da3cc"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/securesystemslib-1.6.0.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 1082,
+          "path": "UpdateRuntime/_internal/securesystemslib-1.6.0.dist-info/licenses/LICENSE",
+          "sha256": "6357addf59ba70a824bc678c35e0936916e1cc38182f503372147191ed227bd3"
+        },
+        {
+          "bytes": 4792,
+          "path": "UpdateRuntime/_internal/securesystemslib-1.6.0.dist-info/METADATA",
+          "sha256": "01f1ade44083135d777e3aed7f906e002573ed462eb8b84cc59b667695964de9"
+        },
+        {
+          "bytes": 7180,
+          "path": "UpdateRuntime/_internal/securesystemslib-1.6.0.dist-info/RECORD",
+          "sha256": "2577765bc2d77d701d3ef8f20b38e59e33caf2079386975be580c3d9e343e322"
+        },
+        {
+          "bytes": 87,
+          "path": "UpdateRuntime/_internal/securesystemslib-1.6.0.dist-info/WHEEL",
+          "sha256": "5b77e4a649bbfb07fdbc123967eeecd1e5a478cfaca6eefc23c35e6fdf037848"
+        },
+        {
+          "bytes": 34608,
+          "path": "UpdateRuntime/_internal/select.pyd",
+          "sha256": "df6429f7b13990abd546f935a1b7fcaf76ffd3ba03ae510d22863988e42da2ce"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 9694,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/licenses/LICENSE",
+          "sha256": "d3174ad63e721d4c9dccb8ad4320848992d314369bc46319720b5802c9153fe9"
+        },
+        {
+          "bytes": 1086,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/licenses/LICENSE-MIT",
+          "sha256": "ad52fe92b0d21a9b3733b484eb6f865e83855f4a6f9b9b8812b9012dc4587d27"
+        },
+        {
+          "bytes": 8128,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/METADATA",
+          "sha256": "528e5e373529ce419a34dc3fdf988442b1a7aa2c65706ba2dbadd7a017a5b6d3"
+        },
+        {
+          "bytes": 3338,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/RECORD",
+          "sha256": "91a0a89592e7b4d9627ed543f32102eab42c4aeffcc819528dcd92326f09f794"
+        },
+        {
+          "bytes": 87,
+          "path": "UpdateRuntime/_internal/tuf-7.0.1.dist-info/WHEEL",
+          "sha256": "ccec20e2307acd7da453dd7437e70c6b08e2bc3ead3bc3445af135da37b56d59"
+        },
+        {
+          "bytes": 1362264,
+          "path": "UpdateRuntime/_internal/ucrtbase.dll",
+          "sha256": "3239227d27667ba20d10a880751924e5719de0078f9fce232d149d383f7681f6"
+        },
+        {
+          "bytes": 1143600,
+          "path": "UpdateRuntime/_internal/unicodedata.pyd",
+          "sha256": "c54f4d3b7ec79c15bba21ae46b0e67a900935b942f2b910c9cba64333255359a"
+        },
+        {
+          "bytes": 4,
+          "path": "UpdateRuntime/_internal/urllib3-2.8.0.dist-info/INSTALLER",
+          "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+        },
+        {
+          "bytes": 1093,
+          "path": "UpdateRuntime/_internal/urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        },
+        {
+          "bytes": 7389,
+          "path": "UpdateRuntime/_internal/urllib3-2.8.0.dist-info/METADATA",
+          "sha256": "10898c620e8007c030e07fa5622b68358a43010025dfbd78a1cb797699de2bb4"
+        },
+        {
+          "bytes": 5528,
+          "path": "UpdateRuntime/_internal/urllib3-2.8.0.dist-info/RECORD",
+          "sha256": "5d88c4832d0406a7fd3c000f924b00394c2d7f694b332bc441370d1a7f5fe392"
+        },
+        {
+          "bytes": 87,
+          "path": "UpdateRuntime/_internal/urllib3-2.8.0.dist-info/WHEEL",
+          "sha256": "ccec20e2307acd7da453dd7437e70c6b08e2bc3ead3bc3445af135da37b56d59"
+        },
+        {
+          "bytes": 124544,
+          "path": "UpdateRuntime/_internal/VCRUNTIME140.dll",
+          "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+        },
+        {
+          "bytes": 49792,
+          "path": "UpdateRuntime/_internal/VCRUNTIME140_1.dll",
+          "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+        },
+        {
+          "bytes": 429,
+          "path": "UpdateRuntime/deployment.json",
+          "sha256": "b07f4a7e7f4d2c40320bd63f52efdabe43ed98dcb94a525551148905f4e716a6"
+        },
+        {
+          "bytes": 2586068,
+          "path": "UpdateRuntime/horizon-updater.exe",
+          "sha256": "64ae911d7842c2589c7704b50ff5f336cf3754c58097c1a2a7cd42e3879cc332"
+        },
+        {
+          "bytes": 194912,
+          "path": "WebView2Loader.dll",
+          "sha256": "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6"
+        },
+        {
+          "bytes": 190835,
+          "path": "zlib1.dll",
+          "sha256": "aa658771fb152b095eda1614d8bde798efb92324b6f4a0c99c743cd96b67ac90"
+        }
+      ],
+      "id": "ui",
+      "version": "2026.11.18.182"
+    }
+  ],
+  "network": "testnet",
+  "platform": "windows-x86_64",
+  "published": false,
+  "release_version": "2026.11.18.182",
+  "schema": "PGN_COMPONENT_MANIFEST_V1"
+}
