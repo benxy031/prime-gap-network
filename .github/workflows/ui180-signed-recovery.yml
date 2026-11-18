@@ -8,6 +8,7 @@ jobs:
   windows:
     permissions:
       contents: write
+      actions: read
     runs-on: windows-latest
     timeout-minutes: 22
     steps:
@@ -22,13 +23,21 @@ jobs:
             /src/update/
             /tests/native_grouped249_actual.py
             /qualification/ui177/legacy-chain.zip
+            /qualification/ui180/atlas-resource.delta
+            /qualification/ui180/signed-archive-layout.json
       - name: Fetch the exact candidate from the unpublished draft
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download qa-ui180-win48 --repo $env:GITHUB_REPOSITORY --dir signed-candidate-48 --pattern "qa-catalogue48-metadata.zip" --pattern "*.components-48.zip"
-          if ($LASTEXITCODE -ne 0) { throw 'Qualification draft assets unavailable' }
+          gh release download qa-ui180-win48 --repo $env:GITHUB_REPOSITORY --dir signed-candidate-48 --pattern "qa-catalogue48-metadata.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate metadata unavailable' }
+          gh release download qa-ui179-win47 --repo $env:GITHUB_REPOSITORY --dir prior-signed-47 --pattern "*.components-47.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Prior authenticated payload unavailable' }
+          gh run download 44358096567 --repo $env:GITHUB_REPOSITORY --name horizon-relay-stall355-windows-44358096567 --dir ui180-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact UI180 artifact unavailable' }
+          gh run download 44357714595 --repo $env:GITHUB_REPOSITORY --name horizon-engine-host90-windows --dir host90-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Host90 artifact unavailable' }
       - name: Prepare pinned verification dependencies
         shell: pwsh
         run: |
@@ -36,11 +45,40 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
           & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
           if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Reconstruct the exact already-signed target from verified inputs
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_ui180_portable_recovery.py --prepare-only
+          if ($LASTEXITCODE -ne 0) { throw 'Exact portable materialization failed' }
+          $cohort = (Get-Content -Raw ui180-cohort-path.txt).Trim()
+          $reference = Get-ChildItem -LiteralPath prior-signed-47 -Filter '*.components-47.zip'
+          if (@($reference).Count -ne 1) { throw 'Ambiguous preceding signed payload' }
+          $target = 'signed-candidate-48/08787d16e6159e0687a1310db57a551fda1a13730b42439893f7a81264c9cfc6.components-48.zip'
+          & .qa-updater/Scripts/python.exe tools/reconstruct_signed48.py qualification/ui180/signed-archive-layout.json $reference.FullName $cohort $target
+          if ($LASTEXITCODE -ne 0) { throw 'Signed-byte reconstruction failed' }
       - name: Activate the signed cohort with the actual Windows lifecycle
         shell: pwsh
         run: |
           & .qa-updater/Scripts/python.exe tools/qualify_ui180_signed_recovery.py
           if ($LASTEXITCODE -ne 0) { throw 'Signed Windows activation failed' }
+      - name: Put the verified immutable target on the private qualification draft
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/450337698" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$release.draft -or $release.tag_name -ne 'qa-ui180-win48') { throw 'Expected private draft unavailable' }
+          $sha = '08787d16e6159e0687a1310db57a551fda1a13730b42439893f7a81264c9cfc6'
+          $name = "$sha.components-48.zip"
+          $old = @($release.assets | Where-Object { $_.name -eq $name })
+          if ($old.Count -eq 0) {
+            gh release upload 'qa-ui180-win48' "signed-candidate-48/$name" --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'Verified signed target transfer failed' }
+          }
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/450337698" | ConvertFrom-Json
+          $verified = @($release.assets | Where-Object { $_.name -eq $name })
+          if (!$release.draft -or $verified.Count -ne 1 -or $verified[0].state -ne 'uploaded' -or $verified[0].digest -ne ('sha256:'+$sha)) { throw 'Verified immutable target absent from its private draft' }
+          @{PASS=$true;draft=$true;draft_id=450337698;asset_id=$verified[0].id;digest=$verified[0].digest} | ConvertTo-Json | Set-Content -Encoding utf8 ui180-signed-windows/evidence/DRAFT-TARGET-PASS.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

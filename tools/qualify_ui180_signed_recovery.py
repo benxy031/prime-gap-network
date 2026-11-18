@@ -12,7 +12,8 @@ ROOT=Path.cwd();QA=ROOT/'ui180-signed-windows';QA.mkdir();E=QA/'evidence';E.mkdi
 GENESIS='710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314'
 BASE_SHA='627f3ce8879eea55b30c89fc4eb3959568e2c7f7e57d1b639fd259f5b0720c77'
 URL='https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Windows-178.zip'
-archive=QA/'baseline.zip';urllib.request.urlretrieve(URL,archive)
+archive=ROOT/'ui180-windows/baseline.zip'
+assert archive.is_file()
 def sha(p):
     with Path(p).open('rb')as f:return hashlib.file_digest(f,'sha256').hexdigest()
 assert sha(archive)==BASE_SHA
