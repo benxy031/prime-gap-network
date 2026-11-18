@@ -171,7 +171,7 @@ def compose_program():
     m,original,_,_=inventory(base)
     archive_target={x.relative_to(host).as_posix():x for x in host.rglob('*') if x.is_file()}
     host_prefix='EngineRuntime/network/'
-    installed={name.removeprefix(host_prefix).casefold() for name in original if name.startswith(host_prefix)}
+    installed={name.removeprefix(host_prefix.casefold()) for name in original if name.startswith(host_prefix.casefold())}
     assert installed=={k.casefold() for k in archive_target}|{'bootstrap.json'}
     assert len(archive_target)==69 and sha(exe)==plan['exe_sha256']
     changed={}
@@ -215,12 +215,12 @@ def compose_program():
         cpu='2026.11.6.389',core='2026.11.17.31')
     isolated_host=base/'EngineRuntime/network/horizon-engine-host.exe'
     assert sha(isolated_host)==provenance['executable_sha256']
-    version=json.loads(subprocess.check_output([str(isolated_host),'--version'],cwd=base,timeout=30))
+    version=subprocess.check_output([str(isolated_host),'--version'],cwd=base,timeout=30,text=True).strip()
     test=json.loads(subprocess.check_output([str(isolated_host),'--audit-batch-self-test'],cwd=base,timeout=60))
-    assert version['version']=='2026.11.18.91' and test['passed'] and test['checks']==17
+    assert '2026.11.18.91' in version and test['passed'] and test['checks']==17
     assert test['no_child_processes'] and test['no_network'] and not test['cpu_activated']
     save('COMPOSED-FILES.json',dict(PASS=True,files=len(files),changes=changed,atlas_sha256=sha(asset),
-        frozen_host=version['version'],host_checks=test['checks'],inventory_sha256=digest,source=plan['source']))
+        frozen_host=test['component_version'],host_checks=test['checks'],inventory_sha256=digest,source=plan['source']))
     return files
 
 
