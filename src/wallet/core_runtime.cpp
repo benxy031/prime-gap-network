@@ -578,8 +578,7 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
     if(highest>=0)event.insert("highest_peer_height",highest);
    }
   }
-  diagnosticRpcHistory_.append(event);
-  while(diagnosticRpcHistory_.size()>48)diagnosticRpcHistory_.removeFirst();
+  diagnosticRpcHistory_.append(std::move(event));
  };
  QFile cookie(profile_.networkDataDirectory()+"/.cookie");
  if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){trace("credentials_unavailable",0,0,{});consume({{},"Core RPC cookie is not ready"},{});return;}

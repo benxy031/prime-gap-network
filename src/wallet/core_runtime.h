@@ -3,6 +3,7 @@
 #include "wallet/managed_core_profile.h"
 #include "wallet/wallet_manager.h"
 #include "wallet/core_rpc.h"
+#include "wallet/core_rpc_diagnostic_history.h"
 #include "wallet/core_rpc_stream.h"
 #include "wallet/chain_observation.h"
 #include "wallet/core_link_state.h"
@@ -72,7 +73,7 @@ public:
  void readBlockTransactions(const QString& blockHash,int offset,std::function<void(QJsonObject,QString)>);
  void readDifficultyHeader(const ChainObservation& anchor,const QString& hash,std::function<void(QJsonObject,QString,QDateTime)>);
  qint64 processId() const {return pid_;}
- QJsonArray diagnosticRpcHistory() const {return diagnosticRpcHistory_;}
+ QJsonArray diagnosticRpcHistory() const {return diagnosticRpcHistory_.snapshot();}
  bool startPending()const{return launching_||orphanedStart_||verifier_.isRunning();}
  bool connected() const {return connected_;}
  bool walletReady()const{return walletReady_;}
@@ -144,7 +145,7 @@ private:
  bool checking_{},connected_{},launching_{},stopping_{},allowNew_{},orphanedStart_{};
  bool managedUpgradePending_{},restartAfterManagedUpgrade_{};
  QElapsedTimer managedUpgradeRetry_;
- QJsonArray diagnosticRpcHistory_;
+ CoreRpcDiagnosticHistory diagnosticRpcHistory_;
  bool walletChecking_{},walletReady_{};
  // UI/application network context is immutable; profiles cannot select it.
  social::RpcQueue* socialRpcQueue_{};
