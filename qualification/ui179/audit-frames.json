@@ -1,0 +1,923 @@
+[
+  {
+    "step": "first partition complete",
+    "frame": {
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "positions": "100",
+      "phase": "Searching",
+      "speed_rate": 30,
+      "eta_rate": 30,
+      "source_stale": false,
+      "source_age_ns": "0",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 2,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 2
+            },
+            "merit_band_counts": {
+              "22": 2
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000000000",
+        "end": "100000000000000000100"
+      },
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "100",
+    "rows": 2,
+    "count": 2,
+    "top": "100000000000000000002"
+  },
+  {
+    "step": "second partition missing its first sample",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "100",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645307+00:00",
+      "source_stale": true,
+      "source_age_ns": null,
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Searching",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 2,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 2
+            },
+            "merit_band_counts": {
+              "22": 2
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "100",
+    "rows": 2,
+    "count": 2,
+    "top": "100000000000000000002",
+    "boundary": true
+  },
+  {
+    "step": "paused at partition boundary",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "100",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645307+00:00",
+      "source_stale": true,
+      "source_age_ns": null,
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Paused",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 2,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 2
+            },
+            "merit_band_counts": {
+              "22": 2
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "100",
+    "rows": 2,
+    "count": 2,
+    "top": "100000000000000000002",
+    "boundary": true
+  },
+  {
+    "step": "second partition receives a sample",
+    "frame": {
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "positions": "110",
+      "phase": "Searching",
+      "speed_rate": 30,
+      "eta_rate": 30,
+      "source_stale": false,
+      "source_age_ns": "0",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 3,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 3
+            },
+            "merit_band_counts": {
+              "22": 3
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000001000",
+              "upper_prime": "100000000000000001100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000001000",
+              "upper_prime": "100000000000000001100",
+              "merit": "22",
+              "target_merit": 25
+            },
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "110",
+    "rows": 3,
+    "count": 3,
+    "top": "100000000000000000002"
+  },
+  {
+    "step": "duplicate sample",
+    "frame": {
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "positions": "110",
+      "phase": "Searching",
+      "speed_rate": 30,
+      "eta_rate": 30,
+      "source_stale": false,
+      "source_age_ns": "0",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 3,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 3
+            },
+            "merit_band_counts": {
+              "22": 3
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000001000",
+              "upper_prime": "100000000000000001100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000001000",
+              "upper_prime": "100000000000000001100",
+              "merit": "22",
+              "target_merit": 25
+            },
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "110",
+    "rows": 3,
+    "count": 3,
+    "top": "100000000000000000002"
+  },
+  {
+    "step": "new audit starts empty",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "41dd1464bfb271553bc0f4084eeb3f20dee54b7432149046062a497c29e8508c",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "0",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000000000",
+        "end": "100000000000000000100"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645821+00:00",
+      "source_stale": true,
+      "source_age_ns": null,
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Searching",
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "41dd1464bfb271553bc0f4084eeb3f20dee54b7432149046062a497c29e8508c",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "0",
+    "rows": 0,
+    "boundary": true
+  },
+  {
+    "step": "actual disconnect strips previous audit",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "41dd1464bfb271553bc0f4084eeb3f20dee54b7432149046062a497c29e8508c",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "0",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000000000",
+        "end": "100000000000000000100"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645821+00:00",
+      "source_stale": true,
+      "source_age_ns": null,
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Disconnected",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 1,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 1
+            },
+            "merit_band_counts": {
+              "22": 1
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "41dd1464bfb271553bc0f4084eeb3f20dee54b7432149046062a497c29e8508c",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "",
+    "rows": 0
+  },
+  {
+    "step": "new search without audit rows",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "request_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "work_role": "search",
+      "phase": "Searching",
+      "positions": "5",
+      "positions_total": "10",
+      "source_stale": false
+    },
+    "positions": "5",
+    "rows": 0
+  },
+  {
+    "step": "stale search strips expired ticket",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "request_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "work_role": "search",
+      "phase": "Searching",
+      "positions": "5",
+      "positions_total": "10",
+      "source_stale": true
+    },
+    "positions": "",
+    "rows": 0
+  },
+  {
+    "step": "invalid audit progress is hidden",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "999999",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645307+00:00",
+      "source_stale": true,
+      "source_age_ns": null,
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Searching",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 2,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 2
+            },
+            "merit_band_counts": {
+              "22": 2
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "",
+    "rows": 0
+  },
+  {
+    "step": "stale sample outside the boundary is hidden",
+    "frame": {
+      "schema": "PGN_HORIZON_MINING_VIEW_V1",
+      "ticket_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+      "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Audit 1",
+      "work_role": "audit",
+      "positions": "100",
+      "positions_total": "1500",
+      "positions_label": "1.5 K",
+      "progress_scope": "audit",
+      "record_pairs": [],
+      "validation_state": "Audit computation; network acceptance remains separate",
+      "audit_active_range": {
+        "start": "100000000000000001000",
+        "end": "100000000000000001200"
+      },
+      "observed_utc": "2026-11-18T01:03:41.645307+00:00",
+      "source_stale": true,
+      "source_age_ns": "99",
+      "speed_rate": null,
+      "average_rate": null,
+      "compute_tests_rate": null,
+      "eta_rate": null,
+      "phase": "Searching",
+      "bits": 67,
+      "minimum_gap": 100,
+      "target_merit": 25,
+      "scopes": {
+        "ticket": {
+          "statistics": {
+            "count_total": 2,
+            "at_or_above_target": 0,
+            "threshold_counts": {
+              "100": 2
+            },
+            "merit_band_counts": {
+              "22": 2
+            },
+            "statistics_target": 25,
+            "mixed_targets": false
+          },
+          "best": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ],
+          "recent": [
+            {
+              "gap": 101,
+              "lower_prime": "100000000000000000002",
+              "upper_prime": "100000000000000000103",
+              "merit": "23",
+              "target_merit": 25
+            },
+            {
+              "gap": 100,
+              "lower_prime": "100000000000000000000",
+              "upper_prime": "100000000000000000100",
+              "merit": "22",
+              "target_merit": 25
+            }
+          ]
+        }
+      },
+      "progress_notice": "pending current partition index",
+      "audit_service": {
+        "active_role": "audit",
+        "cycle": {
+          "schema": "PGN_MINING_CYCLE_VIEW_V1",
+          "request_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "active_audit_id": "625c5cfef70f5766ebffd306b69f51f33aceb8a0a4fdecce1b1a922c3dc90f24",
+          "active_index": 0,
+          "ticket_number": "42",
+          "search_positions": "24000",
+          "audits": [
+            {
+              "state": "assigned",
+              "positions": "1500"
+            },
+            {
+              "state": "assigned",
+              "positions": "1500"
+            }
+          ]
+        }
+      }
+    },
+    "positions": "",
+    "rows": 0
+  }
+]
