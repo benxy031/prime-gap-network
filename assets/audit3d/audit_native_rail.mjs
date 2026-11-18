@@ -43,11 +43,16 @@ function redraw(){
  const firstTicket=ticketLabel(a),lastTicket=ticketLabel(b-1n);
  if(atlas.bit_scale){const lo=a.toString(2).length-1,hi=(b-1n).toString(2).length-1;
   const spacing=Math.max(1,Math.ceil((hi-lo+1)*32/width));
+  let nextLabelX=0;
   for(let k=lo;k<=hi;k++){const n=(1n<<BigInt(k))<a?a:1n<<BigInt(k),x=unit(n)*width;
    make('path',{d:`M${x} 0V31`,stroke:'#27505a','stroke-width':.6},svg);
    if((k-lo)%spacing)continue;
-   const text=make('text',{x,y:42,'text-anchor':'start',class:'atlas-axis'},svg);
-   text.textContent=(k+1)+'b';
+   const caption=(k+1)+'b',minSpacing=caption.length*7+3;
+   const labelX=Math.max(0,Math.min(x,width-minSpacing));
+   if(labelX<nextLabelX)continue;
+   nextLabelX=labelX+minSpacing;
+   const text=make('text',{x:labelX,y:42,'text-anchor':'start',class:'atlas-axis'},svg);
+   text.textContent=caption;
    make('title',{},text).textContent=label(n)+' '+ticketLabel(n);
   }
   if(firstTicket)make('text',{x:0,y:55,class:'atlas-axis','data-ticket-tick':firstTicket},svg).textContent=firstTicket;
@@ -55,7 +60,7 @@ function redraw(){
  }else{
   const divisions=width>=480?4:width>=240?2:1;
   const oneTicket=firstTicket&&firstTicket===lastTicket;
-  if(oneTicket)make('text',{x:width/2,y:43,'text-anchor':'middle',class:'atlas-axis','data-ticket-tick':firstTicket},svg).textContent=firstTicket;
+  if(oneTicket)make('text',{x:width/2,y:37,'text-anchor':'middle',class:'atlas-axis','data-ticket-tick':firstTicket},svg).textContent=firstTicket;
   let previousTicket='';
   for(let i=0;i<=divisions;i++){
    const x=width*i/divisions,n=a+(b-a)*BigInt(i)/BigInt(divisions),s=n.toString();
@@ -63,7 +68,7 @@ function redraw(){
    const ticket=i===divisions?lastTicket:ticketLabel(n);
    make('path',{d:`M${x} 0V32`,stroke:'#27505a','stroke-width':.6},svg);
    if(!oneTicket&&ticket&&ticket!==previousTicket&&(i===divisions||ticket!==lastTicket))
-    make('text',{x,y:43,'text-anchor':anchor,class:'atlas-axis','data-ticket-tick':ticket},svg).textContent=ticket;
+    make('text',{x,y:37,'text-anchor':anchor,class:'atlas-axis','data-ticket-tick':ticket},svg).textContent=ticket;
    previousTicket=ticket;
    const text=make('text',{x,y:firstTicket?55:45,'text-anchor':anchor,class:'atlas-axis'},svg);
    text.textContent='≈ '+s[0]+'.'+s.slice(1,5)+' × 10';make('tspan',{'baseline-shift':'super','font-size':8},text).textContent=String(s.length-1);
