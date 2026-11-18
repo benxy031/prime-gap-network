@@ -10,6 +10,7 @@ import json
 import os
 import uuid
 from contextlib import contextmanager
+from itertools import combinations
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -231,7 +232,7 @@ class AuthenticatedUpdates:
                            snapshot_max_length=262144, targets_max_length=1048576,
                            app_user_agent='PGN-Horizon-Updater'))
 
-    def _download(self, updater, name, maximum):
+    def _download(self, updater, name, maximum, *, reclaim=True):
         stage.require(type(name) is str and NAME.fullmatch(name), 'Flat bounded target name required')
         target = updater.get_targetinfo(name)
         stage.require(target is not None and type(target.length) is int
@@ -241,7 +242,8 @@ class AuthenticatedUpdates:
         destination = self.targets / (target.hashes['sha256'] + '-' + name)
         stage._plain_chain(destination)
         self._pins.add(destination)
-        self._quota(0 if destination.exists() else target.length)
+        if reclaim:
+            self._quota(0 if destination.exists() else target.length)
         if destination.exists():
             try:
                 with destination.open('rb') as stream:
@@ -297,7 +299,7 @@ class AuthenticatedUpdates:
     def _catalog(self, updater, selected):
         updater.refresh()
         name='components.json' if self.context['platform']=='windows-x86_64' else 'components-linux-x86_64.json'
-        file, target = self._download(updater, name, MAX_CATALOG)
+        file, target = self._download(updater, name, MAX_CATALOG, reclaim=False)
         catalog = stage._json(stage._read_plain(file, MAX_CATALOG))
         stage._keys(catalog, 'schema bundle_target manifest')
         stage.require(catalog['schema'] == 'PGN_AUTHENTICATED_UPDATE_CATALOG_V1'
@@ -306,12 +308,37 @@ class AuthenticatedUpdates:
                       and catalog['bundle_target'].endswith('.zip'), 'Invalid authenticated catalogue')
         raw = json.dumps(catalog['manifest'], separators=(',', ':')).encode()
         manifest, components, _, chosen = stage._manifest(raw, self.context, selected)
+        self._pin_current_preparation(updater, catalog['bundle_target'], components)
         return catalog, manifest, components, chosen, target
+
+    def _prepared_key(self, archive_sha256, selection):
+        return digest(json.dumps([self.context_sha256, archive_sha256, selection]).encode())
+
+    def _pin_current_preparation(self, updater, bundle, components):
+        artifact = updater.get_targetinfo(bundle)
+        archive_sha256 = artifact.hashes.get('sha256', '') if artifact is not None else ''
+        if not stage.DIGEST.fullmatch(archive_sha256):
+            return
+
+        # Preserve the authenticated download and only the most recent
+        # prepared selection for this bundle and installation context.
+        self._pins.add(self.targets / (archive_sha256 + '-' + bundle))
+        prepared = []
+        ordered = sorted(components)
+        for count in range(1, len(ordered) + 1):
+            for selection in combinations(ordered, count):
+                key = self._prepared_key(archive_sha256, selection)
+                receipt = self.cache / 'receipts' / (key + '.json')
+                folder = self.cache / ('s-' + key[:20])
+                if receipt.is_file() and folder.is_dir():
+                    prepared.append((receipt.stat().st_mtime_ns, folder))
+        if prepared:
+            self._pins.add(max(prepared, key=lambda item: item[0])[1])
 
     def refresh(self, selected):
         with locked_cache(self.cache):
             self._pins.clear()
-            self._quota()
+            self._cache_size()  # Validate paths without reclaiming the current target yet.
             catalog, manifest, components, chosen, target = self._catalog(self._updater(), selected)
             # Also retire leftovers from old helper versions on the first
             # successful check. Keep this authenticated catalogue pinned, so
@@ -347,12 +374,12 @@ class AuthenticatedUpdates:
                 self._cleanup_unused()
 
     def _prepare_locked(self, selected):
-        self._quota()
+        self._cache_size()
         updater = self._updater()
         catalog, manifest, _, _, target = self._catalog(updater, selected)
         archive, artifact = self._download(updater, catalog['bundle_target'], MAX_TARGET)
         selection = sorted(set(selected))
-        key = digest(json.dumps([self.context_sha256, artifact.hashes['sha256'], selection]).encode())
+        key = self._prepared_key(artifact.hashes['sha256'], selection)
         stage_cache = self.cache / ('s-'+key[:20])
         self._pins.add(stage_cache)
         receipt_file = self.cache / 'receipts' / (key + '.json')

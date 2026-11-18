@@ -8,6 +8,7 @@ from datetime import datetime,timedelta,timezone
 import hashlib,io,json,os
 from pathlib import Path
 import sys,tempfile,unittest,zipfile
+from unittest.mock import patch
 P=Path(__file__).resolve().parents[1];sys.path[:0]=[str(P/'tools'),str(P/'src/update')]
 from securesystemslib.signer import CryptoSigner
 from tuf.api.metadata import Metadata,Root,Targets,Snapshot,Timestamp,MetaFile,TargetFile
@@ -106,6 +107,20 @@ class UpdateTests(unittest.TestCase):
   value=self.client().refresh(['cpu']);self.assertTrue(value['publisher_authenticated']);self.assertEqual(value['components'][0]['version'],'1.0.0');self.assertFalse(value['installation_performed'])
  def test_authenticated_stage_is_idempotent_and_never_executes(self):
   client=self.client();a=client.prepare(['cpu']);b=client.prepare(['cpu']);self.assertEqual(a,b);self.assertEqual((Path(a['stage'])/'payload/cpu/controller.exe').read_bytes(),self.pe);self.assertTrue(a['publisher_authenticated']);self.assertFalse(a['process_control_performed'])
+ def test_refresh_keeps_current_download_and_stage_under_cache_pressure(self):
+  client=self.client()
+  prepared=client.prepare(['cpu'])
+  archive,=client.targets.glob('*-components.zip')
+  obsolete=client.targets/('0'*64+'-obsolete.zip')
+  obsolete.write_bytes(b'old disposable fixture target')
+  del self.transport.files[self.target+'components.zip']
+  with patch('horizon_update_client.MAX_CACHE',1):
+   client.refresh(['cpu'])
+   reopened=self.client().prepare(['cpu'])
+  self.assertEqual(reopened['stage'],prepared['stage'])
+  self.assertTrue(archive.is_file())
+  self.assertFalse(obsolete.exists())
+
  def test_foreign_root_pin_rejected(self):
   with self.assertRaises(stage.StageError):AuthenticatedUpdates(self.root/'cache',self.bootstrap,'0'*64,self.base,self.target,self.context,self.context_sha,fetcher=self.transport)
  def test_short_cache_locator_still_checks_complete_root_identity(self):
