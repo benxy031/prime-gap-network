@@ -71,6 +71,7 @@ def make_wallet(node):
 
 class ReplayNode(Node):
     def start(self):
+        self.data.mkdir(parents=True,exist_ok=True)
         self.rpcport=port()
         self.log=(self.data/'owned.log').open('ab')
         cursor=self.log.tell()
@@ -232,8 +233,8 @@ def verify_slow_core_handoff(current_code, expected, runtime_directory):
                 self.send_header('Content-Length',str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
-            except (BrokenPipeError,ConnectionResetError):
-                pass
+            except OSError:
+                self.close_connection=True
             finally:
                 conn.close()
     gate=ThreadingHTTPServer(('127.0.0.1',0),Exchange)
@@ -495,8 +496,12 @@ finally:
     if own:own.close()
     out.close();err.close()
 assert result
+(E/'SIGNED-INSTALL-PASS.json').write_text(json.dumps(result,indent=2)+'\n')
 result['previous_exe_timeout_negative_control']=verify_slow_core_handoff(base,False,live['pgn_update_core_runtime_directory'])
 result['ordinary_portable_timeout_recovery']=verify_slow_core_handoff(new,True,live['pgn_update_core_runtime_directory'])
+(E/'CORE-HANDOFF-PASS.json').write_text(json.dumps({name:result[name] for name in (
+    'previous_exe_timeout_negative_control','ordinary_portable_timeout_recovery')},indent=2)+'\n')
+
 def collect_portable_diagnostic(owner,code):
     assert code.resolve().is_relative_to(QA.resolve())
     sections=['Wallet','Social','SocialMiners','Mining']
