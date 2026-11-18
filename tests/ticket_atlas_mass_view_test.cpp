@@ -10,7 +10,7 @@ static QJsonObject read(const QString& path){QFile f(path);if(!f.open(QIODevice:
 int main(int argc,char** argv){QApplication app(argc,argv);size_t checks{};auto need=[&](bool value,const char* why){++checks;if(!value)throw std::runtime_error(why);};try{
     need(argc==4,"atlas,page,output arguments");const auto atlas=read(QString::fromLocal8Bit(argv[1])),work=read(QString::fromLocal8Bit(argv[2]));
     need(atlas.value("tracked_assignments").toInteger()>100&&atlas.value("details_truncated").toBool(),"actual mass snapshot,not tiny synthetic case");
-    need(pgn::wallet::validateTicketAtlas(atlas,atlas.value("genesis").toString(),{},{},256).isEmpty(),"native925snapshot validated");
+    need(pgn::wallet::validateTicketAtlas(atlas,atlas.value("genesis").toString(),{},{},256).isEmpty(),"native snapshot validated");
     auto state=work.value("state").toObject();state.insert("reports",work.value("reports"));state.insert("audits",work.value("audits"));
     QVector<QPair<QString,QString>> queries;bool detailWasRequested=false;
     pgn::ui::NetworkWorkView view([&](int,auto done){done(state,{});},[&](const QString&,auto done){detailWasRequested=true;done({},"Offpage evidence deliberately unavailable");},nullptr,[&](const QString& a,const QString& b,int,auto done){queries.append({a,b});done(atlas,{});});
@@ -38,9 +38,18 @@ int main(int argc,char** argv){QApplication app(argc,argv);size_t checks{};auto 
     pgn::ui::NetworkWorkView selection([&](int,auto done){done(state,{});},[&](const QString&,auto done){detailWasRequested=true;done({},"Offpage details held");},nullptr,[](const QString&,const QString&,int,auto done){done({},"No testmap needed");});
     selection.resize(1200,900);selection.show();settle(20);auto* second=selection.findChild<QTableWidget*>("pgn-network-ticket-table");auto* secondMap=dynamic_cast<pgn::ui::TicketAtlasView*>(selection.findChild<QWidget*>("pgn-ticket-atlas"));second->selectRow(0);settle(10);need(!second->selectionModel()->selectedRows().isEmpty(),"initial selection in composed view");
     secondMap->inspect(target);need(second->selectionModel()->selectedRows().isEmpty(),"offpage atlas request clears unrelated highlight");need(secondMap->property("pgn_ticket_atlas_selected").toString()==target,"map and evidence exact identity aligned");
-    auto* split=view.findChild<QSplitter*>("pgn-network-evidence-split");auto* evidence=view.findChild<QTreeWidget*>("pgn-network-ticket-evidence");need(split&&split->orientation()==Qt::Horizontal,"wide view has side inspector");need(table->height()>400&&evidence->height()>400,"wide table and details keep substantial height");need(table->rowHeight(0)>=table->fontMetrics().height()+6&&table->rowHeight(0)<=table->fontMetrics().lineSpacing()*2,"compact rows preserve readable text");need(!table->item(0,2)->text().contains('\n')&&table->item(0,2)->data(Qt::UserRole+1).toStringList().size()==3,"all three numeric forms remain on one line as requested");
+    auto* split=view.findChild<QSplitter*>("pgn-network-evidence-split");auto* evidence=view.findChild<QTreeWidget*>("pgn-network-ticket-evidence");need(split&&split->orientation()==Qt::Horizontal,"wide view has side inspector");need(table->height()>400&&evidence->height()>400,"wide table and details keep substantial height");need(table->rowHeight(0)>=table->fontMetrics().height()+6&&table->rowHeight(0)<=table->fontMetrics().lineSpacing()*2,"compact rows preserve readable text");need(table->horizontalHeaderItem(2)->text()=="Audit 1"&&table->horizontalHeaderItem(3)->text()=="Audit 2",
+         "individual audit outcomes have dedicated columns");
+    const auto selectedId=table->item(0,0)->data(Qt::UserRole).toString();
+    auto* positions=evidence->findItems("Positions",Qt::MatchExactly,0).value(0);
+    const auto lease=state.value("leases").toArray().first().toObject();
+    const auto expectedPositions=pgn::ui::positionFormats(
+        pgn::booking::subtractUnsigned(lease.value("end").toString(),lease.value("start").toString())).inlineText();
+    need(evidence->property("pgn_evidence_id").toString()==selectedId&&positions
+         &&positions->text(1)==expectedPositions&&!positions->text(1).contains('\n'),
+         "verified ticket evidence retains all position formats");
     view.resize(900,860);settle(30);need(split->orientation()==Qt::Vertical,"narrow view stacks inspector");need(table->height()>=160&&evidence->height()>=140,"narrow panes remain usable");view.resize(1280,1000);settle(30);
     QDir output(QString::fromLocal8Bit(argv[3]));need(output.exists()||QDir{}.mkpath(output.path()),"render directory");
-    map->findChild<QPushButton*>("pgn-atlas-overview")->click();settle(180);need(view.grab().save(output.filePath("actual-925-network-work.png")),"composed actual925render");
-    view.hide();selection.hide();std::cout<<"PASS "<<checks<<" actual mass-atlas checks;whole925projection,bounded100detailsnotasample,exactbinzoom,offpagehighlightcleared;offscreen/noRPCmutations\n";return 0;
+    map->findChild<QPushButton*>("pgn-atlas-overview")->click();settle(180);need(view.grab().save(output.filePath("actual-network-work.png")),"composed snapshot render");
+    view.hide();selection.hide();std::cout<<"PASS "<<checks<<" actual mass-atlas checks;whole network projection,bounded100detailsnotasample,exactbinzoom,offpagehighlightcleared;offscreen/noRPCmutations\n";return 0;
     }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}

@@ -93,7 +93,7 @@ private:
             else{
                 guard->snapshot_=value;guard->setProperty("pgn_ticket_atlas_snapshot",value);guard->setProperty("pgn_ticket_atlas_error",QString{});
                 guard->viewport(pgn::wallet::atlasInteger(value.value("start")),pgn::wallet::atlasInteger(value.value("end")));
-                guard->status_->setText(QString("%1 tickets in view · %2 tracked · %3 · wheel to zoom, drag to move").arg(value.value("visible_assignments").toInteger()).arg(value.value("tracked_assignments").toInteger()).arg(value.value("details_truncated").toBool()?QString("Coverage groups: click to inspect tickets"):QString("Individual tickets: click to inspect")));
+                guard->status_->setText(QString("%1 tickets in view · %2 tracked · %3 · wheel to zoom, drag to move").arg(value.value("visible_assignments").toInteger()).arg(value.value("tracked_assignments").toInteger()).arg(value.value("details_truncated").toBool()?QString("Coverage groups: click a color to inspect its tickets"):QString("Individual tickets: click to inspect")));
                 if(!guard->autoFocused_){guard->autoFocused_=true;guard->focusActive();}
                 if(value.value("start")==guard->first_&&value.value("end")==guard->last_)guard->startupWarm_=false;
             }
@@ -106,12 +106,19 @@ private:
             if(!guard||guard->first_!=viewportStart||guard->last_!=viewportEnd)return;
             if(!error.isEmpty()){guard->status_->setText(error);return;}
             QJsonArray rows;for(const auto& item:value.value("details").toArray()){const auto row=item.toObject();if((stage.isEmpty()||row.value("stage").toString()==stage)&&!row.value("request").toString().isEmpty())rows.append(row);}
-            if(rows.isEmpty()){guard->status_->setText("No ticket details available for this marker");return;}
+            const bool partial=value.value("details_truncated").toBool();
+            if(rows.isEmpty()){
+                guard->status_->setText(partial
+                    ?QString("More tickets in this group · zoom in to find %1")
+                        .arg(stage.isEmpty()?QString("individual tickets"):ticketStagePresentation(stage).text)
+                    :QString("No ticket details available for this marker"));
+                return;
+            }
             const auto select=[guard](const QString& id){if(guard){guard->setSelected(id);if(guard->inspect)guard->inspect(id);}};
-            if(rows.size()==1){select(rows.first().toObject().value("request").toString());return;}
+            if(rows.size()==1&&!partial){select(rows.first().toObject().value("request").toString());return;}
             auto* menu=new QMenu(guard);menu->setAttribute(Qt::WA_DeleteOnClose);
             for(const auto& item:rows){const auto row=item.toObject();const auto id=row.value("request").toString();auto* action=menu->addAction("Ticket "+row.value("ticket_number").toString()+" · "+id.left(12));QObject::connect(action,&QAction::triggered,guard,[select,id]{select(id);});}
-            if(value.value("details_truncated").toBool()){menu->addSeparator();menu->addAction("More tickets here — use the wheel to narrow the view")->setEnabled(false);}
+            if(partial){menu->addSeparator();menu->addAction("More tickets here · zoom in to narrow the view")->setEnabled(false);}
             menu->popup(position);
         });
     }
@@ -147,7 +154,7 @@ protected:
                     const qreal h=std::min(qreal(20),row-8),cy=area.top()+(lane[s]+.5)*row;
                     const QRectF cell(x1,cy-h/2,std::max(1.,x2-x1-2),h);
                     p.save();p.setOpacity(.4+.6*std::sqrt(std::clamp(fraction,0.,1.)));p.setPen(Qt::NoPen);p.setBrush(color(s));p.drawRoundedRect(cell,3,3);p.restore();
-                    hits_.append({QRectF(x1,area.top()+lane[s]*row,std::max(1.,x2-x1),row-2),QJsonObject{{"atlas_bin",true},{"start",left.value("start")},{"end",right.value("end")}}});
+                    hits_.append({QRectF(x1,area.top()+lane[s]*row,std::max(1.,x2-x1),row-2),QJsonObject{{"atlas_bin",true},{"start",left.value("start")},{"end",right.value("end")},{"stage",pgn::wallet::AtlasStates[s]}}});
                 }
             }
             // The first100 details are a bounded response, not a representative
@@ -193,7 +200,11 @@ protected:
     void mouseMoveEvent(QMouseEvent* e)override{if(dragging_){const int dx=e->position().toPoint().x()-pressed_.x();if(pressedBitScale_){const auto a=atlasBitCoordinate(pressedFirst_),b=atlasBitCoordinate(pressedLast_);const auto delta=(Int(b-a)*dx/int(std::max(1.,plot().width()))).convert_to<qint64>();viewport(atlasBitInteger(a-delta),atlasBitInteger(b-delta));}else{const Int delta=(pressedLast_-pressedFirst_)*dx/int(std::max(1.,plot().width()));viewport(pressedFirst_-delta,pressedLast_-delta);}e->accept();}else QWidget::mouseMoveEvent(e);}
     void mouseReleaseEvent(QMouseEvent* e)override{if(!dragging_){QWidget::mouseReleaseEvent(e);return;}dragging_=false;setCursor(Qt::OpenHandCursor);
         if((e->position().toPoint()-pressed_).manhattanLength()<6){QStringList found;for(const auto& hit:hits_)if(hit.first.contains(e->position())){
-                if(hit.second.value("atlas_bin").toBool()){inspectRange(hit.second.value("start").toString(),hit.second.value("end").toString());return;}
+                if(hit.second.value("atlas_bin").toBool()){
+                    inspectRange(hit.second.value("start").toString(),hit.second.value("end").toString(),
+                                 hit.second.value("stage").toString());
+                    return;
+                }
                 found.append(hit.second.value("request").toString());
             }
             if(found.size()==1){setSelected(found.first());if(inspect)inspect(selected_);return;}
