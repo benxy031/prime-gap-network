@@ -111,6 +111,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Atomic audit regressions failed' }
           & .qa-python/Scripts/python.exe tools/build_horizon_engine_host.py --output host-build
           if ($LASTEXITCODE -ne 0) { throw 'Engine host freeze failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: post-ui182-composed-development-components
+          path: |
+            build-app/PGN-Horizon.exe
+            build-app/QT_VERSION.txt
+            host-build/dist/horizon-engine-host/
+            host-build/ENGINE-HOST-SOURCE.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Fetch the exact unpublished UI182 base archive
         shell: pwsh
         env:
@@ -131,15 +142,4 @@ jobs:
             ui182-portable-windows/evidence/COMPOSED-FILES.json
             ui182-portable-windows/evidence/COMPOSED-STARTUP-PASS.json
           if-no-files-found: warn
-          retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: success()
-        with:
-          name: post-ui182-composed-development-components
-          path: |
-            build-app/PGN-Horizon.exe
-            build-app/QT_VERSION.txt
-            host-build/dist/horizon-engine-host/
-            host-build/ENGINE-HOST-SOURCE.json
-          if-no-files-found: error
           retention-days: 7
