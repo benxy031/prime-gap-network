@@ -76,12 +76,13 @@ std::string HexHeader(const CBlock& block){DataStream bytes;bytes<<static_cast<c
 std::shared_ptr<const NativeAuditLedger> ReadRpcAuditLedger(ChainstateManager& manager,const OwnHistory& history,const CBlockIndex& tip){
  AssertLockHeld(cs_main);
  static RpcAuditSnapshotCache<NativeAuditLedger,uint256> saved;
+ static uint256 saved_policy;
  auto& active=manager.ActiveChainstate();const auto genesis=manager.GetConsensus().hashGenesisBlock;
  if(auto hit=saved.get(&active,tip.GetBlockHash(),genesis))return hit;
  const auto& budget=*manager.m_options.pgn_candidate_science_budget;
  if(tip.pprev){
   auto snapshot=saved.advance(&active,tip.pprev->GetBlockHash(),tip.GetBlockHash(),genesis,
-   [&](const std::shared_ptr<const NativeAuditLedger>& previous){return AdvanceRpcAuditLedger(previous,active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature);});
+   [&](const std::shared_ptr<const NativeAuditLedger>& previous){return AdvanceRpcAuditLedger(previous,active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature,saved_policy);});
   if(snapshot){LogDebug(BCLog::RPC,"PGN RPC audit snapshot direct-child %s\n",tip.GetBlockHash().GetHex());return snapshot;}
  }
  saved.reset(); // Release the old retained ledger before rebuilding another tip.
@@ -90,7 +91,11 @@ std::shared_ptr<const NativeAuditLedger> ReadRpcAuditLedger(ChainstateManager& m
  auto snapshot=std::make_shared<const NativeAuditLedger>(std::move(*ledger));
  // Retain one immutable snapshot by charge budget, not an unrelated row
  // cutoff. Variable allocated capacities (including signatures) are charged.
- saved.retain(&active,tip.GetBlockHash(),genesis,snapshot);
+ const auto policy=ReadChainRangePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
+ if(policy.policy&&ChainRangePolicyOnBranch(active.CoinsTip(),tip,*policy.policy)){
+  saved_policy=policy.policy->Id();
+  saved.retain(&active,tip.GetBlockHash(),genesis,snapshot);
+ }else saved_policy.SetNull();
 
  return snapshot;
 }

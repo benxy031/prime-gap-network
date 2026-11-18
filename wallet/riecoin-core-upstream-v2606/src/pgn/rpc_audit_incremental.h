@@ -7,7 +7,7 @@ namespace pgn::core {
 inline std::shared_ptr<const NativeAuditLedger> AdvanceRpcAuditLedger(
     const std::shared_ptr<const NativeAuditLedger>& previous,const CCoinsView& view,const CBlockIndex& tip,
     const NativeRequestHistoryArchive& history,const RangePolicyReadBudget& policy_budget,
-    const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget){
+    const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget,const uint256& previous_policy){
     AssertLockHeld(cs_main);
     try{
         const auto head=view.GetPgnFactHead();
@@ -16,43 +16,44 @@ inline std::shared_ptr<const NativeAuditLedger> AdvanceRpcAuditLedger(
         auto reports=ReadConfirmedNativeReports(view,tip,history,schedule_budget);
         if(!reports||reports->size()<previous->size())return {};
         const auto policy=ReadChainRangePolicy(view,tip,history,schedule_budget.archive,policy_budget);
-        if(!policy.policy||!ChainRangePolicyOnBranch(view,tip,*policy.policy)||policy.policy->Chain()!=head->chain)return {};
-        // Re-derive the authenticated current schedule rather than assuming
-        // that a cached assignment survives a policy or retention transition.
-        const auto schedule=ReconstructCandidateRangeSchedule(view,tip,*policy.policy,history,schedule_budget);
-        if(!schedule.schedule)return {};
-        std::map<uint256,const CandidateRangeLease*> leases;
-        for(const auto& lease:schedule.schedule->active)leases.emplace(lease.owner.Id(),&lease);
+        if(!policy.policy||previous_policy!=policy.policy->Id()||
+           !ChainRangePolicyOnBranch(view,tip,*policy.policy)||policy.policy->Chain()!=head->chain)return {};
+        // Advance the authenticated schedule even for a child without report
+        // updates. This uses its index without materializing every active
+        // lease. A confirmed lease is pinned by its report before expiry is
+        // applied. With the same policy and parent, those old bindings stay
+        // fixed. All new bindings still use an exact lookup on this child.
+        const auto current=ReconstructCandidateRangeLease(view,tip,*policy.policy,history,schedule_budget,uint256{});
+        if(current.verdict!=RangeScheduleVerdict::ReconstructedCandidate||current.lease)return {};
+        const auto block=history.Load(view,tip,tip.nHeight,schedule_budget.archive);
+        if(!block.block||!block.block->Coinbase())return {};
         std::optional<NativeAuditLedger> next;
         const auto write=[&]() -> NativeAuditLedger& {
             if(!next)next.emplace(*previous);
             return *next;
         };
-        for(const auto& [id,report]:*reports){
-            const auto lease=leases.find(id);if(lease==leases.end())return {};
-            const auto& owned=*lease->second;
-            const auto old=previous->find(id);
-            if(old!=previous->end()){
-                const auto& retained=old->second;const auto& a=retained.report.commitment;const auto& b=report.commitment;
-                if(a.request!=b.request||a.ticket!=b.ticket||a.root!=b.root||a.parent!=b.parent||a.signature!=b.signature||
-                   retained.report.block!=report.block||retained.report.height!=report.height||
-                   retained.owner!=owned.owner.Request().miner||retained.range.start!=owned.assignment.start||
-                   retained.range.length!=owned.assignment.end-owned.assignment.start||retained.range.segments!=100||
-                   !std::equal(retained.range.ticket_id.begin(),retained.range.ticket_id.end(),report.commitment.ticket.begin()))return {};
-            }else{
-                // Only the direct child may add a previously unseen report.
-                // A missing earlier report requires full reconstruction.
-                if(report.height!=tip.nHeight||report.block!=tip.GetBlockHash())return {};
+        if(reports->size()>previous->size()){
+            for(const auto& output:block.block->Coinbase()->vout){
+                if(!IsNativeReportScript(output.scriptPubKey))continue;
+                const auto event=DecodeNativeReportEnvelope(output.scriptPubKey);
+                if(!event||output.nValue!=0||event->parent!=tip.pprev->GetBlockHash())return {};
+                if(previous->contains(event->request)||(next&&next->contains(event->request)))continue;
+                const auto confirmed=reports->find(event->request);
+                if(confirmed==reports->end())return {};
+                const auto& report=confirmed->second;
+                if(report.height!=tip.nHeight||report.block!=tip.GetBlockHash()||
+                   report.commitment.root!=event->root||report.commitment.ticket!=event->ticket)return {};
+                const auto found=ReconstructCandidateRangeLease(view,tip,*policy.policy,history,schedule_budget,event->request);
+                if(found.verdict!=RangeScheduleVerdict::ReconstructedCandidate||!found.lease||
+                   found.lease->report_root!=event->root)return {};
+                const auto& owned=*found.lease;
                 NativeReportAudit entry;entry.report=report;entry.owner=owned.owner.Request().miner;
                 std::copy(report.commitment.ticket.begin(),report.commitment.ticket.end(),entry.range.ticket_id.begin());
                 entry.range.start=owned.assignment.start;entry.range.length=owned.assignment.end-owned.assignment.start;entry.range.segments=100;
-                write().emplace(id,std::move(entry));
+                write().emplace(event->request,std::move(entry));
             }
         }
-        // No old entry may silently disappear from the confirmed registry.
         if((next?next->size():previous->size())!=reports->size())return {};
-        const auto block=history.Load(view,tip,tip.nHeight,schedule_budget.archive);
-        if(!block.block||!block.block->Coinbase())return {};
         for(const auto& output:block.block->Coinbase()->vout){
             if(!IsNativeAuditScript(output.scriptPubKey))continue;
             const auto event=DecodeNativeAuditEnvelope(output.scriptPubKey);if(!event||output.nValue!=0)return {};
