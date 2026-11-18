@@ -613,13 +613,13 @@ def compact_batch(root, limit=512, dry_run=False, *, _ticket_guard=None,
                 summary["deferred"] += 1
                 if len(summary["errors"]) < 8:
                     summary["errors"].append({"ticket": name, "reason": str(error)[:240]})
-            # Persist only after this exact candidate was considered. A crash
-            # before this write repeats an already-idempotent compact operation.
-            # Deferred/active candidates are revisited on the next full cycle.
-            if not dry_run:
-                atomic_bytes(cursor, canonical({"schema": BATCH_CURSOR_SCHEMA,
-                                                "tickets": str(tickets), "after": name}) + b"\n")
             last_considered = name
+        # Each archive is durable before its work files can be reclaimed.
+        # If interrupted before this checkpoint, the bounded batch can be replayed.
+        # Deferred and active tickets remain eligible on the next full pass.
+        if not dry_run and last_considered != after:
+            atomic_bytes(cursor, canonical({"schema": BATCH_CURSOR_SCHEMA,
+                                            "tickets": str(tickets), "after": last_considered}) + b"\n")
         summary["next_after"] = last_considered
         return summary
     finally:

@@ -161,6 +161,23 @@ class ArchiveBatchTests(unittest.TestCase):
         self.assertEqual(result['compacted'], 1)
         self.assertEqual(seen, [(folder, [owner])])
 
+    def test_retention_commits_one_cursor_after_the_batch(self):
+        originals = [self.ticket(number) for number in (1, 2, 3)]
+        writes = []
+        atomic = archive.atomic_bytes
+
+        def observe(path, data):
+            if Path(path).name == 'cursor.json':
+                writes.append(json.loads(data)['after'])
+                self.assertTrue(all((archive.load(folder) or {}).get('report') == report
+                                    for folder, report in originals))
+            return atomic(path, data)
+
+        with patch.object(archive, 'atomic_bytes', side_effect=observe):
+            result = archive.compact_batch(self.root, 3)
+        self.assertEqual(result['compacted'], 3)
+        self.assertEqual(writes, [originals[-1][0].name])
+
     def test_crash_before_cursor_commit_repeats_compaction_idempotently(self):
         folder, report = self.ticket(1)
         self.ticket(2)
