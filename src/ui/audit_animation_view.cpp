@@ -27,7 +27,7 @@ AuditAnimationView::AuditAnimationView(Reader reader,Projection projection,QWidg
  setObjectName("pgn-network-audit-animation");setMinimumHeight(220);impl_->reader=std::move(reader);impl_->projection=std::move(projection);
  auto* box=new QVBoxLayout(this);box->setContentsMargins(0,0,0,0);box->setSpacing(0);auto* line=new QHBoxLayout;line->setSpacing(10);
  auto* title=new QLabel("NETWORK AUDITS");title->setStyleSheet("color:#bce3e7;font:600 11px 'Segoe UI';");line->addWidget(title);
- impl_->status=new QLabel("Connecting to current audit activityâ€¦");impl_->status->setStyleSheet("color:#93b8c4;font:11px 'Segoe UI';");line->addWidget(impl_->status,1);
+ impl_->status=new QLabel(QStringLiteral("Connecting to current audit activity\u2026"));impl_->status->setStyleSheet("color:#93b8c4;font:11px 'Segoe UI';");line->addWidget(impl_->status,1);
  auto* previewButton=new QPushButton("Preview animation",this);impl_->previewButton=previewButton;previewButton->setEnabled(false);previewButton->setObjectName("pgn-preview-audit-animation");previewButton->hide();box->addLayout(line);
  connect(previewButton,&QPushButton::clicked,this,[this]{preview();});
 #ifdef Q_OS_WIN
@@ -86,7 +86,7 @@ void AuditAnimationView::reproject(){
 }
 void AuditAnimationView::preview(){
 #ifdef Q_OS_WIN
- if(!impl_->ready)return;++impl_->generation;impl_->preview=true;impl_->status->setText("Animation preview Â· simulated activity");impl_->surface->preview(impl_->projection?impl_->projection({},impl_->surface):QJsonObject{});
+ if(!impl_->ready)return;++impl_->generation;impl_->preview=true;impl_->status->setText(QStringLiteral("Animation preview \u00b7 simulated activity"));impl_->surface->preview(impl_->projection?impl_->projection({},impl_->surface):QJsonObject{});
  const auto generation=impl_->generation;QTimer::singleShot(35000,this,[this,generation]{if(generation!=impl_->generation||!isVisible())return;impl_->preview=false;impl_->reset=true;refresh();});
 #endif
 }
@@ -96,7 +96,7 @@ void AuditAnimationView::refresh(){
  impl_->busy=true;const auto generation=impl_->generation;const bool reset=impl_->reset;const QPointer<AuditAnimationView> guard(this);
  impl_->reader(reset?0:impl_->height,reset?QString{}:impl_->hash,reset?QJsonArray{}:impl_->watched,[guard,generation,reset](QJsonObject view,QString error){
   if(!guard)return;auto& d=*guard->impl_;d.busy=false;if(generation!=d.generation||(!guard->isVisible()&&!d.warming)||d.preview)return;
-  if(!error.isEmpty()){d.status->setText("Audit activity unavailable Â· "+error);guard->setProperty("pgn_audit_animation_error",error);return;}
+  if(!error.isEmpty()){d.status->setText(QStringLiteral("Audit activity unavailable \u00b7 ")+error);guard->setProperty("pgn_audit_animation_error",error);return;}
   d.reset=false;d.last=view;const auto state=view.value("state").toObject();d.height=state.value("height").toInteger();d.hash=state.value("bestblockhash").toString();
   d.watched=d.displayed;QSet<QString> ids;for(const auto& id:d.displayed)ids.insert(id.toString());for(const auto& row:view.value("audits").toArray()){const auto report=row.toObject();bool active=false;for(const auto& j:report.value("jobs").toArray()){const auto job=j.toObject();active|=job.value("state")=="committed"||(job.value("state")=="assigned"&&!job.value("expired").toBool());}if(active&&d.watched.size()<32&&!ids.contains(report.value("request_id").toString())){d.watched.append(report.value("request_id"));ids.insert(report.value("request_id").toString());}}
   const auto totals=view.value("totals").toObject();const auto jobs=totals.value("active_jobs").toInteger();d.status->setText(auditActivityHeadline(view));d.status->setToolTip(auditActivityExplanation(view));d.status->setWordWrap(true);
