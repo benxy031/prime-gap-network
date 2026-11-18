@@ -76,6 +76,30 @@ class ReassignmentTests(unittest.TestCase):
                         ranges=self.ranges,counts=[1]*5,target_merit_q16=32*65536,answer=self.answer,publication_intent=self.old,work_cycle=self.work)
         self.name=self.request+'-0-0';self.current=self.audits.folder/'current.json';self.sealed=self.audits.folder/(self.name+'.json')
         save(self.current,self.audit);save(self.sealed,self.audit);self.audits.answers.register([self.name])
+    def test_expired_attempt_cannot_reopen_when_second_lookup_changes(self):
+        original=self.rpc.call
+        reads=0
+        def expire_on_second_read(method,args=None,**kwargs):
+            nonlocal reads
+            value=original(method,args,**kwargs)
+            if method=='getpgnauditstate':
+                reads+=1
+                if reads==2:value[0]['jobs'][0]['expired']=True
+            return value
+        raw=self.sealed.read_bytes()
+        self.rpc.call=expire_on_second_read
+        self.refused(RuntimeError,'unexpired reassigned attempt')
+        self.assertEqual(reads,2)
+        self.assertEqual(self.sealed.read_bytes(),raw)
+
+    def test_replay_refuses_match_of_slot_and_attempt_under_another_actor(self):
+        audit=dict(self.audit,actor='expected-actor')
+        self.audits.state=lambda _:dict(jobs=[dict(slot=0,attempt=0,state='assigned',actor='another-actor')])
+        before=self.cycles.snapshot(self.work)
+        with self.assertRaisesRegex(RuntimeError,'unexpired reassigned attempt'):
+            self.audits.reconcile_reassigned_answer(audit)
+        self.assertEqual(self.cycles.snapshot(self.work),before)
+
     def test_current_journal_orphan_republishes_exact_answer_without_compute(self):
         self.assertEqual(self.audits.process_one(),'committed')
         task=self.cycles.snapshot(self.work)['audits'][0]
