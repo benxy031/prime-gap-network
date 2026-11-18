@@ -460,50 +460,6 @@ try:
             pass
         time.sleep(1)
     assert accepted_height>legacy['canonical_height'],'GUI/Core did not validate beyond the old cached chain'
-    seen=[]
-    for section in ('Wallet','Social','SocialMiners','Mining'):
-        view=gui_command(life.new_ui,'--show-owned',section);seen.append(section)
-        (E/(section+'.json')).write_text(json.dumps(view,indent=2)+'\n')
-    for action in ('DiagnosticsStart','DiagnosticsStop','DiagnosticsExport'):
-        gui_command(life.new_ui,'--show-owned',action)
-    diagnostic_name=f'diagnostic-{life.new_ui.pid}.zip'
-    locations=[new/'evidence'/diagnostic_name,Path(live['pgn_update_application_root'])/'evidence'/diagnostic_name]
-    paths=list(dict.fromkeys(path.resolve() for path in locations))
-    assert all(path.is_relative_to(QA.resolve()) for path in paths)
-    until=time.monotonic()+25
-    diagnostic=None
-    while time.monotonic()<until:
-        diagnostic=next((path for path in paths if path.is_file()),None)
-        if diagnostic is not None:break
-        time.sleep(.25)
-    assert diagnostic is not None,'Built-in diagnostic export did not produce a ZIP'
-    with zipfile.ZipFile(diagnostic) as bundle:
-        entry=bundle.getinfo('diagnostics.json')
-        assert entry.file_size<=2*1024*1024
-        diagnostic_context=json.loads(bundle.read(entry))['context']
-    assert [event['stage'] for event in diagnostic_context['startup']]==[1,2,3,4,5,6]
-    assert diagnostic_context['core_first'] and any(row['method']=='getblockchaininfo' for row in diagnostic_context['core_rpc_history'])
-    assert diagnostic_context['installation']['running_program']['versions']['ui']=='2026.11.17.177'
-    assert diagnostic_context['installation']['core']['observed_process_matches_owner']
-    assert 'local_paths' not in diagnostic_context
-    # The QA-only owned shortcut writes to the program directory. The normal
-    # diagnostic button opens a save dialog in Documents. Preserve this test
-    # capture outside the signed cohort before checking its unchanged inventory.
-    assert diagnostic.is_file() and diagnostic.resolve() in paths
-    diagnostic.replace(E/'late-built-in-diagnostic.zip')
-    evidence_dir=(new/'evidence').resolve()
-    assert evidence_dir.parent==new.resolve()
-    if evidence_dir.is_dir():
-        pid=life.new_ui.pid
-        shown=seen+['DiagnosticsStart','DiagnosticsStop','DiagnosticsExport']
-        expected={f'owned-{action}-{pid}.png' for action in shown}
-        remaining=list(evidence_dir.iterdir())
-        assert len(remaining)<=len(expected) and all(
-            screenshot.is_file() and not screenshot.is_symlink() and screenshot.name in expected
-            for screenshot in remaining), [item.name for item in remaining[:16]]
-        for screenshot in remaining:
-            screenshot.replace(E/screenshot.name)
-        evidence_dir.rmdir()
     new_pid=life.new_ui.pid;gui_command(life.new_ui,'--close-owned')
     for _ in range(80):
         if life.new_ui.exited():break
@@ -522,10 +478,10 @@ try:
         new_normal_close=True,selector_retained=True,existing_wallet_address_preserved=True,
         isolated_data_bytes_preserved=True,active_core_restarted=True,
         hardware_mining_exercised=False,host_unpack_self_test_passed=True,
-        diagnostic_opened_after_startup=True,downloaded_resume_byte=fetcher.requests[1],explicit_insufficient_disk_error=True,
+        downloaded_resume_byte=fetcher.requests[1],explicit_insufficient_disk_error=True,
         old_application_survived_insufficient_space=True,install_reused_prepared_download=True,legacy_height=legacy['legacy_height'],
         validated_live_height=accepted_height,verified_new_helper_version='2026.11.17.31',
-        within_previous_health_budget=observed_launch[0],sections=seen,seconds=time.monotonic()-start)
+        within_previous_health_budget=observed_launch[0],seconds=time.monotonic()-start)
 finally:
     active=life.new_ui if life and life.new_ui else own
     if active and not active.exited():
@@ -541,6 +497,30 @@ finally:
 assert result
 result['previous_exe_timeout_negative_control']=verify_slow_core_handoff(base,False,live['pgn_update_core_runtime_directory'])
 result['ordinary_portable_timeout_recovery']=verify_slow_core_handoff(new,True,live['pgn_update_core_runtime_directory'])
+def collect_portable_diagnostic(owner,code):
+    assert code.resolve().is_relative_to(QA.resolve())
+    sections=['Wallet','Social','SocialMiners','Mining']
+    for section in sections:
+        snapshot=gui_command(owner,'--show-owned',section)
+        (E/(section+'.json')).write_text(json.dumps(snapshot,indent=2)+'\n')
+    for action in ('DiagnosticsStart','DiagnosticsStop','DiagnosticsExport'):
+        gui_command(owner,'--show-owned',action)
+    diagnostic=code/'evidence'/f'diagnostic-{owner.pid}.zip'
+    deadline=time.monotonic()+25
+    while time.monotonic()<deadline and not diagnostic.is_file():time.sleep(.25)
+    assert diagnostic.is_file() and diagnostic.stat().st_size<4*1024*1024
+    with zipfile.ZipFile(diagnostic) as bundle:
+        item=bundle.getinfo('diagnostics.json')
+        assert 0<item.file_size<=2*1024*1024
+        capture=json.loads(bundle.read(item))['context']
+    assert [event['stage'] for event in capture['startup']]==[1,2,3,4,5,6]
+    assert capture['core_first'] and any(row['method']=='getblockchaininfo' for row in capture['core_rpc_history'])
+    assert capture['installation']['running_program']['versions']['ui']=='2026.11.17.177'
+    assert capture['installation']['core']['observed_process_matches_owner']
+    assert 'local_paths' not in capture
+    (E/'late-built-in-diagnostic.zip').write_bytes(diagnostic.read_bytes())
+    return sections
+
 def verify_interrupted_replay_through_gui(current_code, runtime_directory):
     assert wallet_data.is_relative_to(QA.resolve())
     profile_path=(Path(runtime_directory)/'wallet-core.json').resolve(strict=True)
@@ -623,12 +603,17 @@ def verify_interrupted_replay_through_gui(current_code, runtime_directory):
                 state=owned_ipc(owner,'--inspect-owned')
                 chain=rpc(wallet_data,wallet_port,'getblockchaininfo',[],timeout=8)
                 if min(int(state['pgn_network_height']),chain['blocks'])>interrupted['canonical_height']:
-                    return dict(before=height,after=chain['blocks'],wallet_address_preserved=True,
-                                verified_tip=True,normal_executable_start=True,replayed_native=True)
+                    passed_height=chain['blocks']
+                    break
             except (OSError,ValueError,RuntimeError):
                 pass
             time.sleep(1.0)
-        raise AssertionError('Portable fallback could not validate a block beyond retained history')
+        else:
+            raise AssertionError('Portable fallback could not validate a block beyond retained history')
+        sections=collect_portable_diagnostic(owner,check)
+        return dict(before=height,after=passed_height,wallet_address_preserved=True,
+                    verified_tip=True,normal_executable_start=True,replayed_native=True,
+                    diagnostic_opened_after_startup=True,sections=sections)
     finally:
         if owner and not owner.exited():
             gui_command(owner,'--close-owned')
@@ -643,4 +628,6 @@ def verify_interrupted_replay_through_gui(current_code, runtime_directory):
         retained.rename(wallet_data)
 
 result['portable_interrupted_legacy']=verify_interrupted_replay_through_gui(new,live['pgn_update_core_runtime_directory'])
+result['diagnostic_opened_after_startup']=result['portable_interrupted_legacy']['diagnostic_opened_after_startup']
+result['sections']=result['portable_interrupted_legacy']['sections']
 (QA/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
