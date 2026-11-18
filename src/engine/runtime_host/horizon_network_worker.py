@@ -14,7 +14,8 @@ import os
 import sys
 import threading
 import time
-from horizon_core_rpc import CoreRpc
+from horizon_core_rpc import CoreRpc, CoreRpcError, CoreRpcUnavailable
+from horizon_failure_trace import core_connection_unavailable
 from horizon_coordination import confirm_candidate, active_candidate, validate_intent
 from horizon_sync_guard import wait_for_network
 from horizon_compute_lease import computation_lease_active
@@ -418,6 +419,24 @@ class NetworkWorker:
             raise ValueError("Ticket lookup belongs to another chain")
         return state
 
+    def _read_retained_lease(self, request_id):
+        delay = 1
+        while not self.quitting.is_set():
+            try:
+                return self.rpc.call("getpgnstate", [0, 1, request_id])
+            except (OSError, CoreRpcError, CoreRpcUnavailable) as error:
+                if not core_connection_unavailable(error, getattr(self.args, "cookie", None)):
+                    raise
+            if self.quitting.is_set():
+                break
+            self.message("Waiting for Core to confirm the saved ticket lease", "Waiting for connection")
+            if self.quitting.wait(delay):
+                break
+            delay = min(15, delay * 2)
+            if getattr(self.args, "wait_for_network_sync", False) and not wait_for_network(self):
+                break
+        return None
+
     def assign(self, recover_only=False):
         duty=None
         journal = self.root / "controller.json"
@@ -428,7 +447,14 @@ class NetworkWorker:
             self.sequence = int(saved.get("sequence", 0))
             if saved.get("work") and saved.get("stage") not in ("REPORT_CONFIRMED", "CONSUMED"):
                 previous = saved["work"]
-                page = self.rpc.call("getpgnstate", [0, 1, previous["request_id"]])
+                if recover_only:
+                    page = self._read_retained_lease(previous["request_id"])
+                    if self.quitting.is_set():
+                        return None
+                else:
+                    page = self.rpc.call("getpgnstate", [0, 1, previous["request_id"]])
+                if not isinstance(page, dict):
+                    raise ValueError("Core did not return a state for the saved ticket")
                 if page.get("genesis") != self.args.genesis:
                     raise ValueError("Saved ticket belongs to another chain")
                 leases = page.get("leases", [])

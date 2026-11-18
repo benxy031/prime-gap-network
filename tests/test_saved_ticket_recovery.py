@@ -6,10 +6,13 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
+from threading import Event
 
 sys.path[:0]=[str(Path(__file__).resolve().parents[1]/'src/engine/runtime_host'),
               str(Path(__file__).resolve().parents[1]/'src/protocol')]
 from horizon_network_worker import NetworkWorker, save
+from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
 
 GENESIS='7'*64
 REQUEST='2'*64
@@ -41,6 +44,7 @@ class SavedTicketRecoveryTests(unittest.TestCase):
     def worker(self,lease=None,**page):
         worker=NetworkWorker.__new__(NetworkWorker);worker.root=self.root
         worker.args=SimpleNamespace(genesis=GENESIS);worker.audits=Audits()
+        worker.quitting=Event()
         worker.rpc=SourceRpc(dict(genesis=GENESIS,height=5,leases=[] if lease is None else [copy.deepcopy(lease)],**page))
         save(self.root/'controller.json',dict(stage='ASSIGNED',sequence=4,work=copy.deepcopy(self.work)))
         return worker
@@ -77,6 +81,65 @@ class SavedTicketRecoveryTests(unittest.TestCase):
     def test_expired_still_advertised_lease_is_rejected(self):
         worker=self.worker(dict(self.lease,deadline=5))
         with self.assertRaises(ValueError):worker.assign(recover_only=True)
+
+    def test_retry_reads_current_median_time_before_resuming_saved_lease(self):
+        lease=dict(self.lease, deadline_clock='median_chain_time', issued_time=1000, deadline_time=87400)
+        for current_time in (87399, 87400):
+            with self.subTest(current_time=current_time):
+                worker=self.worker(lease, median_time_past=current_time)
+                worker.args.wait_for_network_sync=True
+                worker.message=Mock()
+                worker.quitting.wait=Mock(return_value=False)
+                journal=self.root/'controller.json'
+                original=journal.read_bytes()
+                replies=[CoreRpcUnavailable(503), worker.rpc.page]
+                with patch.object(worker.rpc, 'call', side_effect=replies) as rpc, patch(
+                    'horizon_network_worker.wait_for_network', return_value=True
+                ) as synchronized:
+                    if current_time==87400:
+                        with self.assertRaisesRegex(ValueError, 'Saved ticket no longer matches'):
+                            worker.assign(recover_only=True)
+                        self.assertEqual(journal.read_bytes(),original)
+                    else:
+                        resumed=worker.assign(recover_only=True)
+                        self.assertEqual(resumed['ticket'],TICKET)
+                        self.assertEqual(resumed['ticket_number'],'35')
+                    self.assertEqual(rpc.call_count,2)
+                    self.assertTrue(all(args.args==('getpgnstate',[0,1,REQUEST]) for args in rpc.call_args_list))
+                    synchronized.assert_called_once_with(worker)
+                    worker.message.assert_called_once()
+                    self.assertEqual(worker.message.call_args.args[1],'Waiting for connection')
+
+    def test_missing_state_leaves_original_ticket_unconfirmed(self):
+        worker=self.worker(self.lease)
+        original=(self.root/'controller.json').read_bytes()
+        with patch.object(worker.rpc,'call',return_value=None) as rpc:
+            with self.assertRaisesRegex(ValueError,'Core did not return a state'):
+                worker.assign(recover_only=True)
+        rpc.assert_called_once()
+        self.assertEqual((self.root/'controller.json').read_bytes(),original)
+
+    def test_saved_lease_read_refusal_is_terminal(self):
+        worker=self.worker(self.lease)
+        original=(self.root/'controller.json').read_bytes()
+        with patch.object(worker.rpc,'call',side_effect=CoreRpcError(-5,'Invalid state')) as rpc:
+            with self.assertRaises(CoreRpcError):
+                worker.assign(recover_only=True)
+        rpc.assert_called_once()
+        self.assertEqual((self.root/'controller.json').read_bytes(),original)
+
+    def test_shutdown_while_waiting_for_saved_lease_keeps_journal(self):
+        worker=self.worker(self.lease)
+        worker.message=Mock()
+        def stop(_seconds):
+            worker.quitting.set()
+            return True
+        worker.quitting.wait=stop
+        original=(self.root/'controller.json').read_bytes()
+        with patch.object(worker.rpc,'call',side_effect=TimeoutError('read timed out')) as rpc:
+            self.assertIsNone(worker.assign(recover_only=True))
+        rpc.assert_called_once()
+        self.assertEqual((self.root/'controller.json').read_bytes(),original)
 
     def test_disappeared_lease_is_not_reused_and_local_work_is_retained(self):
         self.report();before=(self.root/'tickets'/TICKET/'network-report.json').read_bytes()

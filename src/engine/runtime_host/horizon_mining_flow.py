@@ -962,6 +962,8 @@ class MiningFlow:
         worker = self.worker
         with worker.network_lock:
             work,reassigned=self.startup_work()
+            if worker.quitting.is_set():
+                return
             resumed = work is not None
             if work is not None:
                 session = worker.root / "tickets" / work["ticket"] / "session.json"
