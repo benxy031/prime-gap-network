@@ -1,4 +1,4 @@
-name: Qualify Horizon recovery from peer relay stalls
+name: Qualify the assembled Horizon recovery changes
 on:
   workflow_dispatch:
   push:
@@ -104,7 +104,7 @@ jobs:
           cp build-app/PGN-Horizon.exe qualified/
           echo "$GITHUB_SHA" > qualified/SOURCE.txt
           qmake6 -query QT_VERSION > qualified/QT_VERSION.txt
-          sha256sum qualified/PGN-Horizon.exe > qualified/SHA256SUMS.txt
+          sha256sum qualified/PGN-Horizon.exe build-app/assets/audit-animation.rcc > qualified/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

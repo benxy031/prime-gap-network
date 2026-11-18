@@ -425,6 +425,7 @@ int main(int argc,char** argv) {
    const auto& anchor=*networkObservation;
    const auto link=inspectWallet?pgn::wallet::coreLinkState(inspectWallet->property("pgn_core_link_state").toString()):pgn::wallet::CoreLinkState::Starting;
    const auto now=QDateTime::currentDateTimeUtc();
+   using Condition=pgn::wallet::NetworkLinkCondition;
    const auto condition=pgn::wallet::networkLinkCondition(link,anchor,now);
    const bool online=pgn::wallet::verifiedCoreOnline(link,anchor,now);
    const auto light=[](const QColor& color){QPixmap pixels(14,14);pixels.fill(Qt::transparent);QPainter p(&pixels);p.setRenderHint(QPainter::Antialiasing);p.setPen(Qt::NoPen);p.setBrush(color);p.drawEllipse(QRectF(3,3,8,8));return QIcon(pixels);};
@@ -433,7 +434,6 @@ int main(int argc,char** argv) {
    walletButton->setToolTip(online?"Verified Core connected":"Waiting for a fresh, verified Core response");
    walletButton->setProperty("pgn_core_online",online);
    if(!online){
-    using Condition=pgn::wallet::NetworkLinkCondition;
     const auto caption=condition==Condition::Connecting?QString("NETWORK · CONNECTING"):
      condition==Condition::Disconnected?QString("WALLET NODE · DISCONNECTED"):
      condition==Condition::Unverified?QString("CORE · IDENTITY NOT VERIFIED"):
@@ -446,11 +446,18 @@ int main(int argc,char** argv) {
    }
    const auto peers=anchor->peers?QString::number(*anchor->peers):QStringLiteral("—");
    const bool idleChain=anchor->nativePeerCaughtUp&&anchor->oldTipAt(QDateTime::currentDateTimeUtc());
-   const auto state=!anchor->synchronizing?QStringLiteral("SYNC UNKNOWN"):*anchor->synchronizing?QStringLiteral("SYNCING"):anchor->peers&&*anchor->peers==0?QStringLiteral("NO PEERS"):!anchor->peers?QStringLiteral("PEER STATUS UNAVAILABLE"):idleChain?QStringLiteral("CHAIN IDLE"):QStringLiteral("UP TO DATE");
-   const auto networkStyle=QString("QLabel{color:%1;font:12px Consolas;padding:3px 8px;}").arg(idleChain?"#ffbd69":anchor->synchronizing&&*anchor->synchronizing?"#8dccff":"#69efc5");
+   const bool syncing=condition==Condition::Syncing;
+   const auto state=condition==Condition::NoPeers?QStringLiteral("NO PEERS"):
+     condition==Condition::PeersUnknown?QStringLiteral("PEER STATUS UNAVAILABLE"):
+     condition==Condition::SyncUnknown?QStringLiteral("SYNC UNKNOWN"):
+     syncing?QStringLiteral("SYNCING"):
+     idleChain?QStringLiteral("CHAIN IDLE"):QStringLiteral("UP TO DATE");
+   const bool attention=condition==Condition::NoPeers||condition==Condition::PeersUnknown||
+     condition==Condition::SyncUnknown||idleChain;
+   const auto networkStyle=QString("QLabel{color:%1;font:12px Consolas;padding:3px 8px;}").arg(attention?"#ffbd69":syncing?"#8dccff":"#69efc5");
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
-   networkSummary->setBusy(anchor->synchronizing&&*anchor->synchronizing);
+   networkSummary->setBusy(syncing);
    if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
    else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));

@@ -23,7 +23,8 @@ int main(int argc,char** argv){
     require(!verifiedCoreOnline(CoreLinkState::Ready,observation,now.addMSecs(-1)));
     observation.peers.reset();
     require(networkLinkCondition(CoreLinkState::Ready,observation,now)==NetworkLinkCondition::PeersUnknown);
-    observation.peers=0;
+    observation.peers=0;observation.synchronizing=true;
+    require(verifiedCoreOnline(CoreLinkState::Ready,observation,now));
     require(networkLinkCondition(CoreLinkState::Ready,observation,now)==NetworkLinkCondition::NoPeers);
     observation.peers=1;observation.synchronizing=true;
     require(networkLinkCondition(CoreLinkState::Ready,observation,now)==NetworkLinkCondition::Syncing);
