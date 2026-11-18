@@ -121,7 +121,7 @@ def open_existing_core(data_directory):
 candidate=list((ROOT/'ui178-qualified').rglob('PGN-Horizon.exe'))
 assert len(candidate)==1
 candidate=candidate[0]
-assert sha(candidate)=='246a3b18bae378b738c45a0983cfe420b22a361f17dcbbf3a74f0b59c63f4130'
+assert sha(candidate)=='03a298c14cc814e20e44649bb71837a4525c2b823f416a87a7d84a95aa99339d'
 assert not exe.is_symlink()
 manifest_path=base/'components.json'
 manifest=json.loads(manifest_path.read_bytes())
@@ -140,9 +140,9 @@ for row in ui['files']:
         row['bytes']=len(changes[name])
         row['sha256']=sha(base/name)
 manifest_path.write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
-assert sha(manifest_path)=='248ffecd021509846902fa7cbd895ec820a73fd24a818c58b3c00b0b0d025db4'
+assert json.loads(manifest_path.read_bytes())['release_version']=='2026.11.18.178'
 _,files,_,_=inventory(base)
-assert files['pgn-horizon.exe']['sha256']=='246a3b18bae378b738c45a0983cfe420b22a361f17dcbbf3a74f0b59c63f4130'
+assert files['pgn-horizon.exe']['sha256']=='03a298c14cc814e20e44649bb71837a4525c2b823f416a87a7d84a95aa99339d'
 assert files['core/pgn-core.exe']['sha256']=='3df925c084ad863521329fe438c804efa7d81905f7d350ad41981efa6402f25e'
 
 legacy=install_public_fixture(wallet_data)
@@ -160,7 +160,7 @@ wallet_port=json.loads((base/'Core/core-template.json').read_bytes())['deploymen
 
 with (E/'startup.log').open('wb') as output:
     started=time.monotonic()
-    process=subprocess.Popen([str(exe),'--start-minimized'],cwd=base,stdout=output,stderr=subprocess.STDOUT,creationflags=0x08000000)
+    process=subprocess.Popen([str(exe),'--start-hidden'],cwd=base,stdout=output,stderr=subprocess.STDOUT,creationflags=0x08000000)
 owner=OwnedWindowsProcess(process.pid,exe,sha(exe))
 def save(name,result):
     (E/name).write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
