@@ -279,6 +279,7 @@ try:
     assert data.name==GENESIS and data.parent.name=='data', data
     normal_store=data.parent.parent/'updates'/GENESIS[:20]/'installation'
     assert not normal_store.exists(), 'Fresh hosted profile already has an updater installation store'
+    normal_store.parent.mkdir(parents=True,exist_ok=True)
     store=CohortStore.initialize(normal_store,base,context,context_hash)
     previous=store.current()
     assert previous['sequence']==46
