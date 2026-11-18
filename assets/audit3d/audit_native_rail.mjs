@@ -1,3 +1,4 @@
+import {verifiedLandingMarkers} from './audit_activity_model.mjs';
 // The verified native Atlas owns ranges, zoom and selection. This renderer
 // shares its coordinate space with the articulated scene; no mock table/data.
 const rail=document.querySelector('#atlas-rail'),actor=document.querySelector('#actor'),NS='http://www.w3.org/2000/svg';
@@ -5,6 +6,7 @@ const states=['assigned','pending_audits','audits_assigned','audits_passed','aud
 const colors=['#70badb','#e6bd64','#ba9aee','#63dfb3','#f37b7e'];
 const titles=['Assigned','Awaiting audits','Audits assigned','Audits passed','Failed'];
 let atlas=null,jobs=[],previewGeneration=0;
+let verifiedActivity=null,supplemental=[];
 const send=value=>window.chrome?.webview?.postMessage(JSON.stringify({event:'atlas',...value}));
 const U=1n<<40n;
 function bit(n){let k=BigInt(n.toString(2).length-1),base=1n<<k;return k*U+(n-base)*U/base}
@@ -26,7 +28,8 @@ function redraw(){
    const node=make('circle',{cx:x,cy:y(states[s]),r:2.5,fill:colors[s],'data-bin':i,'data-stage':states[s]},svg);node.style.cursor='pointer';
   }
  }
- for(const item of atlas.details??[]){const x=unit((BigInt(item.start)+BigInt(item.end))/2n)*width;if(x<0||x>width)continue;
+ supplemental=verifiedLandingMarkers(atlas,verifiedActivity);
+ for(const item of [...(atlas.details??[]),...supplemental]){const x=unit((BigInt(item.start)+BigInt(item.end))/2n)*width;if(x<0||x>width)continue;
   const s=states.indexOf(item.stage),selected=item.request===atlas.selected;
   const node=make('circle',{cx:x,cy:y(item.stage),r:selected?4.1:3.2,fill:colors[s]??colors[0],stroke:selected?'#f4fff9':'none','stroke-width':1.4,'data-request':item.request},svg);
   node.style.cursor='pointer';
@@ -58,10 +61,19 @@ function endpoints(value){
  return result;
 }
 const apply=window.pgnAuditApply,project=window.pgnAuditProject,oldPreview=window.pgnAuditPreview;
-window.pgnAuditLandingMarker=job=>atlas?.details?.find(row=>row.request===job?.request);
-window.pgnAuditApply=value=>{jobs=value.view?.audits??[];apply({...value,projection:endpoints(value.projection??{})})};
+window.pgnAuditLandingMarker=job=>atlas?.details?.find(row=>row.request===job?.request)
+ ??supplemental.find(row=>row.request===job?.request);
+window.pgnAuditApply=value=>{
+ jobs=value.view?.audits??[];
+ verifiedActivity=value.preview===true?null:value.view;
+ const projection=value.projection??{};
+ if(!projection.__atlas)redraw();
+ apply({...value,projection:endpoints(projection)});
+};
 window.pgnAuditProject=value=>project(endpoints(value));
 window.pgnAuditPreview=value=>{
+ verifiedActivity=null;
+ if(!value?.__atlas)redraw();
  endpoints(value);const details=atlas?.details??[];if(!details.length){oldPreview(endpoints(value));return}
  const generation=++previewGeneration,picked=[details[Math.floor(details.length*.25)],details[Math.floor(details.length*.72)]];
  const id=n=>n.toString(16).padStart(64,'0');let height=1;

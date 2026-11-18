@@ -120,7 +120,18 @@ actor.addEventListener('camera-change',()=>{syncLayoutProjection();names()});
 function tick(now){let dt=Math.min(.06,(now-last)/1000||0);last=now;
  if(ready&&shown&&!document.hidden){syncLayoutProjection();dt=Math.min(.1,(now-lastRender)/1000);lastRender=now;
   if(preview&&now-window.__auditNetwork.previewStarted>14000){for(const c of controllers.values()){const j=c.inspect().job;if(j&&!['passed','failed'].includes(j.state))c.apply({...j,state:'passed'},points(j))}}
-  for(const c of controllers.values()){let rest=dt;while(rest>1e-6){const step=Math.min(rest,1/60);c.step(step);rest-=step}const state=c.inspect();if(state.metrics.complete&&canCompleteLanding(state.job,window.pgnAuditLandingMarker?.(state.job),state.age,preview))c.clear()}
+  for(const controller of controllers.values()){
+   let rest=dt;
+   while(rest>1e-6){
+    const step=Math.min(rest,1/60);
+    controller.step(step);
+    rest-=step;
+   }
+   const state=controller.inspect();
+   if(!state.metrics.complete)continue;
+   const marker=window.pgnAuditLandingMarker?.(state.job);
+   if(canCompleteLanding(state.job,marker,state.age,preview,state.endpoints?.outside===true))controller.clear();
+  }
   if(!dragging){const orbit=actor.getCameraOrbit(),k=1-Math.exp(-dt*4),theta=orbit.theta+(home.theta-orbit.theta)*k,phi=orbit.phi+(home.phi-orbit.phi)*k;actor.cameraOrbit=`${theta}rad ${phi}rad ${home.radius}m`}
   names();
  }captureLayoutTrace(now);requestAnimationFrame(tick)}requestAnimationFrame(tick);

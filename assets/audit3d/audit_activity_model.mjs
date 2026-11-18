@@ -6,9 +6,33 @@ const ENTITIES=['michael','helel','boshel','kitabel'];
 // The activity feed and Atlas are separate verified reads. Keep an arrived
 // constellation visible until its detailed marker can take over; never invent
 // a passed Atlas verdict to hide the read latency. Bound this visual hold.
-export function canCompleteLanding(job,marker,ageSeconds,preview=false){
- if(preview||!marker||job?.state!=='passed'||job.reportAudited!==true)return true;
- return marker.request===job.request&&marker.stage==='audits_passed'||ageSeconds>=8;
+export function canCompleteLanding(job,marker,ageSeconds,preview=false,outside=false){
+ if(preview||outside||job?.state!=='passed'||job.reportAudited!==true)return true;
+ return (marker?.request===job.request&&marker.stage==='audits_passed')||ageSeconds>=8;
+}
+
+export function verifiedLandingMarkers(atlas,activity){
+ const anchor=activity?.state;
+ if(atlas?.details_truncated!==true||activity?.schema!=='PGN_AUDIT_ACTIVITY_V1'
+    ||!anchor||!HASH.test(anchor.genesis)||!HASH.test(anchor.bestblockhash)
+    ||anchor.genesis!==atlas.genesis||anchor.bestblockhash!==atlas.bestblockhash
+    ||!Number.isSafeInteger(anchor.height)||anchor.height!==atlas.height)return [];
+ const position=value=>typeof value==='string'&&/^[1-9][0-9]{0,37}$/.test(value);
+ if(!position(atlas.start)||!position(atlas.end))return [];
+ const lower=BigInt(atlas.start),upper=BigInt(atlas.end);
+ const represented=new Set((atlas.details??[]).map(row=>row.request));
+ const markers=[];
+ for(const report of activity.audits??[]){
+  if(report.audited!==true||!HASH.test(report.request_id)||represented.has(report.request_id)
+     ||!position(report.start)||!position(report.end))continue;
+  if(!report.jobs?.some(job=>job.state==='passed'&&Number.isInteger(job.passed_height)
+      &&job.passed_height>0&&job.passed_height<=anchor.height))continue;
+  const first=BigInt(report.start),last=BigInt(report.end),center=(first+last)/2n;
+  if(first>=last||center<lower||center>=upper)continue;
+  represented.add(report.request_id);
+  markers.push({request:report.request_id,start:report.start,end:report.end,stage:'audits_passed'});
+ }
+ return markers;
 }
 function require(value,message){if(!value)throw Error(message)}
 function actorEntity(script){let hash=2166136261;for(const c of script)hash=Math.imul(hash^c.charCodeAt(0),16777619)>>>0;return ENTITIES[hash%4]}
