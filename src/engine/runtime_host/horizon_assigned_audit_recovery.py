@@ -14,6 +14,11 @@ def digest(value):
     return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
 
 
+def canonical_signing_script(value):
+    return (isinstance(value, str) and 0 < len(value) <= 20000 and len(value) % 2 == 0
+            and all(c in '0123456789abcdef' for c in value))
+
+
 class AssignedAuditRecovery:
     def __init__(self, worker, active_root='service-audit-lanes'):
         if active_root not in ('service-audit-lanes', 'audit-lanes'):
@@ -76,20 +81,23 @@ class AssignedAuditRecovery:
         with worker.network_lock:
             identity = worker.rpc.call('validateaddress', [worker.address()])
             actor = identity.get('scriptPubKey')
-            if (identity.get('isvalid') is not True or not isinstance(actor, str)
-                    or not actor or len(actor) > 20000 or len(actor) % 2
-                    or any(c not in '0123456789abcdef' for c in actor)):
+            if identity.get('isvalid') is not True or not canonical_signing_script(actor):
                 raise ValueError('Authenticated miner signing script required for audit recovery')
             offset = 0
             if self.cursor.is_file():
                 if self.cursor.stat().st_size > 1024:
                     raise ValueError('Assigned audit recovery cursor exceeds budget')
                 saved = json.loads(self.cursor.read_bytes())
-                if saved.get('genesis') != worker.args.genesis or saved.get('actor') != actor:
-                    raise ValueError('Assigned audit recovery cursor identity changed')
-                offset = saved.get('offset')
-                if type(offset) is not int or not 0 <= offset < 2**63 - 100:
+                if not (isinstance(saved, dict) and digest(saved.get('genesis'))
+                        and canonical_signing_script(saved.get('actor'))):
+                    raise ValueError('Invalid assigned audit recovery cursor identity')
+                previous_offset = saved.get('offset')
+                if type(previous_offset) is not int or not 0 <= previous_offset < 2**63 - 100:
                     raise ValueError('Invalid assigned audit recovery cursor')
+                # This cursor only locates a page for one chain and signer.
+                # A different authenticated identity starts a new scan.
+                if (saved['genesis'], saved['actor']) == (worker.args.genesis, actor):
+                    offset = previous_offset
             view = worker.rpc.call('getpgnworkview', ['audits', offset, 100])
             state = view.get('state', {})
             reports, rows = view.get('reports'), view.get('audits')
