@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 static void need(bool okay,const char* why){if(!okay)throw std::runtime_error(why);}
-int main(int argc,char** argv){
+int main(int argc,char** argv)try{
  if(argc>1&&QString::fromLocal8Bit(argv[1])=="--transport"){std::string line;while(std::getline(std::cin,line))if(line=="quit")return 255;return 0;}
  QCoreApplication app(argc,argv);
  need(pgn::ui::miningAttentionStatus("Audit 2: Active parent changed after submission").contains("Network changed")&&!pgn::ui::miningAttentionStatus("Active parent changed").contains("retrying"),"Failure text claimed a retry without observing one");
@@ -54,5 +54,26 @@ QProcess process;bool allowed=true;std::vector<bool> launches;int disconnected=0
   need(!waiting.needsAttention()&&intents==std::vector<bool>(3,wanted),"Temporary owner contention lost intent or became terminal");
   waiting.close();contended.write("quit\n");wait([&]{return contended.state()==QProcess::NotRunning;});need(!waiting.retryPending(),"Closed busy transport restarted");
  }
- std::cout<<"PASS owned transport recovery:ON after closed,automatic reconnect,OFF intent,semantic faults,ownership guard,manual retry,close and failed-start; no GPU or Core touched\n";
-}
+ for(const bool guardClosesBeforeExit:{true,false}){
+  QProcess gated;bool eligible=true;std::vector<bool> intents;
+  pgn::mining::NetworkControllerRecovery guarded(&gated,nullptr,20,100);
+  guarded.mayReconnect=[&]{return eligible;};
+  guarded.reconnect=[&](bool on){intents.push_back(on);guarded.launching();gated.start(QCoreApplication::applicationFilePath(),{"--transport"});};
+  guarded.intent(true);need(guarded.restartIfClosed(),"Guarded reconnect fixture could not start");
+  wait([&]{return gated.state()==QProcess::Running;});
+  if(guardClosesBeforeExit)eligible=false;
+  gated.write("quit\n");wait([&]{return gated.state()==QProcess::NotRunning;});
+  eligible=false;
+  QElapsedTimer held;held.start();while(held.elapsed()<140){app.processEvents();QThread::msleep(2);}
+  need(intents.size()==1,"The transport started while the application guard was closed");
+  need(guarded.retryPending(),"The transport lost its retry while the application guard was temporarily closed");
+  guarded.intent(false);need(!guarded.restartIfClosed(),"An OFF request bypassed the application guard");
+  need(guarded.retryPending(),"An OFF request lost its deferred delivery");
+  eligible=true;
+  wait([&]{return intents.size()==2&&gated.state()==QProcess::Running;});
+  need(!intents.back(),"Deferred reconnect forgot the latest OFF request");
+  guarded.close();gated.write("quit\n");wait([&]{return gated.state()==QProcess::NotRunning;});
+  need(intents.size()==2&&!guarded.retryPending(),"The application close left a deferred controller retry");
+ }
+ std::cout<<"PASS owned transport recovery:ON after closed,automatic reconnect,OFF intent,semantic faults,ownership guard,manual retry,close, failed-start and deferred gate release; no GPU or Core touched\n";
+}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
