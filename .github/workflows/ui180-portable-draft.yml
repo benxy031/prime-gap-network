@@ -1,0 +1,51 @@
+name: Prepare the exact short-name UI180 portable asset
+on:
+  push:
+    branches: [qualification/ui180-portable-draft]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/reconstruct_portable180.py
+            /qualification/ui180/portable-archive-layout.json
+      - name: Verify and reconstruct from the qualified draft payload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $id = 450337698
+          $expect = 'fcbd56743d495651072858454e72770e4a69202393343a3e9da3451874aa42f3'
+          $release = gh api "repos/$repo/releases/$id" | ConvertFrom-Json
+          if (!$release.draft -or $release.tag_name -ne 'qa-ui180-win48') { throw 'Candidate draft identity changed' }
+          $current = @($release.assets | Where-Object {$_.name -eq 'PGN-Windows-180.zip'})
+          if ($current.Count -eq 0) {
+            gh release download 'qa-ui180-win48' --repo $repo --dir exact-input --pattern '*.components-48.zip'
+            if ($LASTEXITCODE -ne 0) { throw 'Signed input unavailable' }
+            $bundle = Get-ChildItem -LiteralPath exact-input -Filter '*.components-48.zip'
+            if (@($bundle).Count -ne 1) { throw 'Ambiguous signed input' }
+            python tools/reconstruct_portable180.py qualification/ui180/portable-archive-layout.json $bundle.FullName PGN-Windows-180.zip
+            if ($LASTEXITCODE -ne 0) { throw 'Portable reconstruction failed' }
+            gh release upload 'qa-ui180-win48' PGN-Windows-180.zip --repo $repo
+            if ($LASTEXITCODE -ne 0) { throw 'Private asset transfer failed' }
+          }
+          $release = gh api "repos/$repo/releases/$id" | ConvertFrom-Json
+          $manual = @($release.assets | Where-Object {$_.name -eq 'PGN-Windows-180.zip'})
+          if (!$release.draft -or $manual.Count -ne 1 -or $manual[0].state -ne 'uploaded' -or $manual[0].digest -ne ('sha256:'+$expect) -or $manual[0].size -ne 267874254) { throw 'Uploaded asset integrity check failed' }
+          @{PASS=$true;draft=$true;draft_id=$id;asset_id=$manual[0].id;sha256=$expect;size=$manual[0].size;name=$manual[0].name} | ConvertTo-Json | Set-Content -Encoding utf8 result.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui180-portable-draft-${{ github.run_id }}
+          path: result.json
+          if-no-files-found: error
+          retention-days: 7
