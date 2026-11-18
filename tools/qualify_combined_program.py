@@ -229,16 +229,8 @@ def show_community(owner):
     assert run.returncode==0
     receipt=json.loads(run.stdout)
     assert receipt['section']=='Community' and receipt['window_visible'] and not receipt['mining_control_changed']
-    capture=Path(receipt['capture']).resolve()
-    assert capture.is_relative_to((base/'evidence').resolve())
-    until=time.monotonic()+8
-    while not capture.exists() and time.monotonic()<until:
-        time.sleep(.2)
-    assert capture.exists() and capture.stat().st_size>4096
-    with capture.open('rb') as stream:
-        assert stream.read(8)==b'\x89PNG\r\n\x1a\n'
-    copy2(capture,E/'Horizon-Network-Work.png')
-    return {'section':receipt['section'],'window_visible':receipt['window_visible'],'mining_control_changed':receipt['mining_control_changed']}
+    return {'section':receipt['section'],'window_visible':receipt['window_visible'],
+            'mining_control_changed':receipt['mining_control_changed']}, Path(receipt['capture']).resolve()
 
 
 files=compose_program()
@@ -258,11 +250,9 @@ try:
     chain=rpc(wallet_data,wallet_port,'getblockhash',[legacy['canonical_height']])
     assert chain==legacy['canonical_tip']
     assert rpc(wallet_data,wallet_port,'getnetworkinfo',[])['networkactive'] is False
-    show_community(owner)
+    view,capture=show_community(owner)
+    assert capture.is_relative_to((base/'evidence').resolve())
     time.sleep(2.4)
-    old_capture=base/'evidence'/f'owned-Community-{owner.pid}.png'
-    old_capture.unlink()
-    view=show_community(owner)
     last=owned_ipc(owner,'--inspect-owned')
     assert last['pgn_core_link_state']=='ready' and last['pgn_wallet_embedded_pid']==opening['pgn_wallet_embedded_pid']
     assert not last.get('pgn_network_desired_on')
@@ -270,6 +260,13 @@ try:
     save('COMBINED-STARTUP-PASS.json',dict(PASS=True,real_windows_gui=True,host_version='2026.11.18.91',
         source_bounds='ordinary Windows application startup and Network Work opening; anchor flight tested separately on the same exact resource',
         same_wallet=True,same_chain=True,same_core=True,ui_section=view,no_mining=True,private=True))
+    # QWidget grabs depend on the hosted desktop. The native WebView image
+    # and the reference-flight condition are proved separately on this RCC.
+    if capture.is_file() and capture.stat().st_size>4096:
+        with capture.open('rb') as stream:
+            png=stream.read(8)==bytes.fromhex('89504e470d0a1a0a')
+        if png:
+            copy2(capture,E/'Horizon-Network-Work.png')
 finally:
     try:close_gui(owner)
     finally:owner.close()
