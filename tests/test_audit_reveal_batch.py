@@ -7,6 +7,7 @@ sys.path[:0]=[str(ROOT/'src/protocol'),str(ROOT/'src/engine/runtime_host'),str(R
 from horizon_network_audits import NetworkAudits,RetainedAuditPublicationError,save
 from horizon_coordination import CoordinationParentChanged
 from audit_publication_chain_fixture import ChainRPC
+from report_commitment import digest
 
 class RevealBatch(unittest.TestCase):
     def setUp(self):
@@ -16,7 +17,10 @@ class RevealBatch(unittest.TestCase):
         self.a=NetworkAudits(self.worker);self.ready=[];self.original={}
         for i in range(1,5):
             request=f'{i:064x}';name=request+'-0-0'
-            audit=dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+            body=dict(counts=['7'],nonce=f'{i+1:064x}')
+            commitment=digest(body)
+            audit=dict(request_id=request,slot=0,attempt=0,answer=dict(body=body,commitment=commitment))
+            self.rpc.audit_jobs[request]=dict(slot=0,attempt=0,state='passed',commitment=commitment)
             save(self.a.folder/(name+'.json'),audit);self.ready.append((name,audit));self.original[name]=(self.a.folder/(name+'.json')).read_bytes()
         self.a.answers.register([n for n,_ in self.ready])
         with self.a.answers.database()as db:db.execute("INSERT OR REPLACE INTO meta VALUES('migration_done','true')")

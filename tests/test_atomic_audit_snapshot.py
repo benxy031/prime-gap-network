@@ -56,10 +56,14 @@ class AtomicAuditTests(unittest.TestCase):
     def test_exact_own_attempt_and_commitment_are_required_for_audit_ack(self):
         rpc = Rpc()
         client = self.client(rpc)
+        actor = '0014' + '42'*20
+        rpc.reply['audits'][0]['jobs'][0]['actor'] = actor
         states = client.states([identity(1)])
-        audit = dict(request_id=identity(1), slot=0, attempt=0, answer=dict(commitment=COMMIT))
+        audit = dict(request_id=identity(1), slot=0, attempt=0, actor=actor, answer=dict(commitment=COMMIT))
         self.assertTrue(client.terminal_on_anchor(audit, states.anchor, states))
-        for changed in [dict(audit, slot=1), dict(audit, attempt=1), dict(audit, answer=dict(commitment='d'*64))]:
+        for changed in [dict(audit, slot=1), dict(audit, attempt=1),
+                        dict(audit, answer=dict(commitment='d'*64)), dict(audit, answer={}),
+                        dict(audit, actor='0014'+'43'*20)]:
             self.assertFalse(client.terminal_on_anchor(changed, states.anchor, states))
 
     def test_reorg_after_read_retains_both_owner_and_auditor_records(self):

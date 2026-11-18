@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'src/engine/runtime_host'))
 sys.path.insert(0, str(ROOT / 'tests'))
 from horizon_network_audits import NetworkAudits, save
 from audit_publication_chain_fixture import ChainRPC
+from report_commitment import digest
 
 
 class AuditPublicationTests(unittest.TestCase):
@@ -24,12 +25,14 @@ class AuditPublicationTests(unittest.TestCase):
         self.audits = NetworkAudits(self.worker)
         self.request = 'a' * 64
         self.name = self.request + '-0-0'
-        self.answer = dict(request_id=self.request, slot=0, attempt=0,
-                           answer=dict(body=dict(counts=['7'], nonce='b' * 64)))
+        body = dict(counts=['7'], nonce='b' * 64)
+        self.answer = dict(request_id=self.request, slot=0, attempt=0, actor='0014' + '42'*20,
+                           answer=dict(body=body, commitment=digest(body)))
+        self.worker.rpc.audit_job.update(actor=self.answer['actor'], commitment=digest(body))
         save(self.audits.folder / (self.name + '.json'), self.answer)
         save(self.audits.folder / 'pending.json', [self.name])
         self.committed = dict(details_root='c' * 64,
-                              jobs=[dict(slot=0, attempt=0, state='committed')])
+                              jobs=[dict(self.worker.rpc.audit_job, state='committed')])
         self.before = copy.deepcopy(self.committed)
         self.after = copy.deepcopy(self.committed)
         self.calls = []
@@ -84,6 +87,24 @@ class AuditPublicationTests(unittest.TestCase):
         self.after['jobs'][0].update(attempt=1, state='passed')
         self.audits.reveal_committed()
         self.assertEqual(self.pending(), [self.name])
+
+    def test_unverified_named_verdict_keeps_exact_seal_until_correct_confirmation(self):
+        path = self.audits.folder / (self.name + '.json')
+        original = path.read_bytes()
+        expected = dict(self.worker.rpc.audit_job, state='failed')
+        self.before = dict(self.committed, jobs=[expected])
+        for field, value in [('commitment', None), ('commitment', 'd'*64), ('actor', '0014'+'43'*20)]:
+            with self.subTest(field=field, value=value):
+                self.worker.rpc.audit_job = dict(expected, **{field:value})
+                self.audits.reveal_committed()
+                self.assertEqual(self.pending(), [self.name])
+                self.assertEqual(self.audits.answers.recover([]), [self.name])
+                self.assertEqual(path.read_bytes(), original)
+        self.worker.rpc.audit_job = expected
+        self.audits.reveal_committed()
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.audits.answers.recover([]), [])
+        self.assertEqual(path.read_bytes(), original)
 
     def test_transport_failure_preserves_index_and_payload(self):
         original = (self.audits.folder / 'pending.json').read_bytes()

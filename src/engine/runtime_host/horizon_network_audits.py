@@ -12,7 +12,7 @@ from horizon_coordination import confirm_candidate, validate_intent, Coordinatio
 from horizon_audit_answers import AuditAnswers
 from horizon_owner_reports import OwnerReports
 from horizon_audit_progress import presentation as audit_presentation
-from horizon_audit_snapshot import AnchoredAuditStates
+from horizon_audit_snapshot import AnchoredAuditStates, identity
 
 def save(file, value):
     atomic_bytes(Path(file), canonical_bytes(value) + b"\n")
@@ -312,31 +312,35 @@ class NetworkAudits:
         return result
 
     def terminal_on_anchor(self, audit, anchor, states=None):
+        commitment = audit.get("answer", {}).get("commitment")
+        if not identity(commitment):
+            return False
+        request = audit["request_id"]
         if isinstance(states, AnchoredAuditStates):
             if states.anchor != anchor:
                 return False
-            job = next((job for job in states.get(audit['request_id'], {}).get('jobs', [])
-                        if job['slot'] == audit['slot'] and job['attempt'] == audit['attempt']), None)
-            return bool(job and job['state'] in ('passed', 'failed')
-                        and job.get('commitment') == audit.get('answer', {}).get('commitment')
-                        and states.current(self.worker.rpc))
-        # Only the final ACK needs this exact atomic projection. The ordinary
-        # batched progress read stays cheap. Before/after tip equality alone
-        # cannot exclude a tip that changes and changes back during that read.
-        view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, audit["request_id"]])
-        state = view.get("state", {})
-        rows = view.get("audits", [])
-        if (view.get("schema") != "PGN_WORK_VIEW_V1" or view.get("kind") != "audits"
-                or view.get("request_id") != audit["request_id"]
-                or state.get("genesis") != anchor["genesis"]
-                or state.get("bestblockhash") != anchor["hash"]
-                or state.get("height") != anchor["height"]
-                or not isinstance(rows, list) or len(rows) != 1
-                or rows[0].get("request_id") != audit["request_id"]):
-            return False
-        verdict = next((job for job in rows[0].get("jobs", [])
+            report = states.get(request, {})
+        else:
+            # The final ACK needs a single native projection. Tip equality
+            # around separate reads cannot exclude an intervening reorg.
+            view = self.worker.rpc.call("getpgnworkview", ["audits", 0, 1, request])
+            state = view.get("state", {})
+            rows = view.get("audits", [])
+            if (view.get("schema") != "PGN_WORK_VIEW_V1" or view.get("kind") != "audits"
+                    or view.get("request_id") != request
+                    or state.get("genesis") != anchor["genesis"]
+                    or state.get("bestblockhash") != anchor["hash"]
+                    or state.get("height") != anchor["height"]
+                    or not isinstance(rows, list) or len(rows) != 1
+                    or rows[0].get("request_id") != request):
+                return False
+            report = rows[0]
+        verdict = next((job for job in report.get("jobs", [])
                         if job.get("slot") == audit["slot"] and job.get("attempt") == audit["attempt"]), None)
+        actor = audit.get("actor")
         return bool(verdict and verdict.get("state") in ("passed", "failed")
+                    and verdict.get("commitment") == commitment
+                    and (actor is None or verdict.get("actor") == actor)
                     and self.worker.rpc.call("getbestblockhash") == anchor["hash"])
 
     def reveal_committed(self, *, publication_batch=None):

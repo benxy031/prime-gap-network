@@ -12,7 +12,7 @@ class Rpc:
   if method=='getbestblockhash':return '55'*32
   if method=='getblockheader':return dict(height=100)
   if method=='getblockhash':return '55'*32
-  if method=='getpgnworkview':return dict(schema='PGN_WORK_VIEW_V1',kind='audits',request_id=params[3],state=dict(genesis='55'*32,height=100,bestblockhash='55'*32),audits=[dict(request_id=params[3],jobs=[dict(slot=0,attempt=0,state=self.stage)])])
+  if method=='getpgnworkview':return dict(schema='PGN_WORK_VIEW_V1',kind='audits',request_id=params[3],state=dict(genesis='55'*32,height=100,bestblockhash='55'*32),audits=[dict(request_id=params[3],jobs=[dict(slot=0,attempt=0,state=self.stage,commitment=self.committed)])])
   if method=='getpgnauditevent':
    action=params[0]
    if action=='assign'and self.stage!='none':return dict(available=False)

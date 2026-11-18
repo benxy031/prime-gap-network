@@ -15,6 +15,7 @@ sys.path.insert(0,str(ROOT/'tests'))
 from horizon_network_audits import NetworkAudits,save
 from audit_publication_chain_fixture import ChainRPC
 from horizon_audit_answers import AuditAnswers
+from report_commitment import digest
 
 class AnswerCatalogueTests(unittest.TestCase):
     def setUp(self):
@@ -69,11 +70,16 @@ class AnswerCatalogueTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.catalog.register([name])
 
 class AcknowledgedReorgTests(unittest.TestCase):
+    def seal(self, worker, request):
+        body=dict(counts=['7'],nonce='b'*64)
+        worker.rpc.audit_job['commitment']=digest(body)
+        return dict(request_id=request,slot=0,attempt=0,answer=dict(body=body,commitment=digest(body)))
+
     def test_acknowledged_reveal_reappears_after_fork_and_restart(self):
         with tempfile.TemporaryDirectory()as directory:
             worker=SimpleNamespace(root=Path(directory),rpc=ChainRPC());request='a'*64;name=request+'-0-0'
             audits=NetworkAudits(worker)
-            answer=dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+            answer=self.seal(worker,request)
             save(audits.folder/(name+'.json'),answer);save(audits.folder/'pending.json',[name])
             committed=dict(details_root='c'*64,jobs=[dict(slot=0,attempt=0,state='committed')])
             terminal=copy.deepcopy(committed);terminal['jobs'][0]['state']='passed'
@@ -95,7 +101,7 @@ class AcknowledgedReorgTests(unittest.TestCase):
     def test_crash_after_catalogue_ack_before_legacy_index_write_recovers(self):
         with tempfile.TemporaryDirectory()as directory:
             worker=SimpleNamespace(root=Path(directory),rpc=ChainRPC());request='a'*64;name=request+'-0-0';audits=NetworkAudits(worker)
-            answer=dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+            answer=self.seal(worker,request)
             save(audits.folder/(name+'.json'),answer);save(audits.folder/'pending.json',[name])
             committed=dict(details_root='c'*64,jobs=[dict(slot=0,attempt=0,state='committed')]);terminal=copy.deepcopy(committed);terminal['jobs'][0]['state']='passed';calls=[]
             audits.states=lambda requests:{request:copy.deepcopy(committed)};audits.state=lambda wanted:copy.deepcopy(terminal);audits.apply=lambda *args:(calls.append(args)or dict(available=True))
@@ -110,7 +116,7 @@ class AcknowledgedReorgTests(unittest.TestCase):
     def test_racing_tip_cannot_acknowledge_a_terminal_read(self):
         with tempfile.TemporaryDirectory()as directory:
             worker=SimpleNamespace(root=Path(directory),rpc=ChainRPC());request='a'*64;name=request+'-0-0';audits=NetworkAudits(worker)
-            save(audits.folder/(name+'.json'),dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64))))
+            save(audits.folder/(name+'.json'),self.seal(worker,request))
             save(audits.folder/'pending.json',[name]);committed=dict(details_root='c'*64,jobs=[dict(slot=0,attempt=0,state='committed')]);terminal=copy.deepcopy(committed);terminal['jobs'][0]['state']='passed'
             audits.states=lambda requests:{request:committed};audits.state=lambda wanted:terminal
             audits.apply=lambda *args:(worker.rpc.fork()or dict(available=True))
@@ -119,7 +125,7 @@ class AcknowledgedReorgTests(unittest.TestCase):
     def test_atomic_view_rejects_ABA_branch_race_despite_equal_outer_tip(self):
         with tempfile.TemporaryDirectory()as directory:
             worker=SimpleNamespace(root=Path(directory),rpc=ChainRPC());request='a'*64;name=request+'-0-0';audits=NetworkAudits(worker)
-            save(audits.folder/(name+'.json'),dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64))))
+            save(audits.folder/(name+'.json'),self.seal(worker,request))
             save(audits.folder/'pending.json',[name]);terminal=dict(details_root='c'*64,jobs=[dict(slot=0,attempt=0,state='passed')])
             audits.states=lambda requests:{request:terminal};worker.rpc.view_tip='f'*64
             audits.reveal_committed();self.assertEqual(json.loads((audits.folder/'pending.json').read_bytes()),[name])

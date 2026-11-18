@@ -6,6 +6,7 @@ sys.path[:0]=[str(ROOT/'src/protocol'),str(ROOT/'src/engine/runtime_host'),str(R
 from horizon_network_audits import NetworkAudits,RetainedAuditPublicationError,save
 from horizon_report_poll import ReportPoller
 from audit_publication_chain_fixture import ChainRPC
+from report_commitment import digest
 
 class SharedAuditReveals(unittest.TestCase):
     def setUp(self):
@@ -23,7 +24,10 @@ class SharedAuditReveals(unittest.TestCase):
             worker=SimpleNamespace(root=self.root/str(i),rpc=self.rpc,network_lock=self.lock,quitting=self.stopping,ledger=ledger)
             worker.root.mkdir();lane=NetworkAudits(worker);self.lanes.append(lane)
             request=f'{i+1:064x}';name=request+'-0-0';self.names.append(name);self.stages[request]='committed'
-            audit=dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+            body=dict(counts=['7'],nonce=f'{i+1:064x}')
+            commitment=digest(body)
+            audit=dict(request_id=request,slot=0,attempt=0,answer=dict(body=body,commitment=commitment))
+            self.rpc.audit_jobs[request]=dict(slot=0,attempt=0,state='passed',commitment=commitment)
             save(lane.folder/(name+'.json'),audit);lane.answers.register([name])
             with lane.answers.database()as db:db.execute("INSERT OR REPLACE INTO meta VALUES('migration_done','true')")
             lane.states=lambda requests:{r:dict(details_root='c'*64,jobs=[dict(slot=0,attempt=0,state=self.stages[r])])for r in requests}
