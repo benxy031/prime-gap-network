@@ -5,6 +5,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QObject>
+#include <QTimer>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -22,10 +23,21 @@ public:
 
     QNetworkReply* post(QNetworkRequest request, const QByteArray& body,
                         int timeout_ms, CoreRpcChannel channel = CoreRpcChannel::General){
-        request.setTransferTimeout(std::clamp(timeout_ms, 1000, 120000));
+        const int idleTimeout = std::clamp(timeout_ms, 1000, 120000);
+        request.setTransferTimeout(idleTimeout);
         // Held wallet or scientific requests can occupy every ordinary HTTP connection.
         auto& network = channel == CoreRpcChannel::Inspection ? inspection_ : general_;
-        return network.post(request, body);
+        auto* reply = network.post(request, body);
+        if (channel == CoreRpcChannel::Inspection) {
+            // Transfer activity extends the idle timeout. A partial reply
+            // must still release the inspection so the next read can retry.
+            QTimer::singleShot(2 * idleTimeout, Qt::PreciseTimer, reply, [reply] {
+                if (reply->isFinished()) return;
+                reply->setProperty("pgn_core_rpc_total_timeout", true);
+                reply->abort();
+            });
+        }
+        return reply;
     }
 private:
     QNetworkAccessManager general_, inspection_;
