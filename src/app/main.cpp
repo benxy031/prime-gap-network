@@ -1588,10 +1588,15 @@ int main(int argc,char** argv) {
     ready->stop();ready->deleteLater();if(showWallet){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();}else{pgn->setChecked(true);tabs->setCurrentWidget(community);}
    });ready->start();});
  }
- markStartup(5,"Preparing the audit view");
- QTimer::singleShot(0,&window,[&startupWindow,&markStartup,auditAnimation,networkWork]{
-  const auto ready=[&startupWindow,&markStartup]{markStartup(6,"Interface ready");startupWindow.finish();};
-  if(networkWork)networkWork->prepareStartupMap();if(auditAnimation)auditAnimation->prepareForStartup(ready);else ready();
+ markStartup(5,"Opening the main window");
+ QTimer::singleShot(0,&window,[&startupWindow,&markStartup,&window,auditAnimation,networkWork]{
+  markStartup(6,"Interface ready");
+  startupWindow.finish();
+  // Keep the optional map and renderer off the interface startup path.
+  QTimer::singleShot(0,&window,[auditAnimation,networkWork]{
+   if(networkWork)networkWork->prepareStartupMap();
+   if(auditAnimation)auditAnimation->prepareForStartup([]{});
+  });
  });
  return app.exec();
 }
