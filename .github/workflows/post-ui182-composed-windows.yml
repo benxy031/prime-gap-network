@@ -1,0 +1,145 @@
+name: Build and open the combined audit and reconnect candidate
+on:
+  workflow_dispatch:
+  push:
+    branches: [qualification/post-ui182-composed-windows]
+permissions:
+  contents: read
+concurrency:
+  group: horizon-core-rpc-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: Native Windows application and engine host
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Enable long source paths on the disposable runner
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
+      - name: Check out the proposed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /CMakeLists.txt
+            /cmake/
+            /src/
+            /tests/
+            /tools/
+            /qualification/ui177/legacy-chain.zip
+            /data/
+            /qualification/names286/
+            /qualification/names303/
+            /qualification/statistics309/
+            /qualification/social278-qt/
+            /qualification/social278-access/
+            /qualification/wallet285/
+            /qualification/cpu296/
+            /wallet/riecoin-core-upstream-v2606/src/
+            /assets/
+            /third_party/
+
+
+      - name: Bootstrap MSYS2 without the failing geo-mirror update
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: false
+
+      - name: Select the official primary package server
+        run: |
+          printf '%s\n' 'Server = https://repo.msys2.org/mingw/$repo/' > /etc/pacman.d/mirrorlist.mingw
+          printf '%s\n' 'Server = https://repo.msys2.org/msys/$arch/' > /etc/pacman.d/mirrorlist.msys
+
+      - name: Apply the full base update and recognize its documented terminal restart
+        shell: pwsh
+        run: |
+          $pgnUpdateOutput = & msys2 -c 'pacman --noconfirm -Syuu' 2>&1
+          $pgnUpdateExit = $LASTEXITCODE
+          $pgnUpdateOutput | Out-Host
+          $pgnUpdateText = $pgnUpdateOutput -join "`n"
+          $pgnExpectedRestart = $pgnUpdateText.Contains('To complete this update all MSYS2 processes including this terminal will be closed.')
+          if ($pgnUpdateExit -ne 0 -and -not ($pgnUpdateExit -eq 1 -and $pgnExpectedRestart)) {
+            throw "MSYS2 base update failed with exit $pgnUpdateExit"
+          }
+          exit 0
+
+      - name: Finish the full system update in a fresh MSYS2 session
+        run: pacman --noconfirm -Syu
+
+      - name: Install the authenticated UCRT64 build dependencies
+        run: |
+          pacman --noconfirm --needed -S \
+            mingw-w64-ucrt-x86_64-gcc \
+            mingw-w64-ucrt-x86_64-cmake \
+            mingw-w64-ucrt-x86_64-ninja \
+            mingw-w64-ucrt-x86_64-qt6-base \
+            mingw-w64-ucrt-x86_64-gmp \
+            mingw-w64-ucrt-x86_64-sqlite3 \
+            mingw-w64-ucrt-x86_64-zlib \
+            mingw-w64-ucrt-x86_64-boost
+
+
+
+      - name: Build and exercise the Windows controller
+        run: |
+          cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-app --target PGN-Horizon pgn-network-controller-recovery-test --parallel 4
+          build-app/pgn-network-controller-recovery-test.exe
+          qmake6 -query QT_VERSION > build-app/QT_VERSION.txt
+      - name: Freeze the tested engine host and exercise durable audit confirmation
+        shell: pwsh
+        run: |
+          python -m venv .qa-python
+          if ($LASTEXITCODE -ne 0) { throw 'Python venv failed' }
+          & .qa-python/Scripts/python.exe -m pip install --disable-pip-version-check 'PyInstaller==6.22.3' -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned verification dependencies failed' }
+          & .qa-python/Scripts/python.exe -m unittest discover -s tests -p test_network_audit_publication.py
+          if ($LASTEXITCODE -ne 0) { throw 'Audit queue regressions failed' }
+          & .qa-python/Scripts/python.exe -m unittest discover -s tests -p test_atomic_audit_snapshot.py
+          if ($LASTEXITCODE -ne 0) { throw 'Atomic audit regressions failed' }
+          & .qa-python/Scripts/python.exe tools/build_horizon_engine_host.py --output host-build
+          if ($LASTEXITCODE -ne 0) { throw 'Engine host freeze failed' }
+      - name: Fetch the exact unpublished UI182 base archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download qa-ui182-win50 --repo $env:GITHUB_REPOSITORY --dir portable-ui182 --pattern PGN-Windows-182.zip
+          if ($LASTEXITCODE -ne 0) { throw 'Exact UI182 draft archive unavailable' }
+      - name: Compose both tested components and open the actual Windows application
+        shell: pwsh
+        run: |
+          & .qa-python/Scripts/python.exe tools/qualify_post_ui182_composed_windows.py
+          if ($LASTEXITCODE -ne 0) { throw 'Combined Windows package failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: post-ui182-composed-windows-proof
+          path: |
+            ui182-portable-windows/evidence/COMPOSED-FILES.json
+            ui182-portable-windows/evidence/COMPOSED-STARTUP-PASS.json
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success()
+        with:
+          name: post-ui182-composed-development-components
+          path: |
+            build-app/PGN-Horizon.exe
+            build-app/QT_VERSION.txt
+            host-build/dist/horizon-engine-host/
+            host-build/ENGINE-HOST-SOURCE.json
+          if-no-files-found: error
+          retention-days: 7
