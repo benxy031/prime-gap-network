@@ -531,7 +531,11 @@ class WorkCycleJournal:
             if 'native_service' in cycle:
                 return False # Core owns these immutable consumed credits.
             task=cycle['audits'][position]
-            if not task or (task.get('request'),task.get('slot'),task.get('attempt'))!=(audit_request,slot,attempt):
+            if task is None:
+                # Retirement can be retried after releasing this slot but before
+                # the retained audit cursor has been removed.
+                return False
+            if (task.get('request'),task.get('slot'),task.get('attempt'))!=(audit_request,slot,attempt):
                 raise ValueError('Retirement differs from the retained audit assignment')
             if cycle['stage']=='prepared' and task['stage']=='assigned':
                 cycle['audits'][position]=None

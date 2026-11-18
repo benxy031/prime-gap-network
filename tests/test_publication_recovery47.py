@@ -86,6 +86,42 @@ class PublicationRecoveryTests(unittest.TestCase):
   self.assertEqual(cycles.snapshot(w['request_id']),before)
   self.assertTrue(cycles.retire_assignment(w['request_id'],0,'b'*64,0,0));self.assertIsNone(cycles.snapshot(w['request_id'])['audits'][0])
   self.assertFalse(cycles.may_search(w['request_id']))
+ def test_restart_finishes_retirement_after_slot_is_already_released(self):
+  w=work()
+  cycles=WorkCycleJournal(self.root/'cycles',w['genesis'])
+  self.addCleanup(cycles.close)
+  cycles.prepare(w)
+  request='b'*64
+  cycles.attach(w['request_id'],0,dict(stage='assigned',request=request,slot=0,attempt=0))
+  worker=SimpleNamespace(root=self.root,rpc=SimpleNamespace(call=lambda *_:'a'*64))
+  def retire(value,_):
+   return cycles.retire_assignment(value['work_cycle'],0,value['request_id'],value['slot'],value['attempt'])
+  def new_lane():
+   lane=NetworkAudits(worker,on_committed=lambda *_:self.fail('Stale result was credited'),on_retired=retire)
+   lane.state=lambda _:dict(jobs=[])
+   return lane
+  lane=new_lane()
+  journal=lane.folder/'current.json'
+  stale=dict(work_cycle=w['request_id'],request_id=request,slot=0,attempt=0,counts=[1,2])
+  save(journal,stale)
+  original=journal.read_bytes()
+  unlink=Path.unlink
+  def interrupted(path,*args,**kwargs):
+   if path==journal:
+    raise OSError('Injected interruption after durable journal update')
+   return unlink(path,*args,**kwargs)
+  with patch.object(Path,'unlink',interrupted):
+   with self.assertRaisesRegex(OSError,'after durable journal update'):
+    lane.process_one()
+  self.assertEqual(journal.read_bytes(),original)
+  self.assertIsNone(cycles.snapshot(w['request_id'])['audits'][0])
+  self.assertEqual(new_lane().process_one(),'retired')
+  self.assertFalse(journal.exists())
+  archives=list((lane.folder/'retained-assignments').glob('*.json'))
+  self.assertEqual(len(archives),1)
+  self.assertEqual(archives[0].read_bytes(),original)
+  self.assertFalse(cycles.may_search(w['request_id']))
+
  def test_real_audit_cursor_retires_stale_attempt_before_requesting_new_work(self):
   rpc=SimpleNamespace(call=lambda *_:'a'*64);w=SimpleNamespace(root=self.root,rpc=rpc)
   retired=[];a=NetworkAudits(w,on_committed=lambda *_:self.fail('Stale result was credited'),on_retired=lambda *args:retired.append(args))
