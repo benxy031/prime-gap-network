@@ -1,0 +1,45 @@
+name: PGN Horizon audit RPC verified indexed reads
+on:
+  push:
+    branches: [qualification/r217-audit-indexed-paired]
+permissions:
+  contents: read
+env:
+  PYTHONUTF8: '1'
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install the matching native compiler and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
+      - name: Compile the published source projection and the indexed variant under identical settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          original=9717e8c3eb1bc7b59ebee970e539423b716f9ddb
+          first=wallet/riecoin-core-upstream-v2606/src/pgn/rpc_audit_incremental.h
+          second=wallet/riecoin-core-upstream-v2606/src/rpc/pgn_native.cpp
+          mkdir -p paired-results
+          git fetch --no-tags --depth=1 origin "$original"
+          git restore --source="$original" -- "$first" "$second"
+          cmake -S wallet/riecoin-core-upstream-v2606 -B build-paired -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_GUI=OFF -DBUILD_BENCH=OFF -DBUILD_DAEMON=ON -DENABLE_IPC=OFF -DWITH_ZMQ=OFF -DWITH_USDT=OFF -DPGN_DAEMON_OUTPUT_NAME=pgn-core
+          cmake --build build-paired --parallel 3 --target riecoind
+          cp build-paired/bin/pgn-core paired-results/control-core
+          git restore --source="${GITHUB_SHA}" -- "$first" "$second"
+          cmake --build build-paired --parallel 3 --target riecoind
+          cp build-paired/bin/pgn-core paired-results/indexed-core
+          sha256sum paired-results/control-core paired-results/indexed-core
+      - name: Compare exact parsed results, branch rollback, and paired timings
+        run: python qualification/audit-r217/compare_audit_snapshot.py --baseline paired-results/control-core --indexed paired-results/indexed-core --fixture qualification/audit-r217/paired-public-audit-replay.zip --receipt paired-results/RESULT.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: audit-indexed-paired-${{ github.run_id }}
+          path: paired-results/RESULT.json
+          retention-days: 7
