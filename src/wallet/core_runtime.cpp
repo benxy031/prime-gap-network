@@ -593,6 +593,10 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
  readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,trace,consume=std::move(consume)](QByteArray bytes,bool oversized){
   const auto error=reply->error();const auto http=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const auto detail=reply->errorString().left(160);reply->deleteLater();
   if(oversized){trace("response_limit",int(error),http,{});consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
+  if(reply->property("pgn_core_rpc_total_timeout").toBool()){
+   trace("total_timeout",int(error),http,{});
+   consume({{},"Core RPC inspection exceeded its total response time"},{});return;
+  }
   const auto decoded=decodeCoreRpcResponse(bytes,requestId,method);
   if(error!=QNetworkReply::NoError&&!verifiedRpcHttpError(decoded,http)){trace("transport_error",int(error),http,{});consume({{},QString("Core RPC read failed (%1): %2").arg(int(error)).arg(detail)},{});return;}
   trace(decoded.error.isEmpty()?"ok":"rpc_error",int(error),http,decoded.applicationCode,decoded.value);

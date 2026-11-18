@@ -97,8 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$PGN_TEST_PYTHON"
-          cmake --build build-app --target pgn-relay-stall-355-test pgn-mining-preparation-progress-test pgn-mining-live-refresh-test pgn-network-work-view-test pgn-ticket-atlas-view-test pgn-core-runtime-network-test pgn-core-link-state-test pgn-peer-bootstrap-test --parallel 3
-          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^(audit-partition-widgets|mining-preparation-progress|mining-live-refresh|whole-audit-progress|network-work-view|core-runtime-network|core-link-state|peer-bootstrap)$'
+          cmake --build build-app --target pgn-audit-partition-widgets-test pgn-mining-preparation-progress-test pgn-mining-live-refresh-test pgn-network-work-view-test pgn-ticket-atlas-view-test pgn-core-runtime-network-test pgn-core-link-state-test pgn-peer-bootstrap-test pgn-core-rpc-stream-test --parallel 3
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure -R '^(audit-partition-widgets|mining-preparation-progress|mining-live-refresh|whole-audit-progress|network-work-view|core-runtime-network|core-link-state|peer-bootstrap|core-rpc-stream)$'
           cmake --build build-app --target PGN-Horizon --parallel 4
           mkdir -p qualified
           cp build-app/PGN-Horizon.exe qualified/

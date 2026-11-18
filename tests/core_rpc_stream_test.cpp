@@ -103,7 +103,64 @@ static void slowInspection(bool dedicated){
  for(auto* reply:blocked){reply->abort();reply->deleteLater();}
  QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
 }
+static void recoverIncompleteInspection(){
+ QTcpServer server;
+ need(server.listen(QHostAddress::LocalHost,0),"Own incomplete RPC fixture unavailable");
+ CoreRpcChannels channels;
+ QEventLoop loop;
+ QTimer guard,heartbeat;
+ guard.setSingleShot(true);
+ QObject::connect(&guard,&QTimer::timeout,&loop,&QEventLoop::quit);
+ int ticks=0,firstCallbacks=0,secondCallbacks=0,dripped=0;
+ bool timedOut=false,readRecovered=false;
+ heartbeat.setInterval(100);
+ QObject::connect(&heartbeat,&QTimer::timeout,&loop,[&]{++ticks;});
+ const QString url="http://127.0.0.1:"+QString::number(server.serverPort());
+ QObject::connect(&server,&QTcpServer::newConnection,&server,[&]{
+  auto* socket=server.nextPendingConnection();
+  QObject::connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
+  QObject::connect(socket,&QTcpSocket::readyRead,socket,[&,socket]{
+   const auto request=socket->property("request").toByteArray()+socket->readAll();
+   if(socket->property("served").toBool())return;
+   if(!request.contains("\r\n")){socket->setProperty("request",request);return;}
+   socket->setProperty("served",true);
+   if(request.startsWith("POST /good ")){
+    const QByteArray body=R"({"jsonrpc":"2.0","id":"health","result":{"blocks":4246}})";
+    socket->write("HTTP/1.1 200 OK\r\nContent-Length: "+QByteArray::number(body.size())+"\r\n\r\n"+body);
+    socket->disconnectFromHost();
+    return;
+   }
+   socket->write("HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n{");
+   auto* drip=new QTimer(socket);
+   QObject::connect(drip,&QTimer::timeout,socket,[&,socket]{socket->write(" ");++dripped;});
+   drip->start(200);
+  });
+ });
+ auto* slow=channels.post(QNetworkRequest{QUrl(url+"/slow")},"{}",1000,CoreRpcChannel::Inspection);
+ readBoundedCoreRpcReply(slow,&loop,65536,[&,slow](QByteArray,bool oversized){
+  ++firstCallbacks;
+  timedOut=!oversized&&slow->property("pgn_core_rpc_total_timeout").toBool();
+  slow->deleteLater();
+  auto* resumed=channels.post(QNetworkRequest{QUrl(url+"/good")},"{}",1000,CoreRpcChannel::Inspection);
+  readBoundedCoreRpcReply(resumed,&loop,65536,[&,resumed](QByteArray bytes,bool incomplete){
+   ++secondCallbacks;
+   const auto result=decodeCoreRpcResponse(bytes,"health","getblockchaininfo");
+   readRecovered=!incomplete&&result.error.isEmpty()&&result.value.toObject()["blocks"].toInt()==4246;
+   resumed->deleteLater();
+   loop.quit();
+  });
+ });
+ heartbeat.start();
+ guard.start(4300);
+ loop.exec();
+ need(guard.isActive(),"Incomplete reply kept the inspection stuck despite ongoing bytes");
+ need(timedOut&&firstCallbacks==1,"Absolute deadline did not settle the partial inspection once");
+ need(readRecovered&&secondCallbacks==1,"A new inspection did not recover on the same read channel");
+ need(ticks>=10&&dripped>=4,"The fixture did not exercise an active event loop and trickling response");
+ std::cout<<"PASS incomplete RPC deadline and successful next inspection, heartbeat ticks "<<ticks<<"\n";
+}
 int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
+ recoverIncompleteInspection();
  exchange(400000,coreRpcResponseLimit("getpgnauditactivity"),false,false);
  exchange(400000,coreRpcResponseLimit("getbalances"),true,true);
  exchange(600000,coreRpcResponseLimit("getpgnauditactivity"),true,true);
