@@ -30,6 +30,13 @@ int main(int argc,char** argv){QApplication app(argc,argv);size_t checks{};auto 
         for(int i=0;i<=4;++i){const auto label=pgn::ui::ticketAtlasCoordinateLabel(AtlasInteger(a+span*i/4),span);need(label!=previous,"zoomed 68/95bit axis ticks remain distinct");previous=label;}
     }
     QFile file(QString::fromLocal8Bit(argv[1]));need(file.open(QIODevice::ReadOnly),"snapshot readable");const auto data=file.readAll();need(data.size()<524288,"snapshot byte bound");const auto original=QJsonDocument::fromJson(data).object();const auto genesis=original.value("genesis").toString();
+    const auto origin=atlasInteger(original.value("range_origin")),ticketWidth=atlasInteger(original.value("ticket_width"));
+    const auto domainEnd=atlasInteger(original.value("range_limit"));
+    using pgn::ui::ticketAtlasNumberLabel;
+    need(ticketAtlasNumberLabel(origin,origin,ticketWidth)=="#1","first domain position is Ticket 1");
+    need(ticketAtlasNumberLabel(origin+ticketWidth-1,origin,ticketWidth)=="#1","excluded right axis bound counts the last visible position");
+    need(ticketAtlasNumberLabel(origin+ticketWidth,origin,ticketWidth)=="#2","next range owns its left boundary");
+    need(ticketAtlasNumberLabel(domainEnd-1,origin,ticketWidth)=="#198070405535661","exact last ticket across the 95-bit domain");
     const auto actualError=pgn::wallet::validateTicketAtlas(original,genesis,{},{},256);
     if(!actualError.isEmpty())std::cerr<<actualError.toStdString()<<'\n';
     need(actualError.isEmpty(),"actual native atlas accepted");

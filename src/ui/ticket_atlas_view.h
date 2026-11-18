@@ -30,6 +30,11 @@ inline QString ticketAtlasCoordinateLabel(const pgn::wallet::AtlasInteger& posit
     const int significant=std::clamp(int(digits.size()-QString::fromStdString(span.str()).size()+3),5,16);
     return "≈ "+digits.left(1)+"."+digits.mid(1,significant-1)+" × 10"+atlasSuperscript(digits.size()-1);
 }
+inline QString ticketAtlasNumberLabel(const pgn::wallet::AtlasInteger& coordinate,
+        const pgn::wallet::AtlasInteger& origin,const pgn::wallet::AtlasInteger& width){
+    const pgn::wallet::AtlasInteger number=(coordinate-origin)/width+1;
+    return "#"+QString::fromStdString(number.str());
+}
 // Refactored ticket-only use of the atlas range tiles/spans. The reservation
 // calendar, zones, context actions and absolute floating-point axis are absent.
 class TicketAtlasView final:public QWidget {
@@ -48,7 +53,7 @@ private:
     static QColor color(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).color;}
     static QString stageTitle(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).text;}
     QVector<size_t> visibleStages()const{QVector<size_t> result;const auto totals=snapshot_.value("totals").toObject();for(size_t s=0;s<5;++s)if(totals.value(pgn::wallet::AtlasStates[s]).toObject().value("tickets").toInteger()>0)result.append(s);if(result.isEmpty())result.append(0);return result;}
-    QRectF plot()const{return {14,4,qreal(std::max(1,width()-28)),qreal(std::max(50,height()-(bitScale_?210:116)))};}
+    QRectF plot()const{return {14,4,qreal(std::max(1,width()-28)),qreal(std::max(50,height()-(bitScale_?232:134)))};}
     Int first()const{return first_.isEmpty()?Int(0):Int(first_.toStdString());}
     Int last()const{return last_.isEmpty()?Int(1):Int(last_.toStdString());}
     static QString text(const Int& value){return QString::fromStdString(value.str());}
@@ -134,7 +139,7 @@ protected:
     void paintEvent(QPaintEvent*)override{
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.fillRect(rect(),QColor("#03141b"));const auto area=plot();
         p.setPen(QColor("#a8dbdf"));QFont f=font();f.setPixelSize(12);p.setFont(f);
-        const auto totals=snapshot_.value("totals").toObject();int lx=14,ly=int(area.bottom())+(bitScale_?126:42);
+        const auto totals=snapshot_.value("totals").toObject();int lx=14,ly=int(area.bottom())+(bitScale_?154:54);
         for(size_t s=0;s<5;++s){const QString label=stageTitle(s)+" "+QString::number(totals.value(pgn::wallet::AtlasStates[s]).toObject().value("tickets").toInteger());p.setPen(color(s));const int w=p.fontMetrics().horizontalAdvance(label)+22;if(lx+w>width()-10){lx=14;ly+=15;}p.drawEllipse(QPointF(lx+3,ly-3),3,3);p.drawText(lx+11,ly,label);lx+=w;}
         hits_.clear();p.save();p.setClipRect(area);const auto lanes=visibleStages();const qreal row=area.height()/lanes.size();std::array<int,5> lane{-1,-1,-1,-1,-1};
         for(qsizetype i=0;i<lanes.size();++i){lane[lanes[i]]=int(i);p.fillRect(QRectF(area.left(),area.top()+i*row,area.width(),row-2),QColor(9,33,42));}
@@ -180,18 +185,41 @@ protected:
         p.setPen(QColor("#b2d8de"));f.setPixelSize(12);p.setFont(f);
         if(first_.isEmpty())p.drawText(QRectF(area.left(),area.bottom()+8,area.width(),18),Qt::AlignLeft,"Loading verified ticket ranges…");
         else if(bitScale_){
+            const Int origin=pgn::wallet::atlasInteger(snapshot_.value("range_origin"));
+            const Int ticketWidth=pgn::wallet::atlasInteger(snapshot_.value("ticket_width"));
+            const QRectF row(area.left(),area.bottom()+7,area.width(),18);
+            p.drawText(row,Qt::AlignLeft,ticketAtlasNumberLabel(first(),origin,ticketWidth));
+            p.drawText(row,Qt::AlignRight,ticketAtlasNumberLabel(last()-1,origin,ticketWidth));
             f.setPixelSize(11);p.setFont(f);QJsonArray ticks;
             const int low=boost::multiprecision::msb(first())+1,high=boost::multiprecision::msb(Int(last()-1))+1;
             const qreal labelAngle=area.width()/std::max(1,high-low+1)<32?90:65;
-            for(int bit=low;bit<=high;++bit){const Int boundary=std::max(first(),Int(Int(1)<<(bit-1)));const qreal x=pixel(boundary);p.setPen(QColor("#27515d"));p.drawLine(QPointF(x,area.top()),QPointF(x,area.bottom()+5));p.setPen(QColor("#b2d8de"));p.drawText(QRectF(x-12,area.bottom()+9,30,17),Qt::AlignCenter,QString::number(bit));p.save();p.translate(x,area.bottom()+36);p.rotate(labelAngle);p.drawText(QPointF(0,0),atlasScientificLabel(boundary));p.restore();ticks.append(QJsonObject{{"bits",bit},{"position",text(boundary)},{"scientific",atlasScientificLabel(boundary)}});}
-            const qreal x=area.right();p.setPen(QColor("#537f8a"));p.drawLine(QPointF(x,area.top()),QPointF(x,area.bottom()+5));p.setPen(QColor("#b2d8de"));p.drawText(QRectF(x-24,area.bottom()+9,28,17),Qt::AlignCenter,"end");p.save();p.translate(x-1,area.bottom()+36);p.rotate(90);p.drawText(QPointF(0,0),atlasScientificLabel(last()));p.restore();setProperty("pgn_ticket_atlas_bit_ticks",ticks);
+            for(int bit=low;bit<=high;++bit){const Int boundary=std::max(first(),Int(Int(1)<<(bit-1)));const qreal x=pixel(boundary);p.setPen(QColor("#27515d"));p.drawLine(QPointF(x,area.top()),QPointF(x,area.bottom()+5));p.setPen(QColor("#b2d8de"));p.drawText(QRectF(x-12,area.bottom()+31,30,17),Qt::AlignCenter,QString::number(bit));p.save();p.translate(x,area.bottom()+58);p.rotate(labelAngle);p.drawText(QPointF(0,0),atlasScientificLabel(boundary));p.restore();ticks.append(QJsonObject{{"bits",bit},{"position",text(boundary)},{"scientific",atlasScientificLabel(boundary)}});}
+            const qreal x=area.right();p.setPen(QColor("#537f8a"));p.drawLine(QPointF(x,area.top()),QPointF(x,area.bottom()+5));p.setPen(QColor("#b2d8de"));p.save();p.translate(x-1,area.bottom()+58);p.rotate(90);p.drawText(QPointF(0,0),atlasScientificLabel(last()));p.restore();setProperty("pgn_ticket_atlas_bit_ticks",ticks);
         }else{
-            const Int span=last()-first();const int labelWidth=std::max(p.fontMetrics().horizontalAdvance(axisLabel(first(),span)),p.fontMetrics().horizontalAdvance(axisLabel(last(),span)))+32;
+            const Int span=last()-first();
+            const Int origin=pgn::wallet::atlasInteger(snapshot_.value("range_origin"));
+            const Int ticketWidth=pgn::wallet::atlasInteger(snapshot_.value("ticket_width"));
+            const auto firstTicket=ticketAtlasNumberLabel(first(),origin,ticketWidth);
+            const auto lastTicket=ticketAtlasNumberLabel(last()-1,origin,ticketWidth);
+            const bool oneTicket=firstTicket==lastTicket;
+            const auto draw=[&](const QString& label,qreal center,qreal top){
+                const qreal w=std::min(area.width(),qreal(p.fontMetrics().horizontalAdvance(label)+2));
+                const qreal x=std::clamp(center-w/2,area.left(),area.right()-w);
+                p.drawText(QRectF(x,top,w,17),Qt::AlignCenter,label);
+            };
+            const int labelWidth=std::max({p.fontMetrics().horizontalAdvance(axisLabel(first(),span)),
+                p.fontMetrics().horizontalAdvance(axisLabel(last(),span)),p.fontMetrics().horizontalAdvance(lastTicket)})+32;
             const int divisions=area.width()>labelWidth*4?4:area.width()>labelWidth*2?2:1;
-            for(int i=0;i<=divisions;++i){const Int position=first()+span*i/divisions;
-                const auto label=axisLabel(position,span);
-                const qreal w=p.fontMetrics().horizontalAdvance(label)+2,x=std::clamp(area.left()+area.width()*i/divisions-w/2,area.left(),area.right()-w);
-                p.drawText(QRectF(x,area.bottom()+8,w,18),Qt::AlignCenter,label);
+            if(oneTicket)draw(firstTicket,area.center().x(),area.bottom()+7);
+            QString previousTicket;
+            for(int i=0;i<=divisions;++i){
+                const Int position=first()+span*i/divisions;
+                const qreal x=area.left()+area.width()*i/divisions;
+                const auto ticket=i==divisions?lastTicket:ticketAtlasNumberLabel(position,origin,ticketWidth);
+                if(!oneTicket&&ticket!=previousTicket&&(i==divisions||ticket!=lastTicket))
+                    draw(ticket,x,area.bottom()+7);
+                previousTicket=ticket;
+                draw(axisLabel(position,span),x,area.bottom()+24);
             }
         }
     }
