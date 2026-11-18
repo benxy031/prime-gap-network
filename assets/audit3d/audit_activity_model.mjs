@@ -11,12 +11,18 @@ export function canCompleteLanding(job,marker,ageSeconds,preview=false,outside=f
  return (marker?.request===job.request&&marker.stage==='audits_passed')||ageSeconds>=8;
 }
 
-export function verifiedLandingMarkers(atlas,activity){
+export function matchesAtlasActivityAnchor(atlas,activity){
  const anchor=activity?.state;
+ return !!atlas&&!!anchor&&HASH.test(anchor.genesis)&&HASH.test(anchor.bestblockhash)
+    &&Number.isSafeInteger(anchor.height)&&anchor.height>=0
+    &&anchor.genesis===atlas.genesis&&anchor.bestblockhash===atlas.bestblockhash
+    &&anchor.height===atlas.height;
+}
+
+export function verifiedLandingMarkers(atlas,activity){
  if(atlas?.details_truncated!==true||activity?.schema!=='PGN_AUDIT_ACTIVITY_V1'
-    ||!anchor||!HASH.test(anchor.genesis)||!HASH.test(anchor.bestblockhash)
-    ||anchor.genesis!==atlas.genesis||anchor.bestblockhash!==atlas.bestblockhash
-    ||!Number.isSafeInteger(anchor.height)||anchor.height!==atlas.height)return [];
+    ||!matchesAtlasActivityAnchor(atlas,activity))return [];
+ const anchor=activity.state;
  const position=value=>typeof value==='string'&&/^[1-9][0-9]{0,37}$/.test(value);
  if(!position(atlas.start)||!position(atlas.end))return [];
  const lower=BigInt(atlas.start),upper=BigInt(atlas.end);

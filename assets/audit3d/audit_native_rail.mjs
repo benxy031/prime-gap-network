@@ -1,4 +1,4 @@
-import {verifiedLandingMarkers} from './audit_activity_model.mjs';
+import {matchesAtlasActivityAnchor,verifiedLandingMarkers} from './audit_activity_model.mjs';
 // The verified native Atlas owns ranges, zoom and selection. This renderer
 // shares its coordinate space with the articulated scene; no mock table/data.
 const rail=document.querySelector('#atlas-rail'),actor=document.querySelector('#actor'),NS='http://www.w3.org/2000/svg';
@@ -89,8 +89,11 @@ function endpoints(value){
  return result;
 }
 const apply=window.pgnAuditApply,project=window.pgnAuditProject,oldPreview=window.pgnAuditPreview;
-window.pgnAuditLandingMarker=job=>atlas?.details?.find(row=>row.request===job?.request)
- ??supplemental.find(row=>row.request===job?.request);
+window.pgnAuditLandingMarker=job=>{
+ if(!matchesAtlasActivityAnchor(atlas,verifiedActivity))return undefined;
+ return atlas.details?.find(row=>row.request===job?.request)
+  ??supplemental.find(row=>row.request===job?.request);
+};
 window.pgnAuditApply=value=>{
  jobs=value.view?.audits??[];
  verifiedActivity=value.preview===true?null:value.view;
