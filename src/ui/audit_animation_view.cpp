@@ -70,7 +70,15 @@ void AuditAnimationView::prepareRenderer(){
  if(!impl_->started){impl_->started=true;const auto root=QCoreApplication::applicationDirPath();impl_->surface->start(QDir(root).filePath("assets/audit-animation.rcc"),QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)).filePath("audit3d-v1"),QDir(root).filePath("WebView2Loader.dll"),"network-animation.html");}
 #endif
 }
-void AuditAnimationView::showEvent(QShowEvent* event){QWidget::showEvent(event);impl_->reset=true;impl_->preview=false;prepareRenderer();
+void AuditAnimationView::showEvent(QShowEvent* event){
+ QWidget::showEvent(event);
+ impl_->reset=true;
+ impl_->preview=false;
+ if(!impl_->last.isEmpty()){
+  impl_->status->setText(QStringLiteral("Refreshing audit activity\u2026"));
+  impl_->status->setToolTip({});
+ }
+ prepareRenderer();
  QTimer::singleShot(0,this,[this]{refresh();});
 }
 void AuditAnimationView::hideEvent(QHideEvent* event){++impl_->generation;impl_->reset=true;impl_->preview=false;impl_->displayed={};
@@ -95,7 +103,16 @@ void AuditAnimationView::refresh(){
  if((!isVisible()&&!impl_->warming)||!impl_->ready||impl_->busy||impl_->preview||!impl_->reader)return;
  impl_->busy=true;const auto generation=impl_->generation;const bool reset=impl_->reset;const QPointer<AuditAnimationView> guard(this);
  impl_->reader(reset?0:impl_->height,reset?QString{}:impl_->hash,reset?QJsonArray{}:impl_->watched,[guard,generation,reset](QJsonObject view,QString error){
-  if(!guard)return;auto& d=*guard->impl_;d.busy=false;if(generation!=d.generation||(!guard->isVisible()&&!d.warming)||d.preview)return;
+  if(!guard)return;
+  auto& d=*guard->impl_;
+  d.busy=false;
+  if((!guard->isVisible()&&!d.warming)||d.preview)return;
+  if(generation!=d.generation){
+   // A hide/show cannot start a fresh read while the previous one is busy.
+   // Once it returns, refresh on the next event turn with the current generation.
+   QTimer::singleShot(0,guard.data(),[guard]{if(guard)guard->refresh();});
+   return;
+  }
   if(!error.isEmpty()){d.status->setText(QStringLiteral("Audit activity unavailable \u00b7 ")+error);guard->setProperty("pgn_audit_animation_error",error);return;}
   d.reset=false;d.last=view;const auto state=view.value("state").toObject();d.height=state.value("height").toInteger();d.hash=state.value("bestblockhash").toString();
   d.watched=d.displayed;QSet<QString> ids;for(const auto& id:d.displayed)ids.insert(id.toString());for(const auto& row:view.value("audits").toArray()){const auto report=row.toObject();bool active=false;for(const auto& j:report.value("jobs").toArray()){const auto job=j.toObject();active|=job.value("state")=="committed"||(job.value("state")=="assigned"&&!job.value("expired").toBool());}if(active&&d.watched.size()<32&&!ids.contains(report.value("request_id").toString())){d.watched.append(report.value("request_id"));ids.insert(report.value("request_id").toString());}}
