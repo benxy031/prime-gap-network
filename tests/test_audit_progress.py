@@ -138,5 +138,42 @@ class AuditProgressTests(unittest.TestCase):
         self.assertEqual(frames[-1]['scopes']['ticket']['statistics']['count_total'],2)
         self.assertEqual(len(frames[-1]['scopes']['ticket']['best']),2)
 
+    def test_missing_read_keeps_last_position_of_the_same_partition_without_rates(self):
+        audit=WholeAuditPresentation()
+        one,two=self.item(0),self.item(1)
+        audit.frame(one,self.sample(one,100))
+        audit.frame(two,self.result_sample(two,3))
+        missing=audit.frame(two)
+        self.assertEqual(missing['positions'],'130')
+        self.assertEqual(missing['scopes']['ticket']['statistics']['count_total'],3)
+        self.assertTrue(missing['source_stale'])
+        self.assertIsNone(missing['eta_rate'])
+        audit.frame(two,self.sample(two,12))
+        self.assertEqual(audit.frame(two)['positions'],'112')
+        self.assertEqual(audit.frame(self.item(2))['positions'],'300')
+
+    def test_cpu_audit_keeps_lane_and_prefix_when_its_last_sample_belongs_to_previous_range(self):
+        worker=NetworkWorker.__new__(NetworkWorker)
+        worker.sequence=42
+        worker.cpu_only=True
+        first,second=self.item(0),self.item(1)
+        worker.audits=SimpleNamespace(presentation=first)
+        worker.source=SimpleNamespace(current_frame=dict(self.result_sample(first,2),
+            positions='100',phase='Report ready',source_device='CPU/Fixture/0'))
+        frames=[]
+        worker.emit=frames.append
+        worker._present_progress(dict(phase='COMPUTED'))
+        worker.audits.presentation=second
+        worker._present_progress(dict(phase='STARTING'))
+        worker.source.current_frame=None
+        worker._present_progress(dict(phase='PAUSED_ACK'))
+        self.assertEqual([frame['positions'] for frame in frames],['100','100','100'])
+        self.assertEqual([frame['phase'] for frame in frames],['Searching','Searching','Paused'])
+        for frame in frames[1:]:
+            self.assertEqual(frame['source_device'],'CPU/Fixture/0')
+            self.assertEqual(frame['scopes']['ticket']['statistics']['count_total'],2)
+            self.assertTrue(frame['source_stale'])
+            self.assertIsNone(frame['eta_rate'])
+
 
 if __name__=='__main__':unittest.main()

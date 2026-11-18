@@ -36,19 +36,27 @@ class WholeAuditPresentation:
         self.identity = None
         self.parts = {}
         self.metadata = {}
+        self.last_progress = None
 
     def frame(self, item, source=None, *, paused=False):
         if self.identity != item['audit_id']:
             self.identity = item['audit_id']
             self.parts.clear()
             self.metadata.clear()
+            self.last_progress = None
         value = whole_audit_frame(item, source, paused=paused)
+        part = tuple(item[key] for key in ('part_index', 'part_start', 'part_end', 'offset', 'total'))
         if source:
-            for key in ('bits', 'minimum_gap', 'target_merit'):
+            self.last_progress = part, value['positions']
+            for key in ('bits', 'minimum_gap', 'target_merit', 'source_device'):
                 if key in source:self.metadata[key] = source[key]
             scope = source.get('scopes', {}).get('ticket')
             if scope:
                 self.parts[item['part_index']] = deepcopy(scope)
+        elif self.last_progress is not None and self.last_progress[0] == part:
+            # A missing read is not a new position. A fresh validated rewind
+            # still replaces the retained position when it arrives.
+            value['positions'] = self.last_progress[1]
         for key, field in self.metadata.items():value.setdefault(key, field)
         if self.parts:
             scopes = dict(value.get('scopes', {}))
