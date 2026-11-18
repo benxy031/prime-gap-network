@@ -32,12 +32,9 @@ jobs:
             index="$RUNNER_TEMP/pgn-native-ubuntu.list"
             key='/usr/share/keyrings/ubuntu-archive-keyring.gpg'
             test -r "$key"
-            printf 'deb [signed-by=%s] https://archive.ubuntu.com/ubuntu noble main universe
-' "$key" > "$index"
-            printf 'deb [signed-by=%s] https://archive.ubuntu.com/ubuntu noble-updates main universe
-' "$key" >> "$index"
-            printf 'deb [signed-by=%s] https://security.ubuntu.com/ubuntu noble-security main universe
-' "$key" >> "$index"
+            echo "deb [signed-by=$key] https://archive.ubuntu.com/ubuntu noble main universe" > "$index"
+            echo "deb [signed-by=$key] https://archive.ubuntu.com/ubuntu noble-updates main universe" >> "$index"
+            echo "deb [signed-by=$key] https://security.ubuntu.com/ubuntu noble-security main universe" >> "$index"
             flags=(-o "Dir::Etc::sourcelist=$index" -o 'Dir::Etc::sourceparts=-' -o 'Acquire::http::Timeout=22' -o 'Acquire::https::Timeout=22' -o 'Acquire::Retries=1')
             sudo apt-get "${flags[@]}" update
             sudo apt-get "${flags[@]}" install --no-install-recommends -y "${needed[@]}"
