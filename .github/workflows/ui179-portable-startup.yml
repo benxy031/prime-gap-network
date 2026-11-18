@@ -1,0 +1,50 @@
+name: UI179 exact final Windows startup
+on:
+  push:
+    branches: [qualification/ui179-portable-startup]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - name: Permit long source paths on disposable runner
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /tests/native_grouped249_actual.py
+            /qualification/ui177/legacy-chain.zip
+      - name: Use the exact qualified Windows executable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 44340169655 --repo $env:GITHUB_REPOSITORY --name ui179-next-plan-windows-44340169655 --dir ui179-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact candidate unavailable' }
+          gh run download 44234638850 --repo $env:GITHUB_REPOSITORY --name horizon-engine-host89-windows --dir host89-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact host artifact unavailable' }
+      - name: Install the pinned Windows runtime-check dependencies
+        shell: pwsh
+        run: |
+          python -m venv .qa-updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
+          & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Launch the exact UI179 cohort with a retained wallet
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_ui179_portable.py
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary Windows startup qualification failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui179-portable-startup-${{ github.run_id }}
+          path: ui179-windows/evidence/
+          if-no-files-found: warn
