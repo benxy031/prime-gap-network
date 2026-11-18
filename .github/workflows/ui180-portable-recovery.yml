@@ -1,0 +1,51 @@
+name: UI180 exact portable recovery with a retained wallet
+on:
+  push:
+    branches: [qualification/ui180-portable-recovery]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - name: Permit long source paths on disposable runner
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/
+            /src/update/
+            /tests/native_grouped249_actual.py
+            /qualification/ui177/legacy-chain.zip
+            /qualification/ui180/atlas-resource.delta
+      - name: Use the exact qualified Windows executable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 44358096567 --repo $env:GITHUB_REPOSITORY --name horizon-relay-stall355-windows-44358096567 --dir ui180-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact candidate unavailable' }
+          gh run download 44357714595 --repo $env:GITHUB_REPOSITORY --name horizon-engine-host90-windows --dir host90-qualified
+          if ($LASTEXITCODE -ne 0) { throw 'Exact host artifact unavailable' }
+      - name: Install the pinned Windows runtime-check dependencies
+        shell: pwsh
+        run: |
+          python -m venv .qa-updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater venv failed' }
+          & .qa-updater/Scripts/python.exe -m pip install --disable-pip-version-check -r tools/requirements-updater.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned updater dependencies failed' }
+      - name: Launch the exact UI179 cohort with a retained wallet
+        shell: pwsh
+        run: |
+          & .qa-updater/Scripts/python.exe tools/qualify_ui180_portable_recovery.py
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary Windows startup qualification failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui180-portable-recovery-${{ github.run_id }}
+          path: ui180-windows/evidence/
+          if-no-files-found: warn
