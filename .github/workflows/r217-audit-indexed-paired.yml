@@ -14,10 +14,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install the matching native compiler and runtime dependencies
+      - name: Reuse available compiler tools and fetch only missing signed packages
+        shell: bash
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y build-essential cmake ninja-build libgmp-dev libsqlite3-dev libboost-dev libevent-dev pkg-config
+          set -euo pipefail
+          needed=()
+          command -v g++ >/dev/null || needed+=(build-essential)
+          command -v cmake >/dev/null || needed+=(cmake)
+          command -v ninja >/dev/null || needed+=(ninja-build)
+          command -v pkg-config >/dev/null || needed+=(pkg-config)
+          pkg-config --exists gmp 2>/dev/null || needed+=(libgmp-dev)
+          pkg-config --exists sqlite3 2>/dev/null || needed+=(libsqlite3-dev)
+          pkg-config --exists libevent_core libevent_extra libevent_pthreads 2>/dev/null || needed+=(libevent-dev)
+          [[ -f /usr/include/boost/version.hpp ]] || needed+=(libboost-dev)
+          if (( ${#needed[@]} > 0 )); then
+            index="$RUNNER_TEMP/pgn-native-ubuntu.list"
+            key='/usr/share/keyrings/ubuntu-archive-keyring.gpg'
+            test -r "$key"
+            printf 'deb [signed-by=%s] https://archive.ubuntu.com/ubuntu noble main universe
+' "$key" > "$index"
+            printf 'deb [signed-by=%s] https://archive.ubuntu.com/ubuntu noble-updates main universe
+' "$key" >> "$index"
+            printf 'deb [signed-by=%s] https://security.ubuntu.com/ubuntu noble-security main universe
+' "$key" >> "$index"
+            flags=(-o "Dir::Etc::sourcelist=$index" -o 'Dir::Etc::sourceparts=-' -o 'Acquire::http::Timeout=22' -o 'Acquire::https::Timeout=22' -o 'Acquire::Retries=1')
+            sudo apt-get "${flags[@]}" update
+            sudo apt-get "${flags[@]}" install --no-install-recommends -y "${needed[@]}"
+          fi
       - name: Compile the published source projection and the indexed variant under identical settings
         shell: bash
         run: |
