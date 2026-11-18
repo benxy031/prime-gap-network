@@ -66,6 +66,30 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.recovery.claim(self.folders[0]),(None,False))
         fresh=AssignedAuditRecovery(self.worker);a,_=fresh.claim(self.folders[0]);self.assertEqual(a['request_id'],f'{101:064x}')
         self.assertEqual(json.loads(fresh.cursor.read_bytes())['offset'],100)
+
+    def test_previous_wallet_cursor_restarts_on_page_zero(self):
+        past_actor = '0014' + '1' * 40
+        self.recovery.cursor.write_text(json.dumps(dict(genesis=CHAIN, actor=past_actor, offset=100)))
+        audit, _ = self.recovery.claim(self.folders[0])
+        self.assertEqual(audit['request_id'], report(1)['request_id'])
+        self.assertIn(('getpgnworkview', ['audits', 0, 100]), self.rpc.calls)
+        self.assertEqual(json.loads(self.recovery.cursor.read_bytes())['actor'], ACTOR)
+
+    def test_previous_network_cursor_restarts_on_page_zero(self):
+        self.recovery.cursor.write_text(json.dumps(dict(genesis='1' * 64, actor=ACTOR, offset=100)))
+        audit, _ = self.recovery.claim(self.folders[0])
+        self.assertEqual(audit['request_id'], report(1)['request_id'])
+        self.assertIn(('getpgnworkview', ['audits', 0, 100]), self.rpc.calls)
+        self.assertEqual(json.loads(self.recovery.cursor.read_bytes())['genesis'], CHAIN)
+
+    def test_stale_page_during_identity_change_preserves_cursor_and_journal(self):
+        self.recovery.cursor.write_text(json.dumps(dict(genesis=CHAIN, actor='0014' + '1' * 40, offset=100)))
+        before = self.recovery.cursor.read_bytes()
+        self.rpc.tip = 'c' * 64
+        self.assertEqual(self.recovery.claim(self.folders[0]), (None, False))
+        self.assertFalse((self.folders[0] / 'current.json').exists())
+        self.assertEqual(self.recovery.cursor.read_bytes(), before)
+
     def test_own_report_cannot_be_recovered_as_independent(self):
         self.rpc.pages[0]['reports'][0]['miner_script']=ACTOR
         with self.assertRaises(ValueError):self.recovery.claim(self.folders[0])
