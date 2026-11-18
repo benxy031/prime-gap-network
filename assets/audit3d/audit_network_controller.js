@@ -165,6 +165,11 @@ window.pgnCreateAuditController=function(scene,entity,prototype){
  captureTorso();
  let idleTime=0;
  function idle(dt){idleTime+=dt;const phase={michael:.2,helel:1.4,boshel:2.7,kitabel:4}[entity],rate={michael:.65,helel:.9,boshel:1.2,kitabel:.8}[entity];for(const bone of [hips,spine,head])if(bone){const rest=bone.userData.rest,angle=Math.sin(idleTime*rate+phase)*(bone===head?.009:.004);bone.quaternion.copy(rest).multiply(bone.quaternion.clone().setFromAxisAngle(v(0,0,1),angle));bone.updateWorldMatrix(false,true)}scene.queueRender()}
+ function advance(steps,dt){
+  if(!job){if(steps)idle(steps*dt);return false}
+  for(let i=0;i<steps;i++)step(dt);
+  return metrics.complete;
+ }
  function clear(){job=null;terminal=false;state.paused=true;state.phase='idle';packet.visible=false;packet.scale.setScalar(0);for(const b of base){b.node.quaternion.copy(b.q);b.node.position.copy(b.p);b.node.scale.copy(b.s)}scene.updateMatrixWorld(true);scene.queueRender()}
  const pigments=[];packet.traverse(n=>{if(!n.isMesh||!n.name.startsWith('ObservedGap'))return;const source=Array.isArray(n.material)?n.material:[n.material],materials=source.map(m=>{const copy=m.clone();pigments.push({material:copy,color:copy.color?.clone(),emissive:copy.emissive?.clone()});return copy});n.material=Array.isArray(n.material)?materials:materials[0]});
  function palette(mode){paletteMode=mode;for(const p of pigments){if(mode==='preview'){if(p.color)p.material.color.copy(p.color);if(p.emissive)p.material.emissive.copy(p.emissive)}else{const color=job?.state==='passed'?'#62d9bb':job?.state==='failed'||job?.expired?'#e88388':'#7bbdd0';p.material.color?.set(color);p.material.emissive?.set(color)}}scene.queueRender()}
@@ -175,5 +180,5 @@ window.pgnCreateAuditController=function(scene,entity,prototype){
  }
  function relocate(delta,rotation=null,pivot=[0,0,0]){const d=v(...delta),origin=v(...pivot),q=packet.quaternion.clone();if(rotation)q.fromArray(rotation);else q.identity();const move=p=>p.sub(origin).applyQuaternion(q).add(origin).add(d);for(const a of arms)move(a.restPalm);move(hold);front.applyQuaternion(q);side.applyQuaternion(q);if(torsoProfile){torsoProfile.front.applyQuaternion(q);torsoProfile.side.applyQuaternion(q)}if(state.releaseBaseline)for(const before of state.releaseBaseline)move(before.hand);if(['capture','examine','open'].includes(state.phase))place(move(world(packet)));else if(['approach','depart'].includes(state.phase)){state.pathStart=world(packet);state.u=0}}
 
- return {entity,apply,clear,step,relocate,palette,pause:()=>{state.paused=true},resume:()=>{if(job)state.paused=false},setEndpoints:value=>{endpoints=value},inspect:()=>({entity,job,endpoints,packetRadius,phase:state.phase,age:state.age,elapsed:state.elapsed,metrics:JSON.parse(JSON.stringify(metrics)),hold:hold.toArray(),packet:world(packet).toArray(),clearance:clearance(world(packet)),nearest:volumes().map(c=>({label:c.label,clearance:distance(world(packet),c.a,c.b)-c.r-packetRadius})).sort((a,b)=>a.clearance-b.clearance).slice(0,2),visible:packet.visible})};
+ return {entity,apply,clear,step,advance,relocate,palette,pause:()=>{state.paused=true},resume:()=>{if(job)state.paused=false},setEndpoints:value=>{endpoints=value},inspect:()=>({entity,job,endpoints,packetRadius,phase:state.phase,age:state.age,elapsed:state.elapsed,metrics:JSON.parse(JSON.stringify(metrics)),hold:hold.toArray(),packet:world(packet).toArray(),clearance:clearance(world(packet)),nearest:volumes().map(c=>({label:c.label,clearance:distance(world(packet),c.a,c.b)-c.r-packetRadius})).sort((a,b)=>a.clearance-b.clearance).slice(0,2),visible:packet.visible})};
 };

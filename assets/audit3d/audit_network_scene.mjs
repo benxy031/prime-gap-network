@@ -1,6 +1,8 @@
 import{AuditActivityModel,canCompleteLanding}from'./audit_activity_model.mjs';
 const entities=['michael','helel','boshel','kitabel'],model=new AuditActivityModel(),actor=document.querySelector('#actor');
-let scene,controllers=new Map(),ready=false,shown=false,last=0,lastRender=0,preview=false,latest=null,projection={};
+let scene,controllers=new Map(),ready=false,shown=false,lastRender=0,motionCarry=0,preview=false,latest=null,projection={};
+const motionStep=1/60, maxMotionFrame=.2;
+function resetMotionClock(now=performance.now()){lastRender=now;motionCarry=0;}
 const targetHeights={michael:3.2,helel:3.17,boshel:1.84,kitabel:2.90},nameAnchors=new Map();let homeCamera,homeRotation;const restLayouts=new Map();let layoutQueued=false,layoutApplying=false,lastLayoutProjectionKey='',layoutEpoch=0;
 // Keep the fit goal separate from the projection actually rendering this frame.
 // A future FOV cannot place actors which are still viewed through the old FOV.
@@ -46,7 +48,7 @@ function requestLayout(){if(layoutQueued)return;layoutQueued=true;requestAnimati
 
 function points(job){return projection[job.request]||{source:{x:entities.indexOf(job.entity)/4+.125,y:1.08},target:{x:entities.indexOf(job.entity)/4+.125,y:1.08},outside:true}}
 function display(snapshot){
- if(!ready)return;latest=snapshot;preview=snapshot.preview===true;shown=true;projection=snapshot.projection??{};
+ if(!ready)return;if(!shown)resetMotionClock();latest=snapshot;preview=snapshot.preview===true;shown=true;projection=snapshot.projection??{};
  const observed=model.observe(snapshot.view,{now:performance.now(),reset:snapshot.reset===true,visible:true,capturedAt:performance.now()-(snapshot.age_ms??0)}),events=model.take(performance.now());
  if(observed.rebased)for(const controller of controllers.values())controller.clear();
  for(const controller of controllers.values())controller.palette(snapshot.preview===true?'preview':'live');
@@ -80,7 +82,7 @@ async function initialize(){
 }
 window.pgnAuditApply=value=>{latest=value;if(ready)display(value)};
 window.pgnAuditProject=value=>{projection=value;for(const c of controllers.values()){const job=c.inspect().job;if(job)c.setEndpoints(points(job))}revealTogether()};
-window.pgnAuditSuspend=()=>{shown=false;preview=false;model.suspend();for(const controller of controllers.values())controller.clear();scene?.queueRender()};
+window.pgnAuditSuspend=()=>{shown=false;preview=false;resetMotionClock();model.suspend();for(const controller of controllers.values())controller.clear();scene?.queueRender()};
 const id=n=>n.toString(16).padStart(64,'0');
 function fixture(height,jobs,rebase=false){return{schema:'PGN_AUDIT_ACTIVITY_V1',state:{genesis:id(1),bestblockhash:id(height+100),height},scope:'global_counts_with_bounded_public_job_rows',rebase,truncated:false,totals:{active_reports:4,active_jobs:4,recent_reports:0,passed_audits_since_height:0,selected_active_reports:4,selected_recent_reports:0},audits:jobs.map((job,i)=>({request_id:id(i+1),audited:false,jobs:[job]}))}}
 function previewStart(nativePoints={}){model.suspend();for(const controller of controllers.values())controller.clear();shown=true;preview=true;const projections={},points=Object.values(nativePoints);const rows=entities.map((entity,i)=>{projections[id(i+1)]=points[i]||{source:{x:[.08,.43,.65,.83][i],y:1.08},target:{x:[.08,.43,.65,.83][i],y:1.08}};return{slot:0,attempt:0,state:'assigned',actor:'0014'+(i+1).toString(16).padStart(2,'0'),issued:2}});display({view:fixture(1,[],true),projection:projections,reset:true,preview:true});display({view:fixture(2,rows),projection:projections,preview:true});preview=true;return rows}
@@ -117,24 +119,29 @@ window.pgnAuditTrajectoryProbe=async()=>{
 };
 let dragging=false,home={theta:0,phi:84*Math.PI/180,radius:13};actor.addEventListener('pointerdown',()=>{dragging=true});for(const e of['pointerup','pointercancel','lostpointercapture'])actor.addEventListener(e,()=>{dragging=false});
 actor.addEventListener('camera-change',()=>{syncLayoutProjection();names()});
-function tick(now){let dt=Math.min(.06,(now-last)/1000||0);last=now;
- if(ready&&shown&&!document.hidden){syncLayoutProjection();dt=Math.min(.1,(now-lastRender)/1000);lastRender=now;
+document.addEventListener('visibilitychange',()=>resetMotionClock());
+function tick(now){
+ if(ready&&shown&&!document.hidden){
+  syncLayoutProjection();
+  // Keep collision steps identical across frame rates. A long stall cannot
+  // reserve more than twelve steps, and hidden time never creates work debt.
+  const dt=Math.max(0,Math.min(maxMotionFrame,(now-lastRender)/1000));
+  lastRender=now;
+  motionCarry+=dt;
+  const steps=Math.floor((motionCarry+1e-9)/motionStep);
+  motionCarry=Math.max(0,motionCarry-steps*motionStep);
   if(preview&&now-window.__auditNetwork.previewStarted>14000){for(const c of controllers.values()){const j=c.inspect().job;if(j&&!['passed','failed'].includes(j.state))c.apply({...j,state:'passed'},points(j))}}
   for(const controller of controllers.values()){
-   let rest=dt;
-   while(rest>1e-6){
-    const step=Math.min(rest,1/60);
-    controller.step(step);
-    rest-=step;
-   }
+   if(!controller.advance(steps,motionStep))continue;
    const state=controller.inspect();
-   if(!state.metrics.complete)continue;
    const marker=window.pgnAuditLandingMarker?.(state.job);
    if(canCompleteLanding(state.job,marker,state.age,preview,state.endpoints?.outside===true))controller.clear();
   }
   if(!dragging){const orbit=actor.getCameraOrbit(),k=1-Math.exp(-dt*4),theta=orbit.theta+(home.theta-orbit.theta)*k,phi=orbit.phi+(home.phi-orbit.phi)*k;actor.cameraOrbit=`${theta}rad ${phi}rad ${home.radius}m`}
   names();
- }captureLayoutTrace(now);requestAnimationFrame(tick)}requestAnimationFrame(tick);
+ }else resetMotionClock(now);
+ captureLayoutTrace(now);requestAnimationFrame(tick)
+}requestAnimationFrame(tick);
 actor.addEventListener('load',()=>initialize().catch(e=>native({event:'error',message:String(e)})));if(actor.loaded)initialize().catch(e=>native({event:'error',message:String(e)}));
 
 window.pgnProjectedActorBounds=()=>{const camera=scene.getCamera();return entities.map(entity=>{const root=scene.getObjectByName("Actor"+entity[0].toUpperCase()+entity.slice(1)),b=meshBounds(root),p=root.position.clone(),xy=[];for(const x of[b.min.x,b.max.x])for(const y of[b.min.y,b.max.y])for(const z of[b.min.z,b.max.z]){const v=p.clone().set(x,y,z).project(camera);xy.push({x:(v.x+1)*actor.clientWidth/2,y:(1-v.y)*actor.clientHeight/2})}return{entity,left:Math.min(...xy.map(v=>v.x)),right:Math.max(...xy.map(v=>v.x)),top:Math.min(...xy.map(v=>v.y)),bottom:Math.max(...xy.map(v=>v.y))}})};
