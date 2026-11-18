@@ -6,10 +6,42 @@
 #include <cmath>
 #include <optional>
 namespace pgn::ui {
-// A stale checkpoint does not establish a current ticket. Strip its
-// active range and progress from the presentation copy.
+// The worker can still attest the active audit and its completed prefix
+// while the next partition has no sample. That view has no source age or rate.
+inline bool retainedAuditPartitionBoundary(const QJsonObject& frame){
+ const auto phase=frame.value("phase");
+ if(frame.value("schema")!="PGN_HORIZON_MINING_VIEW_V1"||frame.value("work_role")!="audit"||
+    frame.value("progress_scope")!="audit"||(phase!="Searching"&&phase!="Paused")||
+    !frame.value("source_age_ns").isNull())return false;
+ const auto validId=[](const QString& id){
+  return id.size()==64&&std::all_of(id.begin(),id.end(),[](QChar value){
+   return (value>=u'0'&&value<=u'9')||(value>=u'a'&&value<=u'f');
+  });
+ };
+ const auto unsignedDecimal=[](const QString& number){
+  return !number.isEmpty()&&number.size()<=64&&(number.size()==1||number.front()!=u'0')&&
+   std::all_of(number.begin(),number.end(),[](QChar value){return value>=u'0'&&value<=u'9';});
+ };
+ const auto less=[](const QString& left,const QString& right){
+  return left.size()==right.size()?left<right:left.size()<right.size();
+ };
+ const auto range=frame.value("audit_active_range").toObject();
+ const auto start=range.value("start").toString(),end=range.value("end").toString();
+ const auto done=frame.value("positions").toString(),total=frame.value("positions_total").toString();
+ return validId(frame.value("ticket_id").toString())&&validId(frame.value("request_id").toString())&&
+        unsignedDecimal(start)&&unsignedDecimal(end)&&less(start,end)&&
+        unsignedDecimal(done)&&unsignedDecimal(total)&&total!="0"&&!less(total,done);
+}
+
+// Disconnection and synchronization still remove expired current assignments.
 inline QJsonObject currentAssignmentPresentation(const QJsonObject& frame){
  if(frame.value("phase")!="Synchronizing"&&!frame.value("source_stale").toBool())return frame;
+ if(retainedAuditPartitionBoundary(frame)){
+  auto retained=frame;
+  for(const auto* key:{"speed_rate","average_rate","compute_tests_rate","eta_rate"})
+   retained.insert(key,QJsonValue::Null);
+  return retained;
+ }
  QJsonObject waiting;
  for(const auto* key:{"schema","phase","message","source_device","stream_id","local_sequence","observed_utc"})
   if(frame.contains(key))waiting.insert(key,frame.value(key));

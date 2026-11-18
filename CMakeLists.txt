@@ -1914,6 +1914,15 @@ target_include_directories(pgn-mining-preparation-progress-test PRIVATE src)
 target_link_libraries(pgn-mining-preparation-progress-test PRIVATE Qt6::Widgets)
 add_test(NAME mining-preparation-progress COMMAND pgn-mining-preparation-progress-test)
 set_tests_properties(mining-preparation-progress PROPERTIES TIMEOUT 20 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "presentation;no-gpu")
+
+add_executable(pgn-audit-partition-widgets-test tests/audit_partition_widgets_test.cpp src/ui/mining_ticket_progress.cpp)
+target_link_libraries(pgn-audit-partition-widgets-test PRIVATE pgn-mining-results)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME audit-partition-widgets COMMAND "${Python3_EXECUTABLE}" -B
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/audit_partition_widget_fixture.py"
+        "$<TARGET_FILE:pgn-audit-partition-widgets-test>")
+    set_tests_properties(audit-partition-widgets PROPERTIES TIMEOUT 40 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "presentation;no-gpu")
+endif()
 if(Python3_Interpreter_FOUND)
  add_test(NAME audit-service-presentation COMMAND "${Python3_EXECUTABLE}" -B -I -X utf8 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_service_presentation.py")
  set_tests_properties(audit-service-presentation PROPERTIES TIMEOUT 20 LABELS "presentation;no-gpu")
