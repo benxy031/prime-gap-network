@@ -1,5 +1,5 @@
 """Ordinary startup of the exact short Windows package on an isolated fixture."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import hashlib,http.client,json,os,re,subprocess,sys,zipfile,time,urllib.request,threading
 from shutil import copytree
 from contextlib import closing,contextmanager
