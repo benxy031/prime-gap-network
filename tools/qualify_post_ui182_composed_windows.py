@@ -196,8 +196,9 @@ def compose_program():
             == {key:value for key,value in verified.items() if not touched(key)})
     test=json.loads(subprocess.check_output([str(host),'--audit-batch-self-test'],cwd=base,timeout=60))
     assert test['passed'] and test['checks']==17 and test['no_network'] and test['no_child_processes']
-    commit=subprocess.check_output(['git','rev-parse','HEAD^'],cwd=ROOT,text=True).strip()
-    assert commit=="d740405addcd6e65fe933d417019542ef0e68ec3"
+    commit="d740405addcd6e65fe933d417019542ef0e68ec3"
+    subprocess.run(['git','merge-base','--is-ancestor',commit,'HEAD'],cwd=ROOT,check=True)
+    subprocess.run(['git','diff','--quiet',commit,'HEAD','--','src','CMakeLists.txt','tools/build_horizon_engine_host.py'],cwd=ROOT,check=True)
     save('COMPOSED-FILES.json',dict(PASS=True,development_source=commit,donor_sha256=BASE_SHA,
         ui_sha256=sha(exe),host_sha256=sha(host),native_qprocess_test=True,host_checks=test['checks'],
         inventory_sha256=inventory_digest,authenticated_release=False))
