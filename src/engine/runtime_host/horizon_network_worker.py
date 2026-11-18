@@ -205,7 +205,10 @@ class NetworkWorker:
             cadence.observe_cost(time.monotonic_ns()-started)
 
     def audit_frame(self, item, source=None, **options):
-        if not hasattr(self, "audit_presentation"):self.audit_presentation = WholeAuditPresentation()
+        if not hasattr(self, "audit_presentation"):
+            root = getattr(self, 'root', None)
+            self.audit_presentation = WholeAuditPresentation(
+                root / "tickets" if root is not None else None, cpu_only=getattr(self, 'cpu_only', False))
         return self.audit_presentation.frame(item, source, **options)
 
     def _present_progress(self, event):

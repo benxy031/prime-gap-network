@@ -1,10 +1,20 @@
 """Present one assigned audit, while its disjoint engine jobs stay internal."""
 import datetime as dt
 import hashlib
+import json
+from pathlib import Path
+import re
+import time
+from sqlite3 import Error as SqliteError
 from copy import deepcopy
 from decimal import Decimal
 from report_commitment import canonical_bytes
 from horizon_status_stream import size_label
+
+
+def partition_identity(audit, part):
+    return hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_PARTITION_V1',
+        request=audit['request_id'], slot=audit['slot'], attempt=audit['attempt'], index=part['index']))).hexdigest()
 
 
 def presentation(audit, part, folder, title=None):
@@ -22,7 +32,33 @@ def presentation(audit, part, folder, title=None):
         folder=str(folder), audit_id=identity, audit_slot=audit['slot'], audit_attempt=audit['attempt'],
         offset=str(sum(lengths[:index])), total=str(sum(lengths)),
         part_start=part['start'], part_end=part['end'], part_index=index,
-        part_count=len(ranges), final_part=index == len(ranges) - 1)
+        part_count=len(ranges), final_part=index == len(ranges) - 1,
+        part_ticket_id=partition_identity(audit, part),
+        prior_partitions=[dict(index=r['index'], start=r['start'], end=r['end']) for r in ranges[:index]])
+
+
+def retained_scope(ticket_root, part, *, cpu_only=False):
+    identity = part['ticket_id']
+    if not isinstance(identity, str) or not re.fullmatch('[0-9a-f]{64}', identity):
+        raise ValueError('Invalid retained audit partition identity')
+    folder = ticket_root / identity
+    start, end = part['start'], part['end']
+    if cpu_only:
+        from horizon_preparation_process import regular
+        from pgn_gap_projection import presentation as project_pairs
+        state = json.loads(regular(folder / 'cpu-source.json', 1048576))
+        configuration = state['configuration']
+        if (state.get('schema') != 'PGN_CPU_PROVISIONAL_SOURCE_V1' or state.get('cursor') != end
+                or state.get('active') is not None
+                or (configuration['ticket_id'], configuration['start'], configuration['end']) != (identity, start, end)):
+            raise ValueError('CPU audit partition has no matching complete checkpoint')
+        return project_pairs([(int(lo), int(hi)) for lo, hi in state['pairs']], configuration)
+    from horizon_status_stream import ticket_frame
+    frame = ticket_frame(folder)
+    if ((frame['ticket_id'], frame['start'], frame['end']) != (identity, start, end)
+            or frame['phase'] != 'Report ready' or int(frame['positions']) != int(end) - int(start)):
+        raise ValueError('GPU audit partition has no matching complete checkpoint')
+    return frame['scopes']['ticket']
 
 
 class WholeAuditPresentation:
@@ -32,11 +68,47 @@ class WholeAuditPresentation:
     boundary samples carry their last result view, never an invented rate.
     This cache is presentation-only and does not change reports or audit counts.
     """
-    def __init__(self):
+    def __init__(self, ticket_root=None, *, cpu_only=False):
+        self.ticket_root = Path(ticket_root) if ticket_root is not None else None
+        self.cpu_only = cpu_only
         self.identity = None
         self.parts = {}
         self.metadata = {}
         self.last_progress = None
+        self.prior_retry_at = 0
+
+    def restore_prior(self, item):
+        if self.ticket_root is None:
+            return
+        prior = item.get('prior_partitions', [])
+        if not isinstance(prior, list) or not 0 < len(prior) == item['part_index'] <= 100:
+            return
+        pending = [(i, part) for i, part in enumerate(prior) if i not in self.parts]
+        now = time.monotonic()
+        if not pending or now < self.prior_retry_at:
+            return
+        self.prior_retry_at = now + 2
+        try:
+            ordinals = [part['index'] for part in prior]
+            bounds = [(int(part['start']), int(part['end'])) for part in prior]
+            ranges = sorted(bounds + [(int(item['part_start']), int(item['part_end']))])
+            if (any(type(ordinal) is not int or not 0 <= ordinal < 100 for ordinal in ordinals)
+                    or len(set(ordinals)) != len(ordinals)
+                    or any(not 0 < start < end for start, end in ranges)
+                    or any(left[1] > right[0] for left, right in zip(ranges, ranges[1:]))
+                    or sum(end - start for start, end in bounds) != int(item['offset'])):
+                return
+        except (ValueError, TypeError, KeyError):
+            return
+        audit = dict(request_id=item['request_id'], slot=item['audit_slot'], attempt=item['audit_attempt'])
+        for index, part in pending:
+            try:
+                snapshot = dict(part, ticket_id=partition_identity(audit, part))
+                self.parts[index] = retained_scope(self.ticket_root, snapshot, cpu_only=self.cpu_only)
+            except (OSError, ValueError, KeyError, TypeError, BufferError, SqliteError):
+                # Missing files and archive transitions affect display only.
+                # Keep the verified positional prefix and retry bounded reads.
+                continue
 
     def frame(self, item, source=None, *, paused=False):
         if self.identity != item['audit_id']:
@@ -44,7 +116,9 @@ class WholeAuditPresentation:
             self.parts.clear()
             self.metadata.clear()
             self.last_progress = None
+            self.prior_retry_at = 0
         value = whole_audit_frame(item, source, paused=paused)
+        self.restore_prior(item)
         part = tuple(item[key] for key in ('part_index', 'part_start', 'part_end', 'offset', 'total'))
         if source:
             self.last_progress = part, value['positions']
@@ -105,7 +179,9 @@ def whole_audit_frame(item, source=None, *, paused=False):
     partial = int(frame.get('positions', '0'))
     if not 0 <= partial <= length:
         raise ValueError('Audit progress exceeds its active assigned range')
-    if source and (str(frame.get('start')) != item['part_start'] or str(frame.get('end')) != item['part_end']):
+    expected_ticket = item.get('part_ticket_id')
+    if source and (str(frame.get('start')) != item['part_start'] or str(frame.get('end')) != item['part_end']
+                   or expected_ticket is not None and frame.get('ticket_id') != expected_ticket):
         raise ValueError('Audit progress belongs to another assigned range')
     done, total = int(item['offset']) + partial, int(item['total'])
     if not 0 <= done <= total:

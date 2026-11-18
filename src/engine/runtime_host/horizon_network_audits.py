@@ -11,7 +11,7 @@ from report_commitment import audit_commitment, canonical_bytes
 from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged
 from horizon_audit_answers import AuditAnswers
 from horizon_owner_reports import OwnerReports
-from horizon_audit_progress import presentation as audit_presentation
+from horizon_audit_progress import partition_identity, presentation as audit_presentation
 from horizon_audit_snapshot import AnchoredAuditStates, identity
 
 def save(file, value):
@@ -24,8 +24,7 @@ class RetainedAuditPublicationError(RuntimeError):
 
 def partition_ticket(audit, part):
     start, end = int(part['start']), int(part['end'])
-    identity = hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_PARTITION_V1',
-        request=audit['request_id'], slot=audit['slot'], attempt=audit['attempt'], index=part['index']))).hexdigest()
+    identity = partition_identity(audit, part)
     return dict(schema='PGN_HORIZON_ENGINE_TICKET_V1', ticket_id=identity, start=str(start), end=str(end),
                 threshold_policy=fields(start, end)['threshold_policy'], target_merit_q16=audit['target_merit_q16'])
 

@@ -23,7 +23,7 @@ class AuditProgressTests(unittest.TestCase):
         return presentation(audit, audit['ranges'][i], Path('/internal')/str(i))
 
     def sample(self, item, n, phase='Searching'):
-        return dict(ticket_id='c'*64, start=item['part_start'], end=item['part_end'],
+        return dict(ticket_id=item['part_ticket_id'], start=item['part_start'], end=item['part_end'],
             current=str(int(item['part_start'])+n), positions=str(n), phase=phase,
             speed_rate=30, eta_rate=30, source_stale=False, source_age_ns='0')
 
@@ -100,6 +100,26 @@ class AuditProgressTests(unittest.TestCase):
                     scopes=dict(ticket=dict(statistics=dict(count_total=count,at_or_above_target=0,
                         threshold_counts={'100':count},merit_band_counts={'22':count},statistics_target=25),
                         best=list(reversed(rows)),recent=list(reversed(rows)))))
+
+    def test_reopened_presenter_recovers_previous_partition_once(self):
+        first, second = self.item(0), self.item(1)
+        prior = self.result_sample(first, 2)['scopes']['ticket']
+        resumed = WholeAuditPresentation(Path('/internal'))
+        with patch('horizon_audit_progress.retained_scope', return_value=prior) as restore:
+            boundary = resumed.frame(second)
+            again = resumed.frame(second, self.result_sample(second, 3))
+            restore.assert_called_once()
+            self.assertEqual(restore.call_args.args[1]['ticket_id'], first['part_ticket_id'])
+        self.assertEqual(boundary['positions'], '100')
+        self.assertEqual(boundary['scopes']['ticket']['statistics']['count_total'], 2)
+        self.assertEqual(again['scopes']['ticket']['statistics']['count_total'], 5)
+
+    def test_same_cpu_range_from_another_attempt_cannot_fill_the_new_view(self):
+        current = self.item(1, dict(self.audit, attempt=1))
+        previous = self.item(1)
+        sample = self.sample(previous, 90)
+        with self.assertRaisesRegex(ValueError, 'another assigned range'):
+            whole_audit_frame(current, sample)
 
     def test_results_survive_empty_partition_boundary_and_accumulate_once(self):
         audit=WholeAuditPresentation();one,two=self.item(0),self.item(1)

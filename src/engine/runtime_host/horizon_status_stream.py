@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+from sqlite3 import Error as SqliteError
 import time
 from pgn_index import read_presentation_snapshot
 from pgn_statistics import statistics_state
@@ -150,6 +151,7 @@ def main():
         args.state_root = io_path(args.state_root)
     if args.ticket_folder is not None:
         args.ticket_folder = io_path(args.ticket_folder)
+    audits = None
     while True:
         try:
             folder, sequence = args.ticket_folder, 1
@@ -180,13 +182,22 @@ def main():
                     folder, sequence = args.state_root / "tickets" / identity, int(current["sequence"])
                 else:
                     current = None
-            frame = ticket_frame(folder, sequence, value.get("work", {}).get("ticket_number") if args.state_root else None)
-            if args.state_root and current is not None:
-                context = current["context"]
-                frame["work_role"] = current["role"]
-                if current["role"] == "audit":
-                    from horizon_audit_progress import whole_audit_frame
-                    frame = whole_audit_frame(context['presentation'], frame, paused=frame.get('phase') == 'Paused')
+            if args.state_root and current is not None and current["role"] == "audit":
+                if audits is None:
+                    from horizon_audit_progress import WholeAuditPresentation
+                    audits = WholeAuditPresentation(args.state_root / "tickets")
+                item = current["context"]["presentation"]
+                try:
+                    sample = ticket_frame(folder, sequence)
+                    frame = audits.frame(item, sample, paused=sample.get('phase') == 'Paused')
+                except (OSError, ValueError, KeyError, SqliteError) as error:
+                    frame = audits.frame(item)
+                    frame['progress_notice'] = str(error)[:300]
+                frame['local_sequence'] = sequence
+            else:
+                frame = ticket_frame(folder, sequence, value.get("work", {}).get("ticket_number") if args.state_root else None)
+                if args.state_root and current is not None:
+                    frame["work_role"] = current["role"]
         except (OSError, ValueError, KeyError) as error:
             frame = dict(schema="PGN_HORIZON_MINING_VIEW_UNAVAILABLE_V1", message=str(error)[:400])
         print(json.dumps(frame, separators=(",", ":")), flush=True)
