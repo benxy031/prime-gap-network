@@ -460,9 +460,16 @@ int main(int argc,char** argv) {
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
    networkSummary->setBusy(syncing);
-   if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
-   else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
-   if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
+   const bool localLedgerBehind=condition==Condition::NoPeers&&anchor->headerHeight&&*anchor->headerHeight>anchor->height;
+   if(localLedgerBehind){
+    networkSummary->setText(QString("%1 · LEDGER %2 / %3 · %4")
+      .arg(testnetMode?QStringLiteral("TESTNET"):QStringLiteral("NETWORK"))
+      .arg(anchor->height).arg(*anchor->headerHeight).arg(state));
+   }else{
+    if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
+    else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
+    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
+   }
    networkSummary->setToolTip(QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4").arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height));
   };
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
