@@ -9,6 +9,12 @@ int main(int argc,char** argv){
     const auto now=QDateTime::currentDateTimeUtc();
     ChainObservation observation{{42,"owned-process-birth",1},QString(64,'a'),18,now,false,QString(64,'b'),1};
     require(networkLinkCondition(CoreLinkState::Starting,{},now)==NetworkLinkCondition::Connecting);
+    const CoreRpcResult warmup{{},"Core RPC error (-28): Verifying blocks",true,-28};
+    require(coreInspectionFailureState(warmup)==CoreLinkState::WarmingUp);
+    require(networkLinkCondition(CoreLinkState::WarmingUp,observation,now)==NetworkLinkCondition::WarmingUp);
+    require(!verifiedCoreOnline(CoreLinkState::WarmingUp,observation,now));
+    require(coreInspectionFailureState({{},"Core RPC read failed (4): Operation timed out"})==CoreLinkState::RpcUnavailable);
+    require(coreInspectionFailureState({{},"Core RPC error (-28): text without a verified reply"})==CoreLinkState::RpcUnavailable);
     require(verifiedCoreOnline(CoreLinkState::Ready,observation,now));
     require(networkLinkCondition(CoreLinkState::Ready,observation,now)==NetworkLinkCondition::Current);
     // A timeout must revoke the live claim even if a previous tip is retained.
@@ -32,7 +38,7 @@ int main(int argc,char** argv){
     require(networkLinkCondition(CoreLinkState::Ready,observation,now)==NetworkLinkCondition::SyncUnknown);
     observation.synchronizing=false;observation.observedUtc=now.addSecs(40);
     require(networkLinkCondition(CoreLinkState::Ready,observation,now.addSecs(40))==NetworkLinkCondition::Current);
-    for(auto state:{CoreLinkState::Starting,CoreLinkState::Ready,CoreLinkState::RpcUnavailable,CoreLinkState::Stopped,CoreLinkState::Rejected})require(coreLinkState(coreLinkKey(state))==state);
+    for(auto state:{CoreLinkState::Starting,CoreLinkState::Ready,CoreLinkState::RpcUnavailable,CoreLinkState::Stopped,CoreLinkState::Rejected,CoreLinkState::WarmingUp})require(coreLinkState(coreLinkKey(state))==state);
     require(coreLinkState("unknown")==CoreLinkState::Rejected);
     std::cout<<"PASS "<<checks<<" network states: timeout, stale, process exit, identity, peers, sync and recovery\n";
 }

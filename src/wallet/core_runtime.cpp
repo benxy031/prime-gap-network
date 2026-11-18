@@ -535,8 +535,19 @@ void CoreRuntime::rpc(const QString& method,const QJsonArray& params,std::functi
  rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),[consume=std::move(consume)](CoreRpcResult result,QByteArray){consume(result.value,result.error);},wallet,timeoutMs,walletName,channel);
 }
 void CoreRuntime::inspectRpc(const QString& method,const QJsonArray& params,
-                             std::function<void(QJsonValue,QString)> consume,int timeoutMs){
- rpc(method,params,std::move(consume),false,timeoutMs,{},CoreRpcChannel::Inspection);
+                             std::function<void(CoreRpcResult)> consume,int timeoutMs){
+ rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),
+    [consume=std::move(consume)](CoreRpcResult result,QByteArray){consume(std::move(result));},
+    false,timeoutMs,{},CoreRpcChannel::Inspection);
+}
+void CoreRuntime::inspectFailed(const QString& operation,const CoreRpcResult& reply){
+ checking_=false;
+ connected_=false;
+ const auto state=coreInspectionFailureState(reply);
+ setLinkState(state,operation+QStringLiteral(": ")+reply.error);
+ if(onObservation)onObservation(std::nullopt);
+ report(state==CoreLinkState::WarmingUp?QStringLiteral("CORE · LOADING CHAIN DATA"):
+    QStringLiteral("CORE READ UNAVAILABLE · retrying automatically"));
 }
 void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,bool displayedWallet,std::function<void(QByteArray,QString)> consume){
   const auto validation=validateConsoleCommand(method,params);if(!validation.isEmpty()){consume({},validation);return;}
@@ -1021,14 +1032,14 @@ void CoreRuntime::walletInitialized(const CoreEpoch& owner){
 void CoreRuntime::inspect(){
  if(!processAlive()||checking_||stopping_)return;checking_=true;
  const auto ownerEpoch=epoch();
- inspectRpc("getblockchaininfo",{},[this,ownerEpoch](QJsonValue chain,QString error){
+ inspectRpc("getblockchaininfo",{},[this,ownerEpoch](CoreRpcResult chain){
   if(!ownerEpoch.matches(epoch())||!processAlive())return;
-   if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,QStringLiteral("getblockchaininfo: ")+error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
+  if(!chain.error.isEmpty()){inspectFailed(QStringLiteral("getblockchaininfo"),chain);return;}
   const auto observedUtc=QDateTime::currentDateTimeUtc();
-  inspectRpc("getblockhash",{0},[this,chain,ownerEpoch,observedUtc](QJsonValue genesis,QString error){
+  inspectRpc("getblockhash",{0},[this,chain=std::move(chain.value),ownerEpoch,observedUtc](CoreRpcResult genesis){
    if(!ownerEpoch.matches(epoch())||!processAlive())return;
-    if(!error.isEmpty()){checking_=false;connected_=false;setLinkState(CoreLinkState::RpcUnavailable,QStringLiteral("getblockhash(0): ")+error);if(onObservation)onObservation(std::nullopt);report("CORE READ UNAVAILABLE · retrying automatically");return;}
-   const auto projected=projectChainObservation(ownerEpoch,profile_,chain.toObject(),genesis.toString(),observedUtc);
+   if(!genesis.error.isEmpty()){inspectFailed(QStringLiteral("getblockhash(0)"),genesis);return;}
+   const auto projected=projectChainObservation(ownerEpoch,profile_,chain.toObject(),genesis.value.toString(),observedUtc);
     if(!projected.observation){checking_=false;connected_=false;clock_.stop();recovery_.attention();recoveryClock_.stop();setLinkState(CoreLinkState::Rejected,projected.error);if(onObservation)onObservation(std::nullopt);
     report(projected.error+" · refusing wallet integration/RPC mutations; client left intact");return;}
    if(!connected_){connected_=true;if(!recoveryBindingValid_&&!automaticRun_)captureRecoveryBinding();}
@@ -1042,8 +1053,9 @@ void CoreRuntime::inspect(){
     if(!walletManager_->ready())walletManager_->activate(profile_.genesisHash,profile_.chain,profile_.dataDirectory,profile_.walletName,runtimeDirectory_+"/wallet-view.json");
     ensurePeerBootstrap();
    if(!walletReady_&&!walletChecking_)ensureWallet(ownerEpoch);
-    inspectRpc("getconnectioncount",{},[this,ownerEpoch,observation=*projected.observation](QJsonValue peers,QString)mutable{
+    inspectRpc("getconnectioncount",{},[this,ownerEpoch,observation=*projected.observation](CoreRpcResult reply)mutable{
       if(!ownerEpoch.matches(epoch())||!processAlive())return;
+     const auto peers=reply.value;
      if(peers.isDouble()&&peers.toDouble()>=0&&peers.toInteger(-1)>=0&&double(peers.toInteger())==peers.toDouble())observation.peers=peers.toInteger();
       const auto publish=[this,ownerEpoch](const ChainObservation& value){
        if(!ownerEpoch.matches(epoch())||!processAlive())return;checking_=false;setLinkState(CoreLinkState::Ready);
@@ -1053,9 +1065,10 @@ void CoreRuntime::inspect(){
       };
       if(!peerBootstrap_){publish(observation);return;}
       const auto endpoint=peerBootstrap_->localEndpoint();
-      inspectRpc("getpeerinfo",{},[this,ownerEpoch,observation,endpoint,publish](QJsonValue value,QString error)mutable{
+      inspectRpc("getpeerinfo",{},[this,ownerEpoch,observation,endpoint,publish](CoreRpcResult reply)mutable{
        if(!ownerEpoch.matches(epoch())||!processAlive())return;
-       if(!error.isEmpty()||!value.isArray()||value.toArray().size()>512||!peerBootstrap_||peerBootstrap_->localEndpoint()!=endpoint){
+       const auto value=reply.value;
+       if(!reply.error.isEmpty()||!value.isArray()||value.toArray().size()>512||!peerBootstrap_||peerBootstrap_->localEndpoint()!=endpoint){
         observation.synchronizing.reset();publish(observation);return;
        }
        const auto peers=value.toArray();

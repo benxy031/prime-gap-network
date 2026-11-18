@@ -312,6 +312,11 @@ int main(int argc,char** argv) {
     if(inspectWallet)for(const auto* name:{"pgn_core_link_state","pgn_core_link_detail","pgn_core_link_transitions","pgn_wallet_frontend_loaded","pgn_wallet_frontend_error","pgn_wallet_genuine_page_count","pgn_wallet_embedded","pgn_wallet_embedded_pid","pgn_network_block_rows","pgn_network_leases","pgn_network_height","pgn_network_selected_transactions","pgn_network_ticket_width"})
      receipt.insert(QString::fromLatin1(name),QJsonValue::fromVariant(inspectWallet->property(name)));
     if(inspectWallet){
+     // Older installed updaters grant a bounded grace period for a verified
+     // -28 reported as rpc_unavailable. Keep that wire state for those clients.
+     const bool coreWarmingUp=receipt.value("pgn_core_link_state")=="warming_up";
+     receipt.insert("pgn_core_warming_up",coreWarmingUp);
+     if(coreWarmingUp)receipt.insert("pgn_core_link_state","rpc_unavailable");
      const auto* history=inspectWallet->findChild<QWidget*>("pgn-wallet-difficulty-history");if(!history)history=inspectWallet->findChild<QWidget*>("pgn-network-metrics-history");
      if(history){auto source=history->property("pgn_network_metrics_snapshot").toJsonObject();const auto points=source.take("points").toArray();receipt.insert("pgn_network_metrics_summary",source);receipt.insert("pgn_network_metrics_points",points.size());receipt.insert("pgn_network_metrics_last",points.isEmpty()?QJsonObject{}:points.last().toObject());receipt.insert("pgn_network_metrics_error",history->property("pgn_network_metrics_error").toString());receipt.insert("pgn_merit_plot_bounds",QJsonValue::fromVariant(history->property("pgn_merit_plot_bounds")));receipt.insert("pgn_rate_plot_bounds",QJsonValue::fromVariant(history->property("pgn_rate_plot_bounds")));}
      receipt.insert("pgn_wallet_difficulty_view_present",history!=nullptr);
@@ -436,7 +441,8 @@ int main(int argc,char** argv) {
    walletButton->setToolTip(online?"Verified Core connected":"Waiting for a fresh, verified Core response");
    walletButton->setProperty("pgn_core_online",online);
    if(!online){
-    const auto caption=condition==Condition::Connecting?QString("NETWORK · CONNECTING"):
+    const auto caption=condition==Condition::WarmingUp?QString("CORE · LOADING CHAIN DATA"):
+     condition==Condition::Connecting?QString("NETWORK · CONNECTING"):
      condition==Condition::Disconnected?QString("WALLET NODE · DISCONNECTED"):
      condition==Condition::Unverified?QString("CORE · IDENTITY NOT VERIFIED"):
      condition==Condition::Unavailable?QString("CORE READ UNAVAILABLE · RETRYING"):QString("NETWORK STATUS · REFRESHING");

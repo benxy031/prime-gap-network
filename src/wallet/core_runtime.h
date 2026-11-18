@@ -130,7 +130,8 @@ private:
  bool persistOwned();
  void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={},CoreRpcChannel channel=CoreRpcChannel::General);
  void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel=CoreRpcChannel::General);
- void inspectRpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,int timeoutMs=CoreInspectionTimeoutMs);
+ void inspectRpc(const QString&,const QJsonArray&,std::function<void(CoreRpcResult)>,int timeoutMs=CoreInspectionTimeoutMs);
+ void inspectFailed(const QString& operation,const CoreRpcResult&);
  WalletManager* walletManager_{};
  QString root_,runtimeDirectory_;CoreProfile profile_;CoreRpcChannels network_;
  qint64 pid_{};void* processHandle_{};
