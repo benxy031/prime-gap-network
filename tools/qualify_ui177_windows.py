@@ -485,6 +485,13 @@ try:
     assert diagnostic_context['installation']['running_program']['versions']['ui']=='2026.11.17.177'
     assert diagnostic_context['installation']['core']['observed_process_matches_owner']
     assert 'local_paths' not in diagnostic_context
+    # The QA-only owned shortcut writes to the program directory. The normal
+    # diagnostic button opens a save dialog in Documents. Preserve this test
+    # capture outside the signed cohort before checking its unchanged inventory.
+    assert diagnostic.is_file() and diagnostic.resolve() in paths
+    diagnostic.replace(E/'late-built-in-diagnostic.zip')
+    if diagnostic.parent == (new/'evidence').resolve():
+        diagnostic.parent.rmdir()
     new_pid=life.new_ui.pid;gui_command(life.new_ui,'--close-owned')
     for _ in range(80):
         if life.new_ui.exited():break
