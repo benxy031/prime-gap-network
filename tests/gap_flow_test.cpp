@@ -220,6 +220,15 @@ int main(int argc,char** argv){
  const auto reportState=[&](QString id){return QJsonObject{{"reports",QJsonArray{QJsonObject{{"request_id",id},{"block",QString(64,'d')},{"report_root",QString(64,'e')}}}}};};
  rail->bindTicketLookup([&](const QString& id,auto done){++lookups;require(id==request,"Wrong request sent to Core report lookup");done(reportState(QString(64,'f')),{});});rail->present(reportFrame);waitReply();
  require(!rail->property("pgn_ticket_landing_confirmed").toBool(),"Another ticket's report authorized chain ingress");
+ QImage complete(parent.size(),QImage::Format_ARGB32);parent.render(&complete);
+ require(rail->property("pgn_ticket_collection_hits").toJsonArray().isEmpty(),"Completed ticket still exposes old particle interaction");
+ const auto priorDiscoveries=rail->property("pgn_ticket_flow_received").toULongLong();
+ rail->present(frame({gold,row(55,29.)}));parent.render(&complete);
+ require(!rail->property("pgn_ticket_animation_active").toBool()
+         &&rail->property("pgn_ticket_flow_received").toULongLong()==priorDiscoveries
+         &&rail->property("pgn_ticket_collection_hits").toJsonArray().isEmpty(),
+         "A late search frame restored the completed ticket's particles");
+ rail->present(reportFrame);
  rail->bindTicketLookup([&](const QString&,auto done){++lookups;done(reportState(request),"Core branch changed");});waitReply();
  require(!rail->property("pgn_ticket_landing_confirmed").toBool(),"Failed branch verification authorized chain ingress");
  rail->bindTicketLookup([&](const QString&,auto done){++lookups;done(reportState(request),{});});waitReply();

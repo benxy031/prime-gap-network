@@ -35,7 +35,10 @@ public:
     static constexpr qint64 reportHandoffDuration=4200;
     void observe(const QJsonObject& frame,const QString& producer,qint64 now){
         const auto ticket=frame.value("ticket_id").toString();
-        if(!ticket.isEmpty()&&ticket!=ticket_){
+        const bool newTicket=!ticket.isEmpty()&&ticket!=ticket_;
+        audit_=frame.value("work_role")=="audit";
+        const bool reportReady=!ticket.isEmpty()&&!audit_&&frame.value("phase")=="Report ready";
+        if(newTicket||(reportReady&&!reportReady_)){
             QSet<QString> retired;
             for(auto node:collected_){
                 node.leaves=now;node.ticketTransition=true;retired.insert(node.gap.identity);
@@ -49,13 +52,15 @@ public:
             collected_.clear();ticket_=ticket;bestSnapshot_={};
             while(departing_.size()>256)departing_.removeFirst();
         }
-        searching_=frame.value("phase")=="Searching"&&!frame.value("source_stale").toBool();
-        audit_=frame.value("work_role")=="audit";
+        // Keep the handoff closed if a delayed frame or Best table update arrives.
+        reportReady_=reportReady||(!newTicket&&reportReady_);
+        searching_=frame.value("phase")=="Searching"&&!frame.value("source_stale").toBool()
+                   &&(audit_||!reportReady_);
         const double rate=frame.value("speed_rate").toDouble();
         moving_=searching_&&std::isfinite(rate)&&rate>0;
         activity_=moving_?std::clamp(std::log1p(rate/1e6)/std::log1p(1e6),.1,1.):0.;
         producer_=producer;lastObservation_=now;
-        if(audit_){expire(now);return;}
+        if(audit_||reportReady_){expire(now);return;}
         const auto target=frame.value("target_merit").toDouble();
         const auto threshold=std::isfinite(target)&&target>0?std::optional<double>(target):std::nullopt;
         auto rows=frame.value("record_pairs").toArray();
@@ -93,7 +98,7 @@ public:
             if(!lower.isEmpty()&&gap>0&&eligible_.size()<2048)eligible_.insert(lower+":"+QString::number(gap));}
     }
     void setVisibleBest(const QJsonObject& snapshot,qint64 now){
-        if(audit_||snapshot.value("ticket_id").toString()!=ticket_||snapshot==bestSnapshot_)return;
+        if(audit_||reportReady_||snapshot.value("ticket_id").toString()!=ticket_||snapshot==bestSnapshot_)return;
         bestSnapshot_=snapshot;QVector<CollectedGap> next;QSet<QString> retained;
         const double target=snapshot.value("target_merit").toDouble();
         const auto threshold=std::isfinite(target)&&target>0?std::optional<double>(target):std::nullopt;
@@ -145,7 +150,7 @@ public:
     qint64 reportConfirmed(const GapFlowEvent& event)const{return confirmedReports_.value(event.ticket(),-1);}
 private:
     QVector<GapFlowEvent> events_;QSet<QString> seen_,eligible_;QQueue<QString> order_;
-    QString producer_;double activity_{};qint64 lastObservation_{};bool initialized_{},searching_{},moving_{},audit_{};quint64 received_{},coalesced_{};
+    QString producer_;double activity_{};qint64 lastObservation_{};bool initialized_{},searching_{},moving_{},audit_{},reportReady_{};quint64 received_{},coalesced_{};
     QString ticket_;QJsonObject bestSnapshot_;QVector<CollectedGap> collected_,departing_;
     QHash<QString,qint64> confirmedReports_;QQueue<QString> confirmationOrder_;
 };
