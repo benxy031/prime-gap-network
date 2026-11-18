@@ -189,6 +189,7 @@ def verify_slow_core_handoff(current_code, expected, runtime_directory):
     if not profile_path.is_relative_to(QA.resolve()):
         assert profile_path.parent.name==GENESIS and profile_path.parent.parent.name=='testnet'
     owner_path=profile_path.with_name('wallet-owned.json')
+    original_owner=owner_path.read_bytes() if owner_path.is_file() else None
     prior=QA/'earlier-owned'
     if not prior.exists():
         copytree(base/'Core',prior/'Core')
@@ -292,6 +293,10 @@ def verify_slow_core_handoff(current_code, expected, runtime_directory):
         gate.server_close();bridge.join(timeout=5)
         previous.close();previous_owner.close()
         profile_path.write_bytes(original)
+        if original_owner is None:
+            owner_path.unlink(missing_ok=True)
+        else:
+            owner_path.write_bytes(original_owner)
     return dict(expected_handoff=expected,old_core_exited=expected,shutdown_requests=observed_stops)
 
 def baseline_progress(snapshot):
@@ -497,11 +502,6 @@ finally:
     out.close();err.close()
 assert result
 (E/'SIGNED-INSTALL-PASS.json').write_text(json.dumps(result,indent=2)+'\n')
-result['previous_exe_timeout_negative_control']=verify_slow_core_handoff(base,False,live['pgn_update_core_runtime_directory'])
-result['ordinary_portable_timeout_recovery']=verify_slow_core_handoff(new,True,live['pgn_update_core_runtime_directory'])
-(E/'CORE-HANDOFF-PASS.json').write_text(json.dumps({name:result[name] for name in (
-    'previous_exe_timeout_negative_control','ordinary_portable_timeout_recovery')},indent=2)+'\n')
-
 def collect_portable_diagnostic(owner,code):
     assert code.resolve().is_relative_to(QA.resolve())
     sections=['Wallet','Social','SocialMiners','Mining']
@@ -526,10 +526,21 @@ def collect_portable_diagnostic(owner,code):
     (E/'late-built-in-diagnostic.zip').write_bytes(diagnostic.read_bytes())
     return sections
 
+class RejectPortableStartup(Exception):
+    pass
+
 def verify_interrupted_replay_through_gui(current_code, runtime_directory):
     assert wallet_data.is_relative_to(QA.resolve())
     profile_path=(Path(runtime_directory)/'wallet-core.json').resolve(strict=True)
-    assert Path(json.loads(profile_path.read_bytes())['data_directory']).resolve()==wallet_data.resolve()
+    profile=json.loads(profile_path.read_bytes())
+    assert Path(profile['data_directory']).resolve()==wallet_data.resolve()
+    saved_owner=profile_path.with_name('wallet-owned.json')
+    if saved_owner.is_file():
+        binding=json.loads(saved_owner.read_bytes())
+        for field in ('executable_sha256','genesis_hash','rpc_port','peer_port','chain','frontend','wallet'):
+            assert profile[field]==binding[field],('portable baseline profile and its original owner differ',field)
+        for field in ('executable','data_directory'):
+            assert Path(profile[field]).resolve()==Path(binding[field]).resolve(),field
     partial=QA/'interrupted-legacy'
     retained=QA/'verified-updater-wallet'
     assert not partial.exists() and not retained.exists()
@@ -580,6 +591,10 @@ def verify_interrupted_replay_through_gui(current_code, runtime_directory):
             try:
                 state=owned_ipc(owner,'--inspect-owned')
                 pid=state.get('pgn_wallet_embedded_pid') or pid
+                if state.get('pgn_core_link_state')=='rejected':
+                    detail=baseline_progress(state)
+                    (E/'PORTABLE-REPLAY-FAILURE.json').write_text(json.dumps(detail,indent=2))
+                    raise RejectPortableStartup(detail['core_note'])
                 if wallet_attached(state):
                     chain=rpc(wallet_data,wallet_port,'getblockchaininfo',[],timeout=8)
                     if chain['blocks']>=interrupted['canonical_height']:
@@ -635,4 +650,9 @@ def verify_interrupted_replay_through_gui(current_code, runtime_directory):
 result['portable_interrupted_legacy']=verify_interrupted_replay_through_gui(new,live['pgn_update_core_runtime_directory'])
 result['diagnostic_opened_after_startup']=result['portable_interrupted_legacy']['diagnostic_opened_after_startup']
 result['sections']=result['portable_interrupted_legacy']['sections']
+result['previous_exe_timeout_negative_control']=verify_slow_core_handoff(base,False,live['pgn_update_core_runtime_directory'])
+result['ordinary_portable_timeout_recovery']=verify_slow_core_handoff(new,True,live['pgn_update_core_runtime_directory'])
+(E/'CORE-HANDOFF-PASS.json').write_text(json.dumps({name:result[name] for name in (
+    'previous_exe_timeout_negative_control','ordinary_portable_timeout_recovery')},indent=2)+'\n')
+
 (QA/'RESULT.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
