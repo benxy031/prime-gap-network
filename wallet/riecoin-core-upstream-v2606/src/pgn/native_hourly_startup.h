@@ -10,9 +10,11 @@
 namespace pgn::core {
 // Called before publishing block-index candidates or leaving chainstate load.
 // No block is reclassified, blessed or written by this read-only readiness gate.
-inline bool VerifyLoadedNativeHourlyTargets(Chainstate& active,std::string& failure)
+inline bool VerifyLoadedNativeHourlyTargets(Chainstate& active,std::string& failure,
+                                           bool& retained_forward_replay)
 {
     AssertLockHeld(cs_main);
+    retained_forward_replay=false;
     auto& manager=active.m_chainman;
     const auto genesis=manager.GetConsensus().hashGenesisBlock;
     const auto activation=ConfiguredNativeHourlyMerit(genesis);
@@ -68,7 +70,17 @@ inline bool VerifyLoadedNativeHourlyTargets(Chainstate& active,std::string& fail
             // side-prefix verifier stores only fully checked body records.
             auto& branch_archive=*const_cast<NativeRequestHistoryArchive*>(archive);
             side=BuildNativeAdmissionParent(active,*candidate->pprev,*science,bootstrap.get(),branch_archive,failure);
-            if(!side)return false;
+            if(!side){
+                // A partial replay can leave a checked active prefix and
+                // much higher retained descendants in the old block index.
+                // Route only that forward case through full chainstate replay.
+                // Never admit the checked prefix as a shortcut for a fork.
+                retained_forward_replay=
+                    failure=="pgn-native-side-prefix-data-or-resource-held"&&
+                    candidate->pprev->nHeight>tip->nHeight&&
+                    candidate->pprev->GetAncestor(tip->nHeight)==tip;
+                return false;
+            }
             const auto branch_range=ReadChainRangePolicy(*side->coins,*side->parent,branch_archive,science->schedule.archive,science->policy);
             if(!branch_range.policy){failure="hourly side-prefix range policy unavailable";return false;}
             const auto branch=pgn::discussion::ReadNativeHourlyHistory(*side->coins,*side->parent,*branch_range.policy,branch_archive,

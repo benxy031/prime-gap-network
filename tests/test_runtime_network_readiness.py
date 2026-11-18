@@ -1,4 +1,7 @@
 import pathlib,sys,unittest,hashlib
+from threading import Event
+from types import SimpleNamespace
+from unittest.mock import Mock
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'src/engine/runtime_host'))
 from horizon_sync_guard import synchronized,wait_for_network
 from horizon_coordination import confirm_candidate,active_candidate,native_header_hash,validate_intent
@@ -16,6 +19,38 @@ class ReadyRpc:
   if method=='getblockhash':return self.checkpoint
   raise AssertionError(method)
 class ReadinessTests(unittest.TestCase):
+ def transient_test_worker(self, rpc):
+  running=Event();running.set()
+  return SimpleNamespace(
+      quitting=Mock(is_set=Mock(return_value=False)),running=running,rpc=rpc,
+      args=SimpleNamespace(bootstrap_height=1242,bootstrap_hash='a'*64),
+      message=Mock(),
+  )
+ def test_timeout_during_readiness_keeps_controller_alive_until_verified(self):
+  rpc=ReadyRpc();original=rpc.call;failures=[TimeoutError('timed out'),CoreRpcError(-28,'Loading block index')]
+  def call(method,params=None):
+   if method=='getpeerinfo' and failures:raise failures.pop(0)
+   return original(method,params)
+  rpc.call=call
+  worker=self.transient_test_worker(rpc)
+  self.assertTrue(wait_for_network(worker))
+  self.assertEqual(worker.message.call_count,2)
+  self.assertTrue(all(entry.args[1]=='Waiting for connection' for entry in worker.message.call_args_list))
+  self.assertEqual([entry.args[0] for entry in worker.quitting.wait.call_args_list],[1,2])
+  self.assertTrue(worker.running.is_set())
+ def test_quit_during_readiness_retry_exits_without_work(self):
+  rpc=ReadyRpc();rpc.call=Mock(side_effect=TimeoutError('timed out'))
+  worker=self.transient_test_worker(rpc)
+  worker.quitting.is_set.side_effect=[False,True]
+  self.assertFalse(wait_for_network(worker))
+  rpc.call.assert_called_once_with('getblockchaininfo')
+ def test_permanent_readiness_failure_still_stops_without_retry(self):
+  for error in (CoreRpcError(-8,'Invalid argument'),RuntimeError('Local Core authentication refused')):
+   with self.subTest(error=error):
+    rpc=ReadyRpc();rpc.call=Mock(side_effect=error)
+    worker=self.transient_test_worker(rpc)
+    with self.assertRaises(type(error)):wait_for_network(worker)
+    worker.quitting.wait.assert_not_called()
  def test_native_scientific_header_identity_uses_riecoin_field_order(self):
   header=bytearray(HEADER);header[68:76]=(1793540000).to_bytes(8,'little');header[76:80]=(32*65536).to_bytes(4,'little')
   reordered=header[:68]+header[76:80]+header[68:76]+header[80:112]

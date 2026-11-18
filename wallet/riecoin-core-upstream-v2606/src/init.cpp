@@ -1849,13 +1849,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         do_reindex_chainstate,
         kernel_cache_sizes,
         args);
-    if (status == ChainstateLoadStatus::NATIVE_LEGACY_CACHE &&
+    if ((status == ChainstateLoadStatus::NATIVE_LEGACY_CACHE ||
+         status == ChainstateLoadStatus::NATIVE_FORWARD_REPLAY) &&
         !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node)) {
         // A Core20 validator may have rejected the new grouped-settlement
         // branch. Reconsider the common pre-activation ancestor, then replay
         // the retained blocks with the current, unchanged validation rules.
         // No wallet is loaded at this initialization stage.
-        {
+        if (status == ChainstateLoadStatus::NATIVE_LEGACY_CACHE) {
             LOCK(cs_main);
             auto& chainman = *Assert(node.chainman);
             auto& active = chainman.ActiveChainstate();
@@ -1865,8 +1866,10 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             if (!ancestor) return InitError(_("The local PGN upgrade anchor could not be verified"));
             active.ResetBlockFailureFlags(const_cast<CBlockIndex*>(ancestor));
             chainman.m_blockman.WriteBlockIndexDB();
+            LogInfo("Upgrading legacy PGN audit chainstate through complete block replay");
+        } else {
+            LogInfo("Completing interrupted PGN chainstate validation through full replay of retained blocks");
         }
-        LogInfo("Upgrading legacy PGN audit chainstate through complete block replay");
         uiInterface.InitMessage(_("Updating local PGN data; wallet files are preserved…"));
         do_reindex_chainstate = true;
         std::tie(status, error) = InitAndLoadChainstate(
