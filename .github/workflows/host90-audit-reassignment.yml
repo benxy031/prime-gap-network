@@ -1,0 +1,73 @@
+name: Build Host90 with verified audit reassignment recovery
+on:
+  push:
+    branches: [qualification/host90-audit-reassignment]
+permissions:
+  contents: read
+jobs:
+  windows-host:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - name: Install the pinned engine host freezer
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-engine-host.txt
+      - name: Replay assigned audit recovery and mining-cycle regressions
+        shell: pwsh
+        run: |
+          foreach ($suite in @("test_assigned_audit_recovery","test_audit_seal_recovery","test_audit_cycle_reassignment","test_audit_assignment_durability","test_publication_recovery47","test_archive_reconciliation","test_mining_flow_cycle")) {
+            python -B "tests/$suite.py"
+            if ($LASTEXITCODE -ne 0) { throw "Regression suite failed" }
+          }
+      - name: Build the actual engine host
+        run: python -B tools/build_horizon_engine_host.py --output host90
+      - name: Verify the binary, its exact sources, and its audit-only self-test
+        shell: python
+        run: |
+          import hashlib, json, subprocess
+          from pathlib import Path
+          out = Path('host90')
+          binary = out/'dist/horizon-engine-host/horizon-engine-host.exe'
+          manifest = json.loads((out/'ENGINE-HOST-SOURCE.json').read_bytes())
+          assert manifest['component_version'] == '2026.11.18.90'
+          assert manifest['executable_sha256'] == hashlib.sha256(binary.read_bytes()).hexdigest()
+          for path, expected in manifest['sources'].items():
+              assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == expected, path
+          assert '2026.11.18.90' in subprocess.check_output([str(binary), '--version'], text=True, timeout=20)
+          result = json.loads(subprocess.check_output([str(binary), '--audit-batch-self-test'], text=True, timeout=60))
+          assert result['passed'] and result['checks'] == 17 and result['no_network'] and result['no_child_processes']
+          assert not result['cpu_activated'] and not result['scientific_qualification']
+          import runpy, sys, types, unittest
+          from PyInstaller.archive.readers import CArchiveReader
+          repo = Path.cwd()
+          source_dir = repo/'src/engine/runtime_host'
+          sys.path[:0] = [str(source_dir), str(repo/'src/engine/shared_composite'), str(repo/'src/protocol')]
+          name = 'horizon_network_audits'
+          module = types.ModuleType(name)
+          module.__file__ = str(source_dir/f'{name}.py')
+          sys.modules[name] = module
+          exec(CArchiveReader(binary).open_embedded_archive('PYZ.pyz').extract(name), module.__dict__)
+          suite = runpy.run_path(str(repo/'tests/test_audit_cycle_reassignment.py'))['ReassignmentTests']
+          cases = ('test_expired_attempt_cannot_reopen_when_second_lookup_changes',
+                   'test_replay_refuses_match_of_slot_and_attempt_under_another_actor',
+                   'test_current_journal_orphan_republishes_exact_answer_without_compute')
+          assert unittest.TextTestRunner().run(unittest.TestSuite(suite(case) for case in cases)).wasSuccessful()
+          result['embedded_audit_module_verified'] = list(cases)
+          (out/'HOST-SELFTEST.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          (out/'SOURCE.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],text=True), encoding='utf-8')
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: horizon-engine-host90-windows
+          path: |
+            host90/dist/horizon-engine-host
+            host90/ENGINE-HOST-SOURCE.json
+            host90/ENGINE-HOST-SOURCE.sha256
+            host90/HOST-SELFTEST.json
+            host90/SOURCE.txt
+          if-no-files-found: error
+          retention-days: 7
