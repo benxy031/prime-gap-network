@@ -1,5 +1,6 @@
 #include "wallet/core_rpc_diagnostic_history.h"
 #include <QJsonDocument>
+#include <QNetworkReply>
 #include <iostream>
 #include <string_view>
 
@@ -28,6 +29,26 @@ int main(int argc,char** argv){
     for(int i=1;i<=96;++i)healthy.append({{"sequence",i},{"channel","inspection"},{"outcome","ok"}});
     if(healthy.snapshot().size()!=48||healthy.snapshot().first().toObject().value("sequence").toInt()!=49)
         return 3;
+    pgn::wallet::CoreRpcDiagnosticHistory link;
+    auto transport=[&](int sequence,const char* method,const char* outcome,int transportCode){
+        link.append({{"sequence",sequence},{"channel","inspection"},{"method",method},
+                     {"outcome",outcome},{"transport_code",transportCode}});
+    };
+    transport(1,"getconnectioncount","transport_error",QNetworkReply::TimeoutError);
+    transport(2,"getblockchaininfo","transport_error",QNetworkReply::ConnectionRefusedError);
+    transport(3,"getblockchaininfo","transport_error",QNetworkReply::TimeoutError);
+    transport(4,"getblockhash","total_timeout",0);
+    transport(5,"getblockhash","transport_error",QNetworkReply::TimeoutError);
+    transport(6,"getblockchaininfo","total_timeout",0);
+    for(int i=7;i<=124;++i)transport(i,"getblockchaininfo","ok",0);
+    const auto linkRows=link.snapshot();
+    if(linkRows.size()!=48||linkRows[0].toObject().value("sequence")!=1
+        ||linkRows[1].toObject().value("sequence")!=3
+        ||linkRows[2].toObject().value("sequence")!=4
+        ||linkRows[3].toObject().value("sequence")!=80){
+        std::cerr<<"An earlier auxiliary or non-timeout error masked a chain inspection timeout\n";
+        return 4;
+    }
     if(argc==2&&std::string_view(argv[1])=="--snapshot"){
         std::cout<<QJsonDocument(rows).toJson(QJsonDocument::Compact).constData();
     }else{
