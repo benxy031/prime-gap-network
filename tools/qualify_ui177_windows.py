@@ -387,7 +387,8 @@ try:
     candidate=store.prepare(install_client,components)
     for key in ('cohort','inventory_sha256','sequence','selected'):
         assert candidate[key]==prepared[key],key
-    new=Path(candidate['cohort']);manifest=inventory(new)[0]
+    new=Path(candidate['cohort'])
+    manifest,signed_files,_,_=inventory(new)
     versions={c['id']:c['version']for c in manifest['components']}
     dependency_probe=subprocess.run([str(new/'Core/pgn-core.exe'),'-version'],capture_output=True,timeout=15)
     assert dependency_probe.returncode==0,dependency_probe.stderr.decode(errors='replace')[-1000:]
@@ -490,14 +491,29 @@ try:
     # capture outside the signed cohort before checking its unchanged inventory.
     assert diagnostic.is_file() and diagnostic.resolve() in paths
     diagnostic.replace(E/'late-built-in-diagnostic.zip')
-    if diagnostic.parent == (new/'evidence').resolve():
-        diagnostic.parent.rmdir()
+    evidence_dir=(new/'evidence').resolve()
+    assert evidence_dir.parent==new.resolve()
+    if evidence_dir.is_dir():
+        pid=life.new_ui.pid
+        shown=seen+['DiagnosticsStart','DiagnosticsStop','DiagnosticsExport']
+        expected={f'owned-{action}-{pid}.png' for action in shown}
+        remaining=list(evidence_dir.iterdir())
+        assert len(remaining)<=len(expected) and all(
+            screenshot.is_file() and not screenshot.is_symlink() and screenshot.name in expected
+            for screenshot in remaining), [item.name for item in remaining[:16]]
+        for screenshot in remaining:
+            screenshot.replace(E/screenshot.name)
+        evidence_dir.rmdir()
     new_pid=life.new_ui.pid;gui_command(life.new_ui,'--close-owned')
     for _ in range(80):
         if life.new_ui.exited():break
         time.sleep(.25)
     assert life.new_ui.exited(),'New real GUI failed to close normally'
     stop_fixture_core(new/'Core/pgn-core.exe',new_core_pid,wallet_data,wallet_port)
+    declared=set(signed_files)|{'components.json'}
+    actual={item.relative_to(new).as_posix().casefold() for item in new.rglob('*') if item.is_file()}
+    extra=sorted(actual-declared);missing=sorted(declared-actual)
+    assert not extra and not missing,dict(undeclared=extra[:18],missing=missing[:18])
     current=store.current();reopened=CohortStore(QA/'installation',context,context_hash)
     assert reopened.current()==current and sha(sentinel)==saved
     result=dict(PASS=True,requested_components=components,selected_with_dependencies=candidate['selected'],
