@@ -1,0 +1,63 @@
+name: Defender scan of the exact private UI180 candidate
+on:
+  push:
+    branches: [qualification/ui180-defender-48]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+    steps:
+      - name: Download the already-qualified signed target
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download qa-ui180-win48 --repo $env:GITHUB_REPOSITORY --dir scan-fixture --pattern '*.components-48.zip'
+          if ($LASTEXITCODE -ne 0) { throw 'Exact signed target unavailable' }
+      - name: Check Defender using a text control and exact candidate files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = '08787d16e6159e0687a1310db57a551fda1a13730b42439893f7a81264c9cfc6'
+          $zip = Get-Item -LiteralPath "scan-fixture/$expected.components-48.zip"
+          if ((Get-FileHash -LiteralPath $zip.FullName).Hash.ToLowerInvariant() -ne $expected) { throw 'Signed target digest mismatch' }
+          $destination = (New-Item -ItemType Directory -Path scan-proof,scan-fixture/files)[1].FullName
+          $arc = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
+          try {
+            foreach ($path in @('payload/ui/PGN-Horizon.exe','payload/gpu/EngineRuntime/network/horizon-engine-host.exe')) {
+              $entry = $arc.GetEntry($path)
+              if (!$entry) { throw 'Unexpected archive inventory' }
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,(Join-Path $destination $entry.Name),$false)
+            }
+          } finally { $arc.Dispose() }
+          $defender = Join-Path $env:ProgramData 'Microsoft/Windows Defender/Platform'
+          $command = Get-ChildItem -LiteralPath $defender -Directory | Where-Object {$_.Name -match '^[0-9]+\.'} |
+            Sort-Object LastWriteTime -Descending | ForEach-Object {Join-Path $_.FullName 'MpCmdRun.exe'} |
+            Where-Object {Test-Path -LiteralPath $_} | Select-Object -First 1
+          $control = Join-Path $destination 'control.txt'
+          Set-Content -LiteralPath $control 'PGN Horizon QA text control'
+          $results = @()
+          if ($command) {
+            foreach ($path in @($control,(Join-Path $destination 'PGN-Horizon.exe'),(Join-Path $destination 'horizon-engine-host.exe'),$zip.FullName)) {
+              $name = [IO.Path]::GetFileName($path)
+              $log = "scan-proof/$name.log"
+              & $command -Scan -ScanType 3 -File $path -DisableRemediation *> $log
+              $code = $LASTEXITCODE
+              $results += @{name=$name;exit_code=$code;sha256=(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant()}
+              if ($code -ne 0) { break }
+            }
+          }
+          $pass = $results.Count -eq 4 -and @($results | Where-Object {$_.exit_code -ne 0}).Count -eq 0
+          @{PASS=$pass;scanner_available=[bool]$command;files=$results} |
+            ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 scan-proof/result.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ui180-defender-${{ github.run_id }}
+          path: scan-proof/
+          if-no-files-found: warn
+          retention-days: 7
