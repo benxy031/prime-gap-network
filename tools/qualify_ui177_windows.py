@@ -310,6 +310,12 @@ def baseline_progress(snapshot):
         heights=[int(match.group(1)) for row in useful if (match:=re.search(r'height=(\d+)',row))]
         core['native_height']=max(heights,default=0)
     return core
+
+def wallet_attached(state):
+    pid=state.get('pgn_wallet_embedded_pid')
+    return (state.get('pgn_core_link_state')=='ready' and
+            state.get('pgn_wallet_frontend_loaded') is True and type(pid) is int and pid>0)
+
 old,files,_,_=inventory(base)
 for name in ('config','data','cache','runtime'):(QA/name).mkdir()
 for name in ('QT_PLUGIN_PATH','QT_QPA_PLATFORM','QT_QPA_PLATFORM_PLUGIN_PATH'):os.environ.pop(name,None)
@@ -327,7 +333,7 @@ try:
     first=time.monotonic()
     last_progress=first
     highest=0
-    while state.get('pgn_core_link_state')!='ready':
+    while not wallet_attached(state):
         snapshot=baseline_progress(state)
         (E/'BASELINE-READINESS.json').write_text(json.dumps(snapshot,indent=2)+'\n',encoding='utf-8')
         height=snapshot.get('native_height',0)
@@ -414,6 +420,13 @@ try:
     process.wait(timeout=20);assert process.returncode==0 and life.ui.exited()
     assert store.current()['cohort']==str(new)
     live=owned_ipc(life.new_ui,'--inspect-owned')
+    attachment_deadline=time.monotonic()+35
+    while not wallet_attached(live):
+        if life.new_ui.exited() or time.monotonic()>=attachment_deadline:
+            (E/'AFTER-ATTACH-FAILURE.json').write_text(json.dumps(baseline_progress(live),indent=2))
+            raise AssertionError('Updated GUI did not attach its ready Core wallet')
+        time.sleep(.25)
+        live=owned_ipc(life.new_ui,'--inspect-owned')
     (E/'before.json').write_text(json.dumps(state,indent=2)+'\n')
     (E/'after.json').write_text(json.dumps(live,indent=2)+'\n')
     assert live['pgn_update_genesis']==GENESIS and Path(live['pgn_update_data_root']).resolve()==data.resolve(), 'Updated Windows data-root identity differs'
@@ -559,7 +572,7 @@ def verify_interrupted_replay_through_gui(current_code, runtime_directory):
             try:
                 state=owned_ipc(owner,'--inspect-owned')
                 pid=state.get('pgn_wallet_embedded_pid') or pid
-                if state.get('pgn_core_link_state')=='ready':
+                if wallet_attached(state):
                     chain=rpc(wallet_data,wallet_port,'getblockchaininfo',[],timeout=8)
                     if chain['blocks']>=interrupted['canonical_height']:
                         break
