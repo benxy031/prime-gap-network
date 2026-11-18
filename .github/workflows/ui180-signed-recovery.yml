@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download qa-ui180-win48 --repo $env:GITHUB_REPOSITORY --dir signed-candidate-48
+          gh release download qa-ui180-win48 --repo $env:GITHUB_REPOSITORY --dir signed-candidate-48 --pattern "qa-catalogue48-metadata.zip" --pattern "*.components-48.zip"
           if ($LASTEXITCODE -ne 0) { throw 'Qualification draft assets unavailable' }
       - name: Prepare pinned verification dependencies
         shell: pwsh
