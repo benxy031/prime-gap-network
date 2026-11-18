@@ -299,6 +299,10 @@ int main(int argc,char** argv) {
      if(auto* results=inspectCanvas->window()->findChild<QWidget*>("pgn-mining-results"))for(const auto* name:{"pgn_results_points","pgn_results_runs","pgn_results_best_rows","pgn_results_recent_rows","pgn_results_scope","pgn_results_loading","pgn_results_error","pgn_visible_best"})receipt.insert(QString::fromLatin1(name),QJsonValue::fromVariant(results->property(name)));
      if(auto* summary=inspectCanvas->window()->findChild<QWidget*>("pgn-session-statistics"))for(const auto* name:{"pgn_ticket_productivity","pgn_productivity_regions","pgn_summary_scope","pgn_summary_range_regions"})receipt.insert(QString::fromLatin1(name),QJsonValue::fromVariant(summary->property(name)));
      if(auto* network=inspectCanvas->window()->findChild<QLabel*>("pgn-global-network-status"))receipt.insert("pgn_global_network_status",network->text());
+     if(auto* notice=inspectCanvas->window()->findChild<QLabel*>("pgn-update-startup-notice")){
+      receipt.insert("pgn_update_startup_notice",notice->text());
+      receipt.insert("pgn_update_startup_notice_visible",notice->isVisible());
+     }
      receipt.insert("pgn_update_shutdown_error",inspectCanvas->window()->property("pgn_update_shutdown_error").toString());
      for(const auto* name:{"pgn_native_small_icon","pgn_native_large_icon","pgn_update_resume_error"})receipt.insert(name,QJsonValue::fromVariant(inspectCanvas->window()->property(name)));
      receipt.insert("pgn_update_resume_pending",QJsonValue::fromVariant(inspectCanvas->property("pgn_update_resume_pending")));
@@ -355,12 +359,10 @@ int main(int argc,char** argv) {
  pgn::app::HorizonUiLease scopeLease(pgn::app::mutableDataRoot(root)+"/.horizon-ui-"+pgn::wallet::installedCoreGenesis(root)+".lock");
  if(!scopeLease.error().isEmpty()){std::cerr<<scopeLease.error().toStdString()<<"\n";return 8;}
  if(!scopeLease.owned()){
-  if(updateSelection.preferRunning||!updateSelection.error.isEmpty())QMessageBox::information(nullptr,"Horizon is already running","A Horizon session is already running for these user data. This launch will activate that session. Close it normally, then launch this complete package again to use its components.");
   QLocalSocket existing;existing.connectToServer(scopeName);
   if(!existing.waitForConnected(1500)){std::cerr<<"The existing Horizon session could not be contacted\n";return 8;}
   existing.write(startupArguments.contains("--start-minimized")?"running\n":"activate\n");existing.flush();if(existing.bytesToWrite())existing.waitForBytesWritten(1000);return 0;
  }
- if(!updateSelection.error.isEmpty())QMessageBox::warning(nullptr,"Selected update needs repair",updateSelection.error+"\nThe selected update was not launched. This package will continue from its own code.");
  #ifndef Q_OS_WIN
  QLocalServer::removeServer(scopeName); // Safe only after exclusive ownership.
  #endif
@@ -952,7 +954,17 @@ int main(int argc,char** argv) {
   }
   return receipt;
  };
- box->addWidget(top);box->addWidget(major,1);
+ box->addWidget(top);
+ if(!updateSelection.error.isEmpty()){
+  auto* notice=new QLabel("Using this package because the saved update could not be opened.",shell);
+  notice->setObjectName("pgn-update-startup-notice");
+  notice->setTextFormat(Qt::PlainText);
+  notice->setWordWrap(true);
+  notice->setToolTip(updateSelection.error);
+  notice->setStyleSheet("QLabel{background:#1c211d;color:#e6bd64;padding:6px 14px;border-bottom:1px solid #514631;}");
+  box->addWidget(notice);
+ }
+ box->addWidget(major,1);
  auto* status=new QLabel("Connecting to the mining controller");inspectRuntimeStatus=status;status->setStyleSheet("font-size:12px;color:#9ab6c1;");
  status->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
  auto* hardwareNotice=new QLabel("GPU OBSERVATION PENDING");hardwareNotice->setObjectName("pgn-native-hardware-notice");
