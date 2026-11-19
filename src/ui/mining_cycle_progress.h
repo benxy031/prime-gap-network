@@ -35,7 +35,10 @@ inline bool retainedAuditPartitionBoundary(const QJsonObject& frame){
 
 // Disconnection and synchronization still remove expired current assignments.
 inline QJsonObject currentAssignmentPresentation(const QJsonObject& frame){
- if(frame.value("phase")!="Synchronizing"&&!frame.value("source_stale").toBool())return frame;
+ const auto phase = frame.value("phase");
+ // A connection-status packet can inherit the last sample's freshness flag.
+ if (phase != "Synchronizing" && phase != "Waiting for connection" && !frame.value("source_stale").toBool())
+  return frame;
  if(retainedAuditPartitionBoundary(frame)){
   auto retained=frame;
   for(const auto* key:{"speed_rate","average_rate","compute_tests_rate","eta_rate"})

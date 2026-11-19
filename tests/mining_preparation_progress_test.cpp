@@ -83,6 +83,22 @@ int main(int argc,char** argv){
    rail.present(pending);app.processEvents();
    check(!rail.property("pgn_ticket_progress_fraction").isValid(),"Stale worker frame still appeared as active progress");
   }
+  // The worker sends a phase-only packet while checking the saved lease.
+  // The UI merges it over the last visible assignment, including freshness.
+  auto checkingLease = search;
+  checkingLease["source_stale"] = false;
+  checkingLease["phase"] = "Waiting for connection";
+  checkingLease["message"] = "Waiting for Core to confirm the saved ticket lease";
+  const auto priorAssignment = checkingLease;
+  const auto awaitingCore = currentAssignmentPresentation(checkingLease);
+  check(!awaitingCore.contains("ticket_id") && !awaitingCore.contains("positions") && !awaitingCore.contains("audit_service"),
+        "Connection wait reused the previous assignment");
+  check(checkingLease == priorAssignment && awaitingCore.value("source_stale") == QJsonValue(true),
+        "Connection wait changed retained work or claimed it was current");
+  render(awaitingCore, "captures/connection-wait.png");
+  check(!rail.property("pgn_ticket_progress_fraction").isValid() &&
+        rail.property("pgn_ticket_display_phase").toString() == "Waiting for connection",
+        "Connection wait still presented active ticket progress");
   check(currentAssignmentPresentation(search)==search&&currentAssignmentPresentation(paused)==paused,"Valid searching or paused checkpoint changed");
   render(search,"captures/assignment-restored.png");check(rail.property("pgn_ticket_progress_fraction").isValid(),"Fresh verified assignment could not restore progress");
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";
