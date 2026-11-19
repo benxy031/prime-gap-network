@@ -369,6 +369,7 @@ bool CoreRuntime::processAlive(){
   readRecoveryLog(true);
   const bool known=confirmedExit&&exitKindAllowed&&faultEvidence_.knownDiskFull();
   const bool same=recoveryBindingValid_&&recoveryBindingMatches(readRecoveryStorage(profile_,runtimeDirectory_));
+  const auto databaseFailure=confirmedExit&&exitKindAllowed&&same?faultEvidence_.databaseFailure():CoreDatabaseFailure::None;
   ++identityGeneration_;pid_=0;processBirth_.clear();clock_.stop();connected_=false;checking_=false;stopping_=false;walletChecking_=walletReady_=false;
   peerBootstrap_.reset();walletManager_->invalidate();
   setLinkState(CoreLinkState::Stopped,"The owned Core process exited");
@@ -383,6 +384,13 @@ bool CoreRuntime::processAlive(){
    departedOwner_=departed;recoveryClock_.start();
    setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
    report("CORE WAITING FOR STORAGE · automatic recovery is armed");
+  }else if(databaseFailure!=CoreDatabaseFailure::None&&recovery_.state()!=CoreRecoveryPolicy::State::Suppressed){
+   recoveryClock_.stop();
+   const auto reason=databaseFailure==CoreDatabaseFailure::Chainstate?
+    QString("Core detected corruption in the local chainstate database. The saved blocks are needed to rebuild it."):
+    QString("Core detected corruption in the local block index. The index must be recovered before synchronization can resume.");
+   setLinkState(CoreLinkState::Stopped,reason);
+   report(reason);
   }else{
    recoveryClock_.stop();
    report(recovery_.state()==CoreRecoveryPolicy::State::Suppressed?

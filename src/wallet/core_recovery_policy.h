@@ -60,6 +60,8 @@ private:
  std::int64_t nextAttempt_{},lastProbe_{-1},readySince_{-1};
 };
 
+enum class CoreDatabaseFailure { None, Chainstate, BlockIndex };
+
 // Bounded incremental evidence from this owned run only. The caller binds the
 // file identity/offset and invalidates evidence on rotation, truncation or loss.
 class CoreFaultEvidence {
@@ -73,7 +75,10 @@ public:
   if(pending_.size()>8192){invalidate();return;}
   if(final&&!pending_.empty()){line(pending_);pending_.clear();}
  }
- bool knownDiskFull()const{return usable_&&disk_&&!otherFatal_&&shutdown_;}
+ bool knownDiskFull()const{return usable_&&disk_&&!otherFatal_&&!databaseCorruption_&&shutdown_;}
+ CoreDatabaseFailure databaseFailure()const{
+  return usable_&&!disk_&&!otherFatal_&&databaseCorruption_&&shutdown_?databaseFailure_:CoreDatabaseFailure::None;
+ }
  bool usable()const{return usable_;}
 private:
  void line(std::string_view text){
@@ -90,8 +95,26 @@ private:
    text=="A fatal internal error occurred, see debug.log for details: Disk space is too low!";
   if(disk){disk_=true;shutdown_=false;}
   if((prefix("A fatal internal error occurred")||prefix("Corrupt block found")||prefix("System error while "))&&!disk)otherFatal_=true;
-  if(text=="Shutdown done"&&disk_)shutdown_=true;
+  if(prefix("Fatal LevelDB error: Corruption:")){
+   databaseCorruption_=true;shutdown_=false;
+  }
+  if(databaseCorruption_){
+   CoreDatabaseFailure type=CoreDatabaseFailure::None;
+   if(text=="Error opening coins database.")type=CoreDatabaseFailure::Chainstate;
+   else if(text=="Error opening block database.")type=CoreDatabaseFailure::BlockIndex;
+   if(type!=CoreDatabaseFailure::None){
+    if(databaseFailure_!=CoreDatabaseFailure::None&&databaseFailure_!=type)otherFatal_=true;
+    databaseFailure_=type;
+   }
+  }
+  if(text=="Block index and chainstate loaded"){
+   databaseCorruption_=false;
+   databaseFailure_=CoreDatabaseFailure::None;
+  }
+  if(text=="Shutdown done"&&(disk_||databaseCorruption_))shutdown_=true;
  }
- bool usable_{true},disk_{},otherFatal_{},shutdown_{};std::string pending_;
+ bool usable_{true},disk_{},otherFatal_{},shutdown_{},databaseCorruption_{};
+ CoreDatabaseFailure databaseFailure_{CoreDatabaseFailure::None};
+ std::string pending_;
 };
 }

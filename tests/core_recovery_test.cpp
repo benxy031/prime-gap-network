@@ -65,6 +65,26 @@ void policyCases(){
 }
 void evidenceCases(){
  using Evidence=pgn::wallet::CoreFaultEvidence;
+ using Database=pgn::wallet::CoreDatabaseFailure;
+ const std::string corruption="2026-11-19T17:55:57Z [error] Fatal LevelDB error: Corruption: CURRENT points to a non-existent file\n";
+ const std::string shutdown="2026-11-19T17:55:57Z Shutdown done\n";
+ Evidence chain;
+ chain.feed(corruption);
+ chain.feed("2026-11-19T17:55:57Z Error opening coins database.\n");
+ need(chain.databaseFailure()==Database::None,"A live or unconfirmed process was diagnosed as a completed database failure");
+ chain.feed(shutdown,true);
+ need(chain.databaseFailure()==Database::Chainstate&&!chain.knownDiskFull(),"Chainstate corruption was lost or treated as disk exhaustion");
+ Evidence index;
+ index.feed(corruption+"Error opening block database.\n"+shutdown,true);
+ need(index.databaseFailure()==Database::BlockIndex,"Block index corruption was not classified");
+ index.invalidate();
+ need(index.databaseFailure()==Database::None,"Unbound or rotated log still supplied database evidence");
+ Evidence timeout;
+ timeout.feed("Core RPC read failed (4): Operation timed out\n"+shutdown,true);
+ need(timeout.databaseFailure()==Database::None,"An RPC timeout was diagnosed as database corruption");
+ Evidence healthy;
+ healthy.feed(corruption+"Error opening coins database.\nBlock index and chainstate loaded\n"+shutdown,true);
+ need(healthy.databaseFailure()==Database::None,"A successfully opened database retained a stale failure diagnosis");
  const std::string fatal="2026-11-11T20:25:14Z [error] Shutting down due to lack of disk space!\n";
  const std::string done="2026-11-11T20:25:16Z Shutdown done\n";
  Evidence split;split.feed(fatal.substr(0,31));split.feed(fatal.substr(31));
