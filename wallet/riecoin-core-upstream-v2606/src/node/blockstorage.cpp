@@ -1348,20 +1348,28 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
             FlatFilePos pos(nFile, 0);
             AutoFile file{chainman.m_blockman.OpenBlockFile(pos, /*fReadOnly=*/true)};
             if (file.IsNull()) {
-                break; // This error is logged in OpenBlockFile
+                chainman.GetNotifications().fatalError(_("Reindex could not open a retained block file."));
+                return;
             }
             LogInfo("Reindexing block file blk%05u.dat (%d%% complete)...", (unsigned int)nFile, nFile * 100 / total_files);
-            chainman.LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
+            const bool imported{chainman.LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent)};
             if (chainman.m_interrupt) {
                 LogInfo("Interrupt requested. Exit reindexing.");
                 return;
             }
+            if (!imported) {
+                chainman.GetNotifications().fatalError(_("Reindex could not verify the retained block history."));
+                return;
+            }
+        }
+        // For a new or pruned store, genesis may be absent from the scanned files.
+        if (!chainman.ActiveChainstate().LoadGenesisBlock()) {
+            chainman.GetNotifications().fatalError(_("Reindex could not initialize the pinned genesis block."));
+            return;
         }
         WITH_LOCK(::cs_main, chainman.m_blockman.m_block_tree_db->WriteReindexing(false));
         chainman.m_blockman.m_blockfiles_indexed = true;
         LogInfo("Reindexing finished");
-        // To avoid ending up in a situation without genesis block, re-try initializing (no-op if reindexing worked):
-        chainman.ActiveChainstate().LoadGenesisBlock();
     }
 
     // -loadblock=
@@ -1369,9 +1377,13 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
         AutoFile file{fsbridge::fopen(path, "rb")};
         if (!file.IsNull()) {
             LogInfo("Importing blocks file %s...", fs::PathToString(path));
-            chainman.LoadExternalBlockFile(file);
+            const bool imported{chainman.LoadExternalBlockFile(file)};
             if (chainman.m_interrupt) {
                 LogInfo("Interrupt requested. Exit block importing.");
+                return;
+            }
+            if (!imported) {
+                chainman.GetNotifications().fatalError(_("External block import stopped before reaching the end of the file."));
                 return;
             }
         } else {

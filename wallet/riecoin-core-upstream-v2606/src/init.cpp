@@ -2048,6 +2048,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         ScheduleBatchPriority();
         // Import blocks and ActivateBestChain()
         ImportBlocks(chainman, vImportFiles);
+        if (ShutdownRequested(node)) {
+            // A failed or interrupted import can stop before announcing any tip.
+            auto& notifications = *Assert(node.notifications);
+            WITH_LOCK(notifications.m_tip_block_mutex, notifications.m_tip_block_cv.notify_all());
+            return;
+        }
         WITH_LOCK(::cs_main, chainman.UpdateIBDStatus());
         if (args.GetBoolArg("-stopafterblockimport", DEFAULT_STOPAFTERBLOCKIMPORT)) {
             LogInfo("Stopping after block import");

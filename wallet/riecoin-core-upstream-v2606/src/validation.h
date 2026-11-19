@@ -865,7 +865,7 @@ public:
     /** Whether the chain state needs to be redownloaded due to lack of witness data */
     [[nodiscard]] bool NeedsRedownload() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** Ensures we have a genesis block in the block tree, possibly writing one to disk. */
-    bool LoadGenesisBlock();
+    bool LoadGenesisBlock(const FlatFilePos* existing_position = nullptr);
 
     /** Add a block to the candidate set if it has as much work as the current tip. */
     void TryAddBlockIndexCandidate(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1281,7 +1281,7 @@ public:
      *                                              unknown parent, key is parent block hash
      *                                              (only used for reindex)
      * */
-    void LoadExternalBlockFile(
+    bool LoadExternalBlockFile(
         AutoFile& file_in,
         FlatFilePos* dbp = nullptr,
         std::multimap<uint256, FlatFilePos>* blocks_with_unknown_parent = nullptr);

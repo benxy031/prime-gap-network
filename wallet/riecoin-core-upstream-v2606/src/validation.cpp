@@ -5403,7 +5403,7 @@ bool ChainstateManager::LoadBlockIndex()
     return true;
 }
 
-bool Chainstate::LoadGenesisBlock()
+bool Chainstate::LoadGenesisBlock(const FlatFilePos* existing_position)
 {
     LOCK(cs_main);
 
@@ -5438,10 +5438,16 @@ bool Chainstate::LoadGenesisBlock()
 
     try {
         const CBlock& block = params.GenesisBlock();
-        FlatFilePos blockPos{m_blockman.WriteBlock(block, 0)};
-        if (blockPos.IsNull()) {
-            LogError("%s: writing genesis block to disk failed\n", __func__);
-            return false;
+        FlatFilePos block_pos;
+        if (existing_position) {
+            block_pos = *existing_position;
+            m_blockman.UpdateBlockInfo(block, /*nHeight=*/0, block_pos);
+        } else {
+            block_pos = m_blockman.WriteBlock(block, /*nHeight=*/0);
+            if (block_pos.IsNull()) {
+                LogError("%s: writing genesis block to disk failed\n", __func__);
+                return false;
+            }
         }
         std::optional<arith_uint256> native_work;
         if(m_chainman.m_options.pgn_candidate_science_budget||m_chainman.m_options.pgn_candidate_bootstrap_budget){
@@ -5454,7 +5460,7 @@ bool Chainstate::LoadGenesisBlock()
             native_work=policy->bootstrap;
         }
         CBlockIndex* pindex = m_blockman.AddToBlockIndex(block, m_chainman.m_best_header,native_work);
-        m_chainman.ReceivedBlockTransactions(block, pindex, blockPos);
+        m_chainman.ReceivedBlockTransactions(block, pindex, block_pos);
         if(!recheck_genesis(pindex))return false;
     } catch (const std::runtime_error& e) {
         LogError("%s: failed to write genesis block: %s\n", __func__, e.what());
@@ -5464,7 +5470,7 @@ bool Chainstate::LoadGenesisBlock()
     return true;
 }
 
-void ChainstateManager::LoadExternalBlockFile(
+bool ChainstateManager::LoadExternalBlockFile(
     AutoFile& file_in,
     FlatFilePos* dbp,
     std::multimap<uint256, FlatFilePos>* blocks_with_unknown_parent)
@@ -5482,7 +5488,7 @@ void ChainstateManager::LoadExternalBlockFile(
         // such as a block fails to deserialize.
         uint64_t nRewind = blkdat.GetPos();
         while (!blkdat.eof()) {
-            if (m_interrupt) return;
+            if (m_interrupt) return false;
 
             blkdat.SetPos(nRewind);
             nRewind++; // start one byte further next time, in case of failure
@@ -5543,12 +5549,25 @@ void ChainstateManager::LoadExternalBlockFile(
                         blkdat >> TX_WITH_WITNESS(*pblock);
                         nRewind = blkdat.GetPos();
 
-                        BlockValidationState state;
-                        if (AcceptBlock(pblock, state, nullptr, true, dbp, nullptr)) {
-                            nLoaded++;
-                        }
-                        if (state.IsError()) {
-                            break;
+                        if (dbp && hash == params.GetConsensus().hashGenesisBlock) {
+                            // The pinned genesis has no parent or candidate proof. Reuse its
+                            // normal setup and bind it to the existing file without rewriting it.
+                            const auto& genesis = params.GenesisBlock();
+                            if (!std::ranges::equal(pblock->vtx, genesis.vtx,
+                                    [](const auto& left, const auto& right) { return *left == *right; })) {
+                                LogError("Reindex found an invalid body for the pinned genesis block");
+                                return false;
+                            }
+                            if (!ActiveChainstate().LoadGenesisBlock(dbp)) return false;
+                            ++nLoaded;
+                        } else {
+                            BlockValidationState state;
+                            if (AcceptBlock(pblock, state, nullptr, true, dbp, nullptr)) {
+                                ++nLoaded;
+                            } else if (state.IsError()) {
+                                LogError("Block import stopped at %s: %s", hash.ToString(), state.ToString());
+                                return false;
+                            }
                         }
                     } else if (hash != params.GetConsensus().hashGenesisBlock && pindex->nHeight % 1000 == 0) {
                         LogDebug(BCLog::REINDEX, "Block Import: already had block %s at height %d\n", hash.ToString(), pindex->nHeight);
@@ -5565,7 +5584,8 @@ void ChainstateManager::LoadExternalBlockFile(
                 if (hash == params.GetConsensus().hashGenesisBlock && WITH_LOCK(::cs_main, return ActiveHeight()) == -1) {
                     BlockValidationState state;
                     if (!ActiveChainstate().ActivateBestChain(state, nullptr)) {
-                        break;
+                        LogError("Block import could not activate genesis: %s", state.ToString());
+                        return false;
                     }
                 }
 
@@ -5578,8 +5598,8 @@ void ChainstateManager::LoadExternalBlockFile(
                     // called by concurrent network message processing. but, that is not
                     // reliable for the purpose of pruning while importing.
                     if (auto result{ActivateBestChains()}; !result) {
-                        LogDebug(BCLog::REINDEX, "%s\n", util::ErrorString(result).original);
-                        break;
+                        LogError("Block import could not activate the pruned chain: %s", util::ErrorString(result).original);
+                        return false;
                     }
                 }
 
@@ -5601,10 +5621,13 @@ void ChainstateManager::LoadExternalBlockFile(
                             const auto& block_hash{pblockrecursive->GetHash()};
                             LogDebug(BCLog::REINDEX, "%s: Processing out of order child %s of %s", __func__, block_hash.ToString(), head.ToString());
                             LOCK(cs_main);
-                            BlockValidationState dummy;
-                            if (AcceptBlock(pblockrecursive, dummy, nullptr, true, &it->second, nullptr)) {
-                                nLoaded++;
+                            BlockValidationState state;
+                            if (AcceptBlock(pblockrecursive, state, nullptr, true, &it->second, nullptr)) {
+                                ++nLoaded;
                                 queue.push_back(block_hash);
+                            } else if (state.IsError()) {
+                                LogError("Block import stopped at %s: %s", block_hash.ToString(), state.ToString());
+                                return false;
                             }
                         }
                         range.first++;
@@ -5628,9 +5651,11 @@ void ChainstateManager::LoadExternalBlockFile(
             }
         }
     } catch (const std::runtime_error& e) {
-        GetNotifications().fatalError(strprintf(_("System error while loading external block file: %s"), e.what()));
+        LogError("System error while loading external block file: %s", e.what());
+        return false;
     }
     LogInfo("Loaded %i blocks from external file in %dms", nLoaded, Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));
+    return true;
 }
 
 bool ChainstateManager::ShouldCheckBlockIndex() const
