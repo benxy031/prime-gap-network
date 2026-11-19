@@ -59,12 +59,7 @@ class AuthenticatedUpdates:
         self.cache_cleanup_warning = ''
         self._pins = set()
         self.cache = stage._cache_path(cache, context)
-        if self.cache.exists():
-            stage.require(stage._read_plain(self.cache / '.owner', 128) == MARKER,
-                          'Unowned update cache refused')
-        else:
-            self.cache.mkdir(parents=True, mode=0o700)
-            (self.cache / '.owner').write_bytes(MARKER)
+        self._initialize_cache()
         self.bootstrap, self.bootstrap_sha256 = bootstrap, bootstrap_sha256
         self.metadata_url, self.target_url = metadata_url, target_url
         self.fetcher = progress.ProgressFetcher(
@@ -87,6 +82,35 @@ class AuthenticatedUpdates:
         stage._plain_chain(self.targets)
         self.metadata.mkdir(parents=True, exist_ok=True)
         self.targets.mkdir(parents=True, exist_ok=True)
+
+    def _initialize_cache(self):
+        owner = self.cache / '.owner'
+        if not os.path.lexists(owner):
+            # A legacy updater could stop after mkdir and before writing its
+            # owner marker. rmdir admits only an empty directory.
+            try:
+                self.cache.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                if not os.path.lexists(owner):
+                    raise stage.StageError('Unowned update cache refused') from error
+            if not os.path.lexists(owner):
+                self.cache.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix='.pgn-cache-init-', dir=self.cache.parent) as folder:
+                    prepared = Path(folder) / 'cache'
+                    prepared.mkdir(mode=0o700)
+                    with (prepared / '.owner').open('xb') as stream:
+                        stream.write(MARKER)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    try:
+                        os.rename(prepared, self.cache)
+                    except OSError:
+                        # A concurrent updater may have published its cache.
+                        if not os.path.lexists(owner):
+                            raise
+        stage.require(stage._read_plain(owner, 128) == MARKER, 'Unowned update cache refused')
 
     def _cache_size(self):
         # Validate the complete tree before a reclamation can remove anything.

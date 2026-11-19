@@ -25,6 +25,45 @@ class Transport(FetcherInterface):
   yield self.files[url]
 
 class UpdateTests(unittest.TestCase):
+ def test_restart_recovers_a_cache_interrupted_before_ownership(self):
+  cache = self.root / 'cache'
+  cache.mkdir()
+  client = self.client()
+  receipt = client.prepare(['cpu'])
+  self.assertTrue(receipt['publisher_authenticated'])
+  self.assertEqual((Path(receipt['stage']) / 'payload/cpu/controller.exe').read_bytes(), self.pe)
+
+ def test_concurrent_cache_initialization_uses_the_same_owner(self):
+  from concurrent.futures import ThreadPoolExecutor
+  from threading import Barrier
+
+  cache = self.root / 'cache'
+  cache.mkdir()
+  ready = Barrier(2, timeout=5)
+  rename = os.rename
+
+  def publish(source, target):
+   if target == cache:
+    ready.wait()
+   return rename(source, target)
+
+  with patch('horizon_update_client.os.rename', side_effect=publish):
+   with ThreadPoolExecutor(max_workers=2) as workers:
+    clients = [workers.submit(self.client) for _ in range(2)]
+    self.assertEqual([result.result(timeout=7).cache for result in clients], [cache, cache])
+
+  self.assertTrue(self.client().refresh(['cpu'])['publisher_authenticated'])
+
+ def test_unowned_cache_with_existing_content_is_preserved(self):
+  cache = self.root / 'cache'
+  cache.mkdir()
+  previous = cache / 'unknown-file'
+  previous.write_bytes(b'KEEP')
+  with self.assertRaises(stage.StageError):
+   self.client()
+  self.assertEqual(list(cache.iterdir()), [previous])
+  self.assertEqual(previous.read_bytes(), b'KEEP')
+
  def test_selected_payload_requires_staging_space_before_archive_fetch(self):
   from types import SimpleNamespace
   from random import Random
