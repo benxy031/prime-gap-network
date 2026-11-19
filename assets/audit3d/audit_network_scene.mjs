@@ -2,6 +2,16 @@ import{AuditActivityModel,canCompleteLanding}from'./audit_activity_model.mjs';
 const entities=['michael','helel','boshel','kitabel'],model=new AuditActivityModel(),actor=document.querySelector('#actor');
 let scene,controllers=new Map(),ready=false,shown=false,lastRender=0,motionCarry=0,preview=false,latest=null,projection={};
 const motionStep=1/60, maxMotionFrame=.2;
+let frameRequest = null;
+function requestFrame() {
+ const tracing = layoutTrace && layoutTrace.samples.length < layoutTrace.limit;
+ if (frameRequest !== null || !ready || document.hidden || (!shown && !tracing)) return;
+ frameRequest = requestAnimationFrame(tick);
+}
+function stopFrame() {
+ if (frameRequest !== null) cancelAnimationFrame(frameRequest);
+ frameRequest = null;
+}
 function resetMotionClock(now=performance.now()){lastRender=now;motionCarry=0;}
 const targetHeights={michael:3.2,helel:3.17,boshel:1.84,kitabel:2.90},nameAnchors=new Map();let homeCamera,homeRotation;const restLayouts=new Map();let layoutQueued=false,layoutApplying=false,lastLayoutProjectionKey='',layoutEpoch=0;
 // Keep the fit goal separate from the projection actually rendering this frame.
@@ -28,9 +38,47 @@ async function revealTogether(){
 function meshBounds(root){scene.updateMatrixWorld(true);let box=null;root.traverse(n=>{if(!n.isMesh)return;if(n.isSkinnedMesh)n.computeBoundingBox();else n.geometry.computeBoundingBox();const local=n.isSkinnedMesh?n.boundingBox:n.geometry.boundingBox;if(local){const bounds=local.clone().applyMatrix4(n.matrixWorld);box=box?box.union(bounds):bounds}});return box}
 function normalizeActors(){const heights={},floor=-Math.max(...Object.values(targetHeights))/2+1.10;for(const entity of entities){const root=scene.getObjectByName('Actor'+entity[0].toUpperCase()+entity.slice(1));let bounds=meshBounds(root);if(!bounds)throw Error('Actor geometry missing '+entity);const original=bounds.max.y-bounds.min.y;root.scale.multiplyScalar(targetHeights[entity]/original);root.updateWorldMatrix(false,true);bounds=meshBounds(root);const position=root.getWorldPosition(root.position.clone());position.y+=floor-bounds.min.y;root.position.copy(root.parent.worldToLocal(position));root.updateWorldMatrix(false,true);bounds=meshBounds(root);heights[entity]={original_height:original,display_height:bounds.max.y-bounds.min.y};}window.__auditNetwork.worldHeights=heights}
 function native(value){window.chrome?.webview?.postMessage(JSON.stringify(value))}
-function names(){if(!scene)return;const camera=scene.getCamera();camera.updateWorldMatrix(true,false);const visible=[];
- for(const label of document.querySelectorAll('[data-entity-name]')){const entity=label.dataset.entityName,root=scene.getObjectByName('Actor'+entity[0].toUpperCase()+entity.slice(1)),anchor=nameAnchors.get(entity);if(!root||!anchor)continue;const point=root.localToWorld(anchor.clone()),v=point.clone().project(camera),x=(v.x+1)/2*actor.clientWidth,y=(1-v.y)/2*actor.clientHeight+1;label.style.visibility='hidden';if(v.z<-1||v.z>1||x<0||x>actor.clientWidth||y<0||y>document.body.clientHeight-20)continue;visible.push({label,x,y,distance:point.distanceTo(camera.getWorldPosition(point.clone()))})}
- visible.sort((a,b)=>a.x-b.x);for(let i=0;i<visible.length;i++){const entry=visible[i],gap=Math.min(i?entry.x-visible[i-1].x:Infinity,i+1<visible.length?visible[i+1].x-entry.x:Infinity),width=Math.min(120,gap*.88);if(width<64)continue;entry.label.style.width=width+'px';entry.label.style.left=entry.x+'px';entry.label.style.top=Math.min(entry.y+(['michael','helel'].includes(entry.label.dataset.entityName)?8:0),document.body.clientHeight-80)+'px';entry.label.style.visibility='visible';const state=controllers.get(entry.label.dataset.entityName)?.inspect(),working=String(!!state?.job&&!state.metrics.complete);if(entry.label.dataset.working!==working)entry.label.dataset.working=working}
+function names() {
+ if (!scene) return;
+ const camera = scene.getCamera();
+ camera.updateWorldMatrix(true, false);
+ const width = actor.clientWidth, height = actor.clientHeight, bodyHeight = document.body.clientHeight;
+ const labels = document.querySelectorAll('[data-entity-name]'), positions = [];
+ for (const label of labels) {
+  const entity = label.dataset.entityName;
+  const root = scene.getObjectByName('Actor' + entity[0].toUpperCase() + entity.slice(1));
+  const anchor = nameAnchors.get(entity);
+  if (!root || !anchor) continue;
+  const point = root.localToWorld(anchor.clone()).project(camera);
+  const x = (point.x + 1) / 2 * width, y = (1 - point.y) / 2 * height + 1;
+  if (point.z < -1 || point.z > 1 || x < 0 || x > width || y < 0 || y > bodyHeight - 20) continue;
+  positions.push({label, entity, x, y});
+ }
+ positions.sort((a, b) => a.x - b.x);
+ const placements = new Map();
+ for (let i = 0; i < positions.length; i++) {
+  const {label, entity, x, y} = positions[i];
+  const gap = Math.min(i ? x - positions[i - 1].x : Infinity,
+                       i + 1 < positions.length ? positions[i + 1].x - x : Infinity);
+  const labelWidth = Math.min(120, gap * .88);
+  if (labelWidth < 64) continue;
+  const top = Math.min(y + (entity === 'michael' || entity === 'helel' ? 8 : 0), bodyHeight - 80);
+  placements.set(label, {width: labelWidth + 'px', left: x + 'px', top: top + 'px'});
+ }
+ // Read geometry first. Applying an unchanged placement must not invalidate
+ // the layout of the next frame or briefly hide an already placed label.
+ for (const label of labels) {
+  const placement = placements.get(label);
+  const visibility = placement ? 'visible' : 'hidden';
+  if (label.style.visibility !== visibility) label.style.visibility = visibility;
+  if (!placement) continue;
+  for (const [property, value] of Object.entries(placement)) {
+   if (label.style[property] !== value) label.style[property] = value;
+  }
+  const state = controllers.get(label.dataset.entityName)?.inspect();
+  const working = String(!!state?.job && !state.metrics.complete);
+  if (label.dataset.working !== working) label.dataset.working = working;
+ }
 }
 function staging(requestFit=true){if(!scene||layoutApplying)return;layoutApplying=true;try{const camera=scene.getCamera();camera.updateWorldMatrix(true,false);homeCamera??=camera.getWorldPosition(camera.position.clone());homeRotation??=camera.getWorldQuaternion(camera.quaternion.clone());
  const v=(x=0,y=0,z=0)=>camera.position.clone().set(x,y,z),right=v(1,0,0).applyQuaternion(homeRotation),up=v(0,1,0).applyQuaternion(homeRotation),forward=v(0,0,-1).applyQuaternion(homeRotation),depth=13;
@@ -70,6 +118,7 @@ function display(snapshot){
  if(!preview)native({event:'watched',requests:[...new Set([...controllers.values()].map(c=>c.inspect().job?.request).filter(Boolean))]});
  window.__auditNetwork.observation=observed;
  revealTogether();
+ requestFrame();
 }
 async function initialize(){
  actor.pause();await actor.updateComplete;
@@ -82,10 +131,10 @@ async function initialize(){
 }
 window.pgnAuditApply=value=>{latest=value;if(ready)display(value)};
 window.pgnAuditProject=value=>{projection=value;for(const c of controllers.values()){const job=c.inspect().job;if(job)c.setEndpoints(points(job))}revealTogether()};
-window.pgnAuditSuspend=()=>{shown=false;preview=false;resetMotionClock();model.suspend();for(const controller of controllers.values())controller.clear();scene?.queueRender()};
+window.pgnAuditSuspend=()=>{shown=false;preview=false;stopFrame();resetMotionClock();model.suspend();for(const controller of controllers.values())controller.clear();scene?.queueRender()};
 const id=n=>n.toString(16).padStart(64,'0');
 function fixture(height,jobs,rebase=false){return{schema:'PGN_AUDIT_ACTIVITY_V1',state:{genesis:id(1),bestblockhash:id(height+100),height},scope:'global_counts_with_bounded_public_job_rows',rebase,truncated:false,totals:{active_reports:4,active_jobs:4,recent_reports:0,passed_audits_since_height:0,selected_active_reports:4,selected_recent_reports:0},audits:jobs.map((job,i)=>({request_id:id(i+1),audited:false,jobs:[job]}))}}
-function previewStart(nativePoints={}){model.suspend();for(const controller of controllers.values())controller.clear();shown=true;preview=true;const projections={},points=Object.values(nativePoints);const rows=entities.map((entity,i)=>{projections[id(i+1)]=points[i]||{source:{x:[.08,.43,.65,.83][i],y:1.08},target:{x:[.08,.43,.65,.83][i],y:1.08}};return{slot:0,attempt:0,state:'assigned',actor:'0014'+(i+1).toString(16).padStart(2,'0'),issued:2}});display({view:fixture(1,[],true),projection:projections,reset:true,preview:true});display({view:fixture(2,rows),projection:projections,preview:true});preview=true;return rows}
+function previewStart(nativePoints={}){resetMotionClock();model.suspend();for(const controller of controllers.values())controller.clear();shown=true;preview=true;const projections={},points=Object.values(nativePoints);const rows=entities.map((entity,i)=>{projections[id(i+1)]=points[i]||{source:{x:[.08,.43,.65,.83][i],y:1.08},target:{x:[.08,.43,.65,.83][i],y:1.08}};return{slot:0,attempt:0,state:'assigned',actor:'0014'+(i+1).toString(16).padStart(2,'0'),issued:2}});display({view:fixture(1,[],true),projection:projections,reset:true,preview:true});display({view:fixture(2,rows),projection:projections,preview:true});preview=true;return rows}
 window.pgnAuditPreview=points=>{previewStart(points);window.__auditNetwork.previewStarted=performance.now()};
 window.__auditNetwork={resizeVersion:'PROJECTION-01',get ready(){return ready},controllers,model,apply:display,suspend:window.pgnAuditSuspend,observation:null,inspect:()=>[...controllers.values()].map(c=>c.inspect())};
 window.pgnAuditProbe=async()=>{
@@ -119,8 +168,12 @@ window.pgnAuditTrajectoryProbe=async()=>{
 };
 let dragging=false,home={theta:0,phi:84*Math.PI/180,radius:13};actor.addEventListener('pointerdown',()=>{dragging=true});for(const e of['pointerup','pointercancel','lostpointercapture'])actor.addEventListener(e,()=>{dragging=false});
 actor.addEventListener('camera-change',()=>{syncLayoutProjection();names()});
-document.addEventListener('visibilitychange',()=>resetMotionClock());
+document.addEventListener('visibilitychange',()=>{
+ resetMotionClock();
+ if (!document.hidden) requestFrame();
+});
 function tick(now){
+ frameRequest = null;
  if(ready&&shown&&!document.hidden){
   syncLayoutProjection();
   // Keep collision steps identical across frame rates. A long stall cannot
@@ -140,8 +193,9 @@ function tick(now){
   if(!dragging){const orbit=actor.getCameraOrbit(),k=1-Math.exp(-dt*4),theta=orbit.theta+(home.theta-orbit.theta)*k,phi=orbit.phi+(home.phi-orbit.phi)*k;actor.cameraOrbit=`${theta}rad ${phi}rad ${home.radius}m`}
   names();
  }else resetMotionClock(now);
- captureLayoutTrace(now);requestAnimationFrame(tick)
-}requestAnimationFrame(tick);
+ if (!document.hidden) captureLayoutTrace(now);
+ requestFrame();
+}
 actor.addEventListener('load',()=>initialize().catch(e=>native({event:'error',message:String(e)})));if(actor.loaded)initialize().catch(e=>native({event:'error',message:String(e)}));
 
 window.pgnProjectedActorBounds=()=>{const camera=scene.getCamera();return entities.map(entity=>{const root=scene.getObjectByName("Actor"+entity[0].toUpperCase()+entity.slice(1)),b=meshBounds(root),p=root.position.clone(),xy=[];for(const x of[b.min.x,b.max.x])for(const y of[b.min.y,b.max.y])for(const z of[b.min.z,b.max.z]){const v=p.clone().set(x,y,z).project(camera);xy.push({x:(v.x+1)*actor.clientWidth/2,y:(1-v.y)*actor.clientHeight/2})}return{entity,left:Math.min(...xy.map(v=>v.x)),right:Math.max(...xy.map(v=>v.x)),top:Math.min(...xy.map(v=>v.y)),bottom:Math.max(...xy.map(v=>v.y))}})};
@@ -149,7 +203,7 @@ window.pgnProjectedActorBounds=()=>{const camera=scene.getCamera();return entiti
 // Opt-in CPU/DOM telemetry for a real slow/fast splitter trajectory. It neither
 // changes the frame rate nor skins the meshes while sampling.
 let layoutTrace=null;
-window.pgnAuditResizeTraceStart=(limit=600)=>{layoutTrace={limit:Math.max(2,Math.min(1200,Number(limit)||600)),started:performance.now(),meshScansAtStart:window.__auditNetwork.layoutMeshScans,samples:[]};return{ready,limit:layoutTrace.limit}};
+window.pgnAuditResizeTraceStart=(limit=600)=>{layoutTrace={limit:Math.max(2,Math.min(1200,Number(limit)||600)),started:performance.now(),meshScansAtStart:window.__auditNetwork.layoutMeshScans,samples:[]};requestFrame();return{ready,limit:layoutTrace.limit}};
 function captureLayoutTrace(now){if(!layoutTrace||!ready||layoutTrace.samples.length>=layoutTrace.limit)return;const camera=scene.getCamera(),rect=actor.getBoundingClientRect(),plan=auditProjectionLayoutPlan({width:actor.clientWidth,height:actor.clientHeight,bodyHeight:document.body.clientHeight,widths:entities.map(n=>restLayouts.get(n).width)},camera.projectionMatrix.elements),points=[];
  for(const[i,entity]of entities.entries()){const root=scene.getObjectByName('Actor'+entity[0].toUpperCase()+entity.slice(1)),anchor=nameAnchors.get(entity),world=root.localToWorld(anchor.clone()),p=world.clone().project(camera),label=document.querySelector(`[data-entity-name="${entity}"]`),r=label?.getBoundingClientRect();points.push({entity,x:(p.x+1)*actor.clientWidth/2,y:(1-p.y)*actor.clientHeight/2,idealX:actor.clientWidth/2+plan.centers[i]*actor.clientWidth/(2*13*plan.tanFov*plan.renderAspect),labelVisible:label?.style.visibility==='visible',labelX:r?r.left+r.width/2-rect.left:null,labelY:r?r.top-rect.top:null,world:world.toArray()})}
  layoutTrace.samples.push({t:now-layoutTrace.started,width:actor.clientWidth,height:actor.clientHeight,bodyHeight:document.body.clientHeight,renderFov:plan.renderFov,renderAspect:plan.renderAspect,layoutEpoch,projectionKey:layoutProjectionKey(camera),committedProjectionKey:lastLayoutProjectionKey,points});
