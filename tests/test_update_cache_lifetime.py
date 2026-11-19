@@ -62,10 +62,12 @@ class CacheLifetimeTests(unittest.TestCase):
         self.assertEqual(independent.read_bytes(), self.pe)
         for p, raw in history.items(): self.assertEqual(p.read_bytes(), raw)
 
-    def test_first_check_retires_old_helper_leftovers_even_below_budget(self):
+    def test_check_retires_previous_bundle_artifacts_even_below_budget(self):
         client = self.client(); receipt = client.prepare(['cpu'])
         self.assertLess(self.size(client.cache), client_module.MAX_CACHE)
-        history = {p:p.read_bytes() for p in client.metadata.rglob('*') if p.is_file()}
+        history = {p:p.read_bytes() for p in client.metadata.rglob('*') if p.is_file() and p.name.endswith('root.json')}
+        self.manifest['sequence'] += 1
+        self.publish(version=2)
         view = client.refresh(['cpu'])
         self.assertTrue(view['publisher_authenticated']); self.assertEqual(view['warning'], '')
         self.assertFalse(Path(receipt['stage']).exists())

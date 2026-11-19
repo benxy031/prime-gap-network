@@ -25,6 +25,52 @@ class Transport(FetcherInterface):
   yield self.files[url]
 
 class UpdateTests(unittest.TestCase):
+ def test_selected_payload_requires_staging_space_before_archive_fetch(self):
+  from types import SimpleNamespace
+  from random import Random
+  self.pe += Random(42).randbytes(16 * 1024) + b'\x00' * (48 * 1024)
+  row = self.manifest['components'][0]['files'][0]
+  row.update(bytes=len(self.pe), sha256=digest(self.pe))
+  self.publish(compression=zipfile.ZIP_DEFLATED)
+  client = self.client()
+  client.refresh(['cpu'])
+  archive_url = self.target + 'components.zip'
+  archive_size = len(self.transport.files[archive_url])
+  free = 16 * 1024 * 1024 + 2 * archive_size + 4096
+  self.assertLess(free, 16 * 1024 * 1024 + archive_size + len(self.pe))
+  with patch.object(self.transport, '_fetch', wraps=self.transport._fetch) as fetch:
+   with patch('shutil.disk_usage', return_value=SimpleNamespace(free=free)):
+    with self.assertRaisesRegex(stage.StageError, 'Insufficient staging disk space'):
+     client.prepare(['cpu'])
+   self.assertNotIn(archive_url, [call.args[0] for call in fetch.call_args_list])
+   self.assertFalse(list(client.targets.glob('*-components.zip')))
+  result = client.prepare(['cpu'])
+  self.assertEqual((Path(result['stage']) / row['path']).read_bytes(), self.pe)
+
+ def test_restart_reuses_verified_stage_when_cached_archive_has_gone(self):
+  client = self.client()
+  before = client.prepare(['cpu'])
+  archive, = client.targets.glob('*-components.zip')
+  archive.unlink()
+  archive_url = self.target + 'components.zip'
+  del self.transport.files[archive_url]
+  with patch.object(self.transport, '_fetch', wraps=self.transport._fetch) as fetch:
+   after = self.client().prepare(['cpu'])
+   self.assertNotIn(archive_url, [call.args[0] for call in fetch.call_args_list])
+  self.assertEqual(after, before)
+  self.assertFalse(list(client.targets.glob('*-components.zip')))
+
+ def test_missing_archive_does_not_authorize_tampered_prepared_code(self):
+  client = self.client()
+  receipt = client.prepare(['cpu'])
+  archive, = client.targets.glob('*-components.zip')
+  archive.unlink()
+  payload = Path(receipt['stage']) / self.manifest['components'][0]['primary']
+  payload.write_bytes(self.pe[:-1] + b'x')
+  with self.assertRaisesRegex(stage.StageError, 'Staged payload changed'):
+   self.client().prepare(['cpu'])
+
+
  def test_measured_progress_retains_authentication_and_exact_component_bytes(self):
   import horizon_update_progress as progress
   events=[];progress.configure(events.append)
@@ -91,9 +137,9 @@ class UpdateTests(unittest.TestCase):
  def tearDown(self):
   self.assertEqual(self.sentinel.read_bytes(),b'PRIVATE SENTINEL NOT READ BY UPDATER');self.tmp.cleanup()
  def raw(self,metadata,role):metadata.sign(self.signers[role]);return metadata.to_bytes(JSONSerializer(compact=True))
- def publish(self,version=1,expired=False,bad_signature=False,archive_manifest=None):
+ def publish(self,version=1,expired=False,bad_signature=False,archive_manifest=None,compression=zipfile.ZIP_STORED):
   payload=io.BytesIO()
-  with zipfile.ZipFile(payload,'w')as z:z.writestr('component-bundle.json',json.dumps(archive_manifest or self.manifest));z.writestr(self.manifest['components'][0]['primary'],self.pe)
+  with zipfile.ZipFile(payload,'w',compression=compression)as z:z.writestr('component-bundle.json',json.dumps(archive_manifest or self.manifest));z.writestr(self.manifest['components'][0]['primary'],self.pe)
   archive=payload.getvalue();catalog=json.dumps(dict(schema='PGN_AUTHENTICATED_UPDATE_CATALOG_V1',bundle_target='components.zip',manifest=self.manifest)).encode()
   catalog_name='components.json' if self.context['platform']=='windows-x86_64' else 'components-linux-x86_64.json'
   targets=Metadata(Targets(version=version,expires=self.expires));targets.signed.targets={n:TargetFile.from_data(n,v,['sha256'])for n,v in [(catalog_name,catalog),('components.zip',archive)]}
@@ -167,7 +213,9 @@ class UpdateTests(unittest.TestCase):
   self.assertEqual(attempts,2)
   self.assertEqual(self.sentinel.read_bytes(),b'PRIVATE SENTINEL NOT READ BY UPDATER')
  def test_incomplete_cached_download_is_repaired_and_reverified(self):
-  client=self.client();client.prepare(['cpu'])
+  client=self.client();receipt=client.prepare(['cpu'])
+  with locked_cache(client.cache):
+   client._discard_stage(Path(receipt['stage']).parent)
   payload=next(client.targets.glob('*-components.zip'));payload.write_bytes(b'INCOMPLETE DOWNLOAD')
   result=client.prepare(['cpu'])
   self.assertTrue(result['publisher_authenticated']);self.assertEqual(client.cache_repairs,['components.zip'])

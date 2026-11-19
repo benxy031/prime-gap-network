@@ -30,6 +30,9 @@ class CliTests(unittest.TestCase):
    self.request['context']=deepcopy(self.request['context']);self.request['context']['installed']=deepcopy(base.context['installed'])
    component=self.fixture.manifest['components'][0];component['primary']='payload/cpu/EngineRuntime/cpu/horizon-cpu-controller.exe';component['files'][0]['path']=component['primary'];component['abi']='qa.1';self.fixture.publish()
    first=self.call();self.assertTrue(first['publisher_authenticated']);self.assertEqual(len(calls),1)
+   archive,=Path(self.request['cache']).glob('*/targets/*-components.zip')
+   archive.unlink()
+   del self.fixture.transport.files[self.fixture.target+'components.zip']
    self.request.update(action='install',activation={'fixture':'owned-lifecycle'})
    class Lifecycle:
     def __init__(self,*args):pass

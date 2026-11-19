@@ -8,6 +8,8 @@ import hashlib
 import errno
 import json
 import os
+import shutil
+import tempfile
 import uuid
 from contextlib import contextmanager
 from itertools import combinations
@@ -27,6 +29,7 @@ MAX_CATALOG = 128 * 1024
 # enforced separately. One in-flight update may need more than this target.
 MAX_CACHE = 1024 * 1024 * 1024
 MAX_TARGET = 512 * 1024 * 1024
+SPACE_RESERVE = 16 * 1024 * 1024
 MARKER = b'PGN_AUTHENTICATED_UPDATE_CACHE_V1\n'
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,180}\Z')
 
@@ -143,7 +146,6 @@ class AuthenticatedUpdates:
         return receipt_bytes
 
     def _discard_interrupted_gc(self, path):
-        import shutil
         stage.require(path.parent == self.cache and
                       re.fullmatch(r'\.pending-gc-[0-9a-f]{32}', path.name),
                       'Unsafe cache cleanup target')
@@ -232,13 +234,17 @@ class AuthenticatedUpdates:
                            snapshot_max_length=262144, targets_max_length=1048576,
                            app_user_agent='PGN-Horizon-Updater'))
 
-    def _download(self, updater, name, maximum, *, reclaim=True):
+    def _signed_target(self, updater, name, maximum):
         stage.require(type(name) is str and NAME.fullmatch(name), 'Flat bounded target name required')
         target = updater.get_targetinfo(name)
         stage.require(target is not None and type(target.length) is int
                       and 0 < target.length <= maximum
                       and stage.DIGEST.fullmatch(target.hashes.get('sha256', '')),
                       'Signed target length/SHA256 unavailable or outside bounds')
+        return target
+
+    def _download(self, updater, name, maximum, *, reclaim=True, staged_bytes=0):
+        target = self._signed_target(updater, name, maximum)
         destination = self.targets / (target.hashes['sha256'] + '-' + name)
         stage._plain_chain(destination)
         self._pins.add(destination)
@@ -255,8 +261,16 @@ class AuthenticatedUpdates:
                 stage._plain_chain(destination)
                 destination.unlink()
                 self.cache_repairs.append(name)
-        if not destination.exists():
-            import shutil,tempfile
+        cached = destination.exists()
+        if staged_bytes:
+            # At extraction the archive still occupies its target volume.
+            # Use the signed payload size before any archive transfer. Stage
+            # materialization rechecks actual free space and counts its metadata.
+            archive_on_staging_volume = not cached and self.cache.stat().st_dev == self.targets.stat().st_dev
+            required = staged_bytes + (target.length if archive_on_staging_volume else 0)
+            stage.require(shutil.disk_usage(self.cache).free >= required + SPACE_RESERVE,
+                          'Insufficient staging disk space; free space and retry')
+        if not cached:
             # TUF first downloads into its temporary volume, verifies that
             # file, then copies it into the cache. Two folders on one volume
             # therefore consume two target lengths at the peak, not one.
@@ -267,7 +281,7 @@ class AuthenticatedUpdates:
                 entry[0] += target.length
                 entry[1] = min(entry[1], shutil.disk_usage(folder).free)
             for required, free in volumes.values():
-                stage.require(free >= required + 16*1024*1024,
+                stage.require(free >= required + SPACE_RESERVE,
                               'Insufficient download disk space; free space and retry')
             if name.endswith('.zip'):progress.report('download',completed=0,total=target.length,force=True)
             self.fetcher.target_length=target.length if name.endswith('.zip')else 0
@@ -376,8 +390,9 @@ class AuthenticatedUpdates:
     def _prepare_locked(self, selected):
         self._cache_size()
         updater = self._updater()
-        catalog, manifest, _, _, target = self._catalog(updater, selected)
-        archive, artifact = self._download(updater, catalog['bundle_target'], MAX_TARGET)
+        catalog, manifest, components, chosen, target = self._catalog(updater, selected)
+        bundle_name = catalog['bundle_target']
+        artifact = self._signed_target(updater, bundle_name, MAX_TARGET)
         selection = sorted(set(selected))
         key = self._prepared_key(artifact.hashes['sha256'], selection)
         stage_cache = self.cache / ('s-'+key[:20])
@@ -389,18 +404,19 @@ class AuthenticatedUpdates:
             folder = stage._plain_chain(old['stage'])
             stage.require(folder.parent == stage_cache, 'Retained stage escaped its namespace')
             plan = stage.verify_stage(folder, old['manifest_sha256'], self.context, self.context_sha256)
+            # Current signed metadata still names this exact archive. The
+            # stage's inventory and catalogue are rechecked independently.
             stage.require(plan['archive_sha256'] == artifact.hashes['sha256']
                           and plan['requested'] == selection, 'Retained stage binding changed')
         else:
-            _, components, files, chosen = stage._manifest(
-                json.dumps(manifest, separators=(',', ':')).encode(), self.context, selection)
-            names = {f['path'] for c in chosen for f in components[c]['files']}
+            staged_bytes = sum(f['bytes'] for c in chosen for f in components[c]['files'])
             # A crash may leave a complete extraction without its receipt.
             # Rebuild that disposable extraction under the cache lock; do
             # not mistake an orphan directory for a prepared installation.
             if stage_cache.exists():
                 self._discard_stage(stage_cache)
-            self._quota(sum(files[n]['bytes'] for n in names) + 2 * MAX_CATALOG)
+            self._quota(staged_bytes + 2 * MAX_CATALOG)
+            archive, _ = self._download(updater, bundle_name, MAX_TARGET, staged_bytes=staged_bytes)
             if not stage_cache.exists():
                 stage_cache.parent.mkdir(parents=True, exist_ok=True)
                 stage.init_cache(stage_cache, self.context)
