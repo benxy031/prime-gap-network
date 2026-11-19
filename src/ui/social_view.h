@@ -40,6 +40,7 @@ private:
     social::Services services_;social::Identity identity_;social::DraftStore store_;social::Drafts drafts_;
     quint64 sendEpoch_{};
     QMap<QString,social::Drafts> pending_;
+    std::array<std::optional<social::Snapshot>,5> leaderboardCache_;
     std::array<Page,4> pages_;QTabWidget* tabs_{};QLabel *account_{},*network_{},*status_{};QTimer autosave_;
     bool dirty_{},loadFailed_{},loadingDraft_{},chatPreedit_{};QString loadError_,replyId_,replyPostId_;
     int sortColumn_{1};bool sortDescending_{true};
@@ -55,6 +56,7 @@ private:
     void updateChatSend();void sendChat();
     void openRead(int index);void openComposer(int index,bool reply=false);void back(int index);void previewPublication(int index=1);
     void showDetail(int index,bool preserveScroll=false);void filter(int index);void renderMiners();void renderList(int index);
+    void selectLeaderboardWindow(int window);
     void read(int index,bool more=false);void present(int index,const social::Snapshot& snapshot,bool append);
     void updateAccess();void updateStatus();void pageState(int index,QString state,QString message,QString detail={});
     bool eventFilter(QObject* object,QEvent* event)override;

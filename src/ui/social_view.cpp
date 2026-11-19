@@ -139,7 +139,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
             p.ranking->verticalHeader()->hide();p.ranking->setEditTriggers(QAbstractItemView::NoEditTriggers);p.ranking->setSelectionBehavior(QAbstractItemView::SelectRows);
             p.ranking->setSelectionMode(QAbstractItemView::SingleSelection);p.ranking->setWordWrap(false);p.ranking->verticalHeader()->setMinimumSectionSize(36);p.ranking->verticalHeader()->setMaximumSectionSize(36);p.ranking->verticalHeader()->setDefaultSectionSize(36);
             p.dataSlot->addWidget(p.ranking);
-             connect(p.filter,&QComboBox::currentIndexChanged,this,[this]{auto& q=pages_[3];++q.generation;q.busy=q.loaded=false;q.nextCursor.clear();q.miners.clear();q.leaderboardPeriod.reset();q.windowInfo->setText(q.filter->currentIndex()==1?"UTC interval loading…":QString{});renderMiners();updateAccess();read(3);});
+             connect(p.filter,&QComboBox::currentIndexChanged,this,&SocialView::selectLeaderboardWindow);
         }else{
         p.list=i==0?new SocialChatList:new QListWidget;p.list->setWordWrap(true);p.list->setMouseTracking(true);p.list->viewport()->setAttribute(Qt::WA_Hover,true);p.list->setObjectName(QString("pgn-social-list-%1").arg(i));p.list->setAccessibleName(i==0?"Global message chronology":i==1?"Publication feed":"Forum topics");
             p.list->setItemDelegate(new SocialEntryDelegate(i,p.list));p.list->setMouseTracking(true);
@@ -316,6 +316,7 @@ void SocialView::setIdentity(social::Identity identity){
     if(identity_.valid()){loadError_=store_.load(identity_,drafts_);loadFailed_=!loadError_.isEmpty();const auto key=store_.path(identity_);if(pending_.contains(key)){drafts_=pending_.value(key);dirty_=true;}else if(pending_.size()>=64){loadFailed_=true;loadError_="Recover pending drafts before editing another identity.";}}
     for(auto& p:pages_){++p.generation;++p.threadGeneration;p.threadBusy=false;if(p.thread)p.thread->clear();p.loaded=p.busy=p.replyMode=false;p.entries.clear();p.miners.clear();p.selectedId.clear();p.nextCursor.clear();p.chatHistoryGeneration.clear();p.observedUtc={};p.leaderboardPeriod.reset();if(p.windowInfo){p.windowInfo->clear();p.windowInfo->setToolTip({});}
         if(p.list){QSignalBlocker block(p.list);p.list->clear();}if(p.detail)p.detail->clear();if(p.ranking)p.ranking->setRowCount(0);if(p.journey)p.journey->setCurrentIndex(0);}
+    leaderboardCache_={};
     pages_[3].utcRefreshAttemptMs=0;static_cast<LeaderboardTable*>(pages_[3].ranking)->showLargestGap(false);
     {QSignalBlocker block(pages_[3].filter);if(pages_[3].filter->currentIndex()>1)pages_[3].filter->setCurrentIndex(0);}
     for(const auto* id:{"week","month","hour"})if(auto* button=findChild<QPushButton*>("pgn-social-period-"+QString::fromLatin1(id)))button->hide();
@@ -422,6 +423,24 @@ void SocialView::filter(int i){
     if(i==3&&p.loaded)p.count->setText(p.count->text()+" · Sorted by "+p.ranking->horizontalHeaderItem(sortColumn_)->text()+(sortDescending_?" (descending)":" (ascending)"));
     p.more->setEnabled(identity_.valid()&&bool(services_.read)&&!p.busy&&!p.nextCursor.isEmpty()&&total<LoadedLimit);
 }
+void SocialView::selectLeaderboardWindow(int index){
+    if(index<0||static_cast<size_t>(index)>=leaderboardCache_.size())return;
+    auto& page=pages_[3];
+    ++page.generation;page.busy=page.loaded=false;page.nextCursor.clear();page.miners.clear();page.leaderboardPeriod.reset();
+    page.windowInfo->clear();page.windowInfo->setToolTip({});
+    const auto window=static_cast<social::Window>(index);
+    const auto& cached=leaderboardCache_.at(index);
+    const auto now=QDateTime::currentSecsSinceEpoch();
+    const auto end=cached&&cached->leaderboardPeriod&&cached->leaderboardPeriod->utcStart?
+        social::leaderboardWindowEnd(window,*cached->leaderboardPeriod->utcStart):std::nullopt;
+    if(cached&&(window==social::Window::AllTime||(end&&now<*end))){
+        present(3,*cached,false);
+    }else{
+        if(window!=social::Window::AllTime)page.windowInfo->setText("UTC interval loading…");
+        renderMiners();
+    }
+    updateAccess();read(3);
+}
 void SocialView::refresh(){read(tabs_->currentIndex());}
 void SocialView::refreshExpiredLeaderboardWindow(){
     auto& p=pages_[3];if(!isVisible()||tabs_->currentIndex()!=3||p.busy||!p.loaded||!p.leaderboardPeriod||!p.leaderboardPeriod->utcStart)return;
@@ -434,7 +453,7 @@ void SocialView::refreshExpiredLeaderboardWindow(){
 void SocialView::read(int i,bool more){
     auto& p=pages_[i];const int total=i==3?p.miners.size():p.entries.size();
     if(!identity_.valid()||!services_.read||p.busy||(more&&(p.nextCursor.isEmpty()||total>=LoadedLimit)))return;
-    p.busy=true;const auto generation=++p.generation;p.refresh->setEnabled(false);p.more->setEnabled(false);pageState(i,"loading",more?"Loading more "+QString(nouns[i])+"…":"Loading "+QString(nouns[i])+"…");
+    p.busy=true;const auto generation=++p.generation;p.refresh->setEnabled(false);p.more->setEnabled(false);pageState(i,"loading",more?"Loading more "+QString(nouns[i])+"…":i==3&&p.loaded?"Updating ranking…":"Loading "+QString(nouns[i])+"…");
     const social::ReadRequest request{static_cast<social::Section>(i),identity_,i==3?static_cast<social::Window>(p.filter->currentIndex()):social::Window::AllTime,more?p.nextCursor:QString{},more?qMin(100,LoadedLimit-total):100,i==0?channel_:QString{}};
     const QPointer<SocialView> weak(this);
     services_.read(request,[weak,i,generation,request,more](social::Snapshot data,QString error){
@@ -451,6 +470,10 @@ void SocialView::read(int i,bool more){
             if((i==3?p.miners.size()+data.miners.size():p.entries.size()+data.entries.size())>LoadedLimit)error="Loaded data limit reached. Refine the filter or refresh.";}
         if(!error.isEmpty()){if(i==0){p.canSend=false;p.sendWhy=error;weak->access_.reset();weak->updateChatSend();}weak->pageState(i,"error","Unable to load "+QString(nouns[i])+" · "+error.left(130)+(p.loaded?" · previous snapshot retained":" · retry available"),error);
             if(!p.loaded){p.empty->setText("Unable to load "+QString(nouns[i])+". Use Refresh to retry.");p.dataSlot->setCurrentIndex(1);}weak->filter(i);return;}
+        if(i==3&&!more){
+            auto& cached=weak->leaderboardCache_.at(static_cast<int>(request.window));
+            cached=data;cached->access.reset();
+        }
         weak->present(i,data,more);
     });
 }

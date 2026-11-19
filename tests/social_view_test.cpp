@@ -244,7 +244,8 @@ int main(int argc,char** argv){
         for(int row=0;row<grid->rowCount();++row)check(grid->item(row,0)->data(Qt::UserRole+180).toBool()==(grid->item(row,0)->data(Qt::UserRole).toString()=="missing"),"Self-row highlight inferred from name or another identity");
         today->setFocus();key(today,Qt::Key_Space);app.processEvents();check(today->isChecked()&&!total->isChecked()&&calls.last().request.window==social::Window::Day,"Keyboard Today button bypassed real UTC query");
         const auto stale=calls.last();total->click();app.processEvents();check(total->isChecked()&&!today->isChecked()&&calls.last().request.window==social::Window::AllTime,"Total button bypassed real period reset");
-        stale.reply(response,{});check(grid->rowCount()==0,"Old period callback repopulated new period");
+        check(grid->rowCount()==4,"Cached Total rows disappeared while waiting for Core");
+        stale.reply(response,{});check(grid->rowCount()==4,"Old period callback replaced the cached Total snapshot");
         response=snapshot(calls.last().request);response.miners=miners();calls.last().reply(response,{});app.processEvents();
         auto* search=find<QLineEdit>(ranking,"pgn-social-search-3");search->setText("homonym");app.processEvents();int shown=0;for(int row=0;row<grid->rowCount();++row)shown+=!grid->isRowHidden(row);check(shown==2,"Loaded search collapsed homonyms or stopped filtering");
         search->clear();ranking.resize(1920,1080);app.processEvents();check(grid->width()>=ranking.width()-60&&grid->horizontalScrollBar()->maximum()==0,"Large ranking does not fill its workspace or hid metrics");
