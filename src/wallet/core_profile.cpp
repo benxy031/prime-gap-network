@@ -5,7 +5,30 @@
 #include <QRegularExpression>
 #include <QJsonArray>
 #include <QDateTime>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 namespace pgn::wallet {
+
+#ifdef Q_OS_WIN
+namespace {
+QString windowsFinalImagePath(const QString& path){
+ if(!QFileInfo(path).isAbsolute())return {};
+ auto native=QDir::toNativeSeparators(path);
+ if(!native.startsWith("\\\\?\\"))
+  native=native.startsWith("\\\\")?QString("\\\\?\\UNC\\")+native.mid(2):QString("\\\\?\\")+native;
+ const auto handle=CreateFileW(reinterpret_cast<const wchar_t*>(native.utf16()),FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,0,nullptr);
+ if(handle==INVALID_HANDLE_VALUE)return {};
+ wchar_t resolved[32768];const auto length=GetFinalPathNameByHandleW(handle,resolved,32768,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+ CloseHandle(handle);
+ return length>0&&length<32768?QString::fromWCharArray(resolved,length):QString{};
+}
+}
+#endif
 QJsonObject coreLaunchIntent(const CoreProfile& p,const QString& transaction,const QString& utc){
  auto intent=coreOwnershipBinding(p,0,{});intent.remove("pid");intent.remove("birth");
  intent.insert("schema","pgn-core-launch-intent-1");intent.insert("transaction",transaction);intent.insert("utc",utc);
@@ -31,9 +54,17 @@ QString verifyCoreOwnership(const CoreProfile& p,const QJsonObject& saved,qint64
                             const QString& birth,const QString& observedImage){
  if(pid<=0||birth.isEmpty()||saved!=coreOwnershipBinding(p,pid,birth))
   return "Saved Core process ownership does not match this deployment/creation epoch";
- if(QFileInfo(observedImage).canonicalFilePath().compare(QFileInfo(p.executable).canonicalFilePath(),Qt::CaseInsensitive)!=0)
-  return "Saved Core process image does not match the pinned executable";
- return {};
+ const auto expectedPath=QFileInfo(p.executable).canonicalFilePath();
+ const auto observedPath=QFileInfo(observedImage).canonicalFilePath();
+ if(!expectedPath.isEmpty()&&observedPath.compare(expectedPath,Qt::CaseInsensitive)==0)return {};
+#ifdef Q_OS_WIN
+ // A process launched from a mapped drive can report its UNC image name.
+ // Windows resolves both open files before exact path comparison.
+ const auto expectedFinal=windowsFinalImagePath(p.executable);
+ const auto observedFinal=windowsFinalImagePath(observedImage);
+ if(!expectedFinal.isEmpty()&&observedFinal.compare(expectedFinal,Qt::CaseInsensitive)==0)return {};
+#endif
+ return "Saved Core process image does not match the pinned executable";
 }
 QString verifyCoreOwnershipForAbsenceProbe(const CoreProfile& p,const QJsonObject& saved,qint64 pid,const QString& birth){
  const auto strict=verifyCoreOwnership(p,saved,pid,birth,p.executable);if(strict.isEmpty())return {};
