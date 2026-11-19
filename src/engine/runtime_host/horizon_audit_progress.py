@@ -73,6 +73,7 @@ class WholeAuditPresentation:
         self.cpu_only = cpu_only
         self.identity = None
         self.parts = {}
+        self.aggregated_scope = None
         self.metadata = {}
         self.last_progress = None
         self.prior_retry_at = 0
@@ -105,6 +106,7 @@ class WholeAuditPresentation:
             try:
                 snapshot = dict(part, ticket_id=partition_identity(audit, part))
                 self.parts[index] = retained_scope(self.ticket_root, snapshot, cpu_only=self.cpu_only)
+                self.aggregated_scope = None
             except (OSError, ValueError, KeyError, TypeError, BufferError, SqliteError):
                 # Missing files and archive transitions affect display only.
                 # Keep the verified positional prefix and retry bounded reads.
@@ -114,6 +116,7 @@ class WholeAuditPresentation:
         if self.identity != item['audit_id']:
             self.identity = item['audit_id']
             self.parts.clear()
+            self.aggregated_scope = None
             self.metadata.clear()
             self.last_progress = None
             self.prior_retry_at = 0
@@ -125,8 +128,9 @@ class WholeAuditPresentation:
             for key in ('bits', 'minimum_gap', 'target_merit', 'source_device'):
                 if key in source:self.metadata[key] = source[key]
             scope = source.get('scopes', {}).get('ticket')
-            if scope:
+            if scope and scope != self.parts.get(item['part_index']):
                 self.parts[item['part_index']] = deepcopy(scope)
+                self.aggregated_scope = None
         elif self.last_progress is not None and self.last_progress[0] == part:
             # A missing read is not a new position. A fresh validated rewind
             # still replaces the retained position when it arrives.
@@ -135,7 +139,9 @@ class WholeAuditPresentation:
         if self.parts:
             scopes = dict(value.get('scopes', {}))
             value['scopes'] = scopes
-            scopes['ticket'] = self.aggregate()
+            if self.aggregated_scope is None:
+                self.aggregated_scope = self.aggregate()
+            scopes['ticket'] = deepcopy(self.aggregated_scope)
         return value
 
     def aggregate(self):

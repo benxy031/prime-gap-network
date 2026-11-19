@@ -27,6 +27,24 @@ class AuditProgressTests(unittest.TestCase):
             current=str(int(item['part_start'])+n), positions=str(n), phase=phase,
             speed_rate=30, eta_rate=30, source_stale=False, source_age_ns='0')
 
+    def test_repeated_frames_only_rebuild_results_when_a_scope_changes(self):
+        state = WholeAuditPresentation()
+        part = self.item(0)
+        source = self.result_sample(part, 2)
+        with patch.object(state, 'aggregate', wraps=state.aggregate) as calculate:
+            first = state.frame(part, source)
+            first['scopes']['ticket']['statistics']['count_total'] = -1
+            faster = state.frame(part, dict(source, speed_rate=600))
+            paused = state.frame(part, paused=True)
+            self.assertEqual(faster['speed_rate'], 600)
+            self.assertEqual(paused['phase'], 'Paused')
+            self.assertEqual(faster['scopes']['ticket'], paused['scopes']['ticket'])
+            self.assertEqual(paused['scopes']['ticket']['statistics']['count_total'], 2)
+            self.assertEqual(calculate.call_count, 1)
+            updated = state.frame(part, self.result_sample(part, 3))
+            self.assertEqual(updated['scopes']['ticket']['statistics']['count_total'], 3)
+            self.assertEqual(calculate.call_count, 2)
+
     def test_all_internal_boundaries_keep_one_identity_and_do_not_complete_early(self):
         frames=[]
         for i,n in enumerate([100,200,300,400,500]):
