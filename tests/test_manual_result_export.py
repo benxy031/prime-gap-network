@@ -38,6 +38,17 @@ class ManualResultExportTests(unittest.TestCase):
   with zipfile.ZipFile(self.output)as z:
    self.assertEqual(json.loads(z.read('manifest.json'))['unavailable_ticket_ids'],[old.name])
    self.assertEqual(len(z.read('legacy-summary/retained-best.csv').splitlines()),2)
+ def test_oversized_legacy_tail_keeps_the_previous_export(self):
+  self.ticket(count=2)
+  export(self.root,GENESIS,self.output)
+  previous=self.output.read_bytes()
+  legacy,_,_=self.ticket('2',2**94+10**14+1,count=100)
+  (legacy/'scientific-gaps.jsonl.gz').unlink()
+  with patch('horizon_result_export.MAX_OUTPUT',len(previous)):
+   with self.assertRaisesRegex(ValueError,'Manual export exceeds'):
+    export(self.root,GENESIS,self.output)
+  self.assertEqual(self.output.read_bytes(),previous)
+  self.assertEqual(set(self.root.iterdir()),{self.output,self.root/'tickets'})
  def test_no_completed_source_creates_no_empty_success_archive(self):
   (self.root/'tickets').mkdir()
   with self.assertRaisesRegex(ValueError,'No completed'):export(self.root,GENESIS,self.output)
