@@ -154,6 +154,7 @@ def inspect_installations(locations, observed_pid):
                          'startup_failed', 'activation_failed', 'recovered_previous'):
                 records['activation_state'] = stage
 
+    core_data = None
     if runtime is not None:
         profile, _ = document(runtime / 'wallet-core.json')
         owner, _ = document(runtime / 'wallet-owned.json')
@@ -172,11 +173,17 @@ def inspect_installations(locations, observed_pid):
             'configured_port_matches_owner': type(profile.get('rpc_port')) is int and profile['rpc_port'] == owner.get('rpc_port'),
             'observed_process_matches_owner': type(observed_pid) is int and observed_pid > 0 and str(observed_pid) == owner.get('pid'),
             'configured_data_state': status(core_data),
+            'startup_transactions': {
+                'pending_setup': status(runtime / 'wallet-pending-setup.json'),
+                'rebind': status(runtime / 'wallet-core-rebind.json'),
+                'launch_intent': status(runtime / 'wallet-launch-intent.json'),
+            },
         }
     records['free_mib'] = {}
     update_cache = store.parent / 'cache' if store is not None else None
     volumes = (('program', app), ('installation', store), ('update_cache', update_cache),
-               ('application_data', data), ('temporary', _local_path(tempfile.gettempdir())))
+               ('application_data', data), ('core_runtime', runtime), ('core_data', core_data),
+               ('temporary', _local_path(tempfile.gettempdir())))
     for name, root in volumes:
         if status(root) == 'directory':
             try:

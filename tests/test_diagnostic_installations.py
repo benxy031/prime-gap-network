@@ -3,9 +3,11 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/engine/runtime_host'))
@@ -89,6 +91,34 @@ class DiagnosticInstallationsTests(unittest.TestCase):
         self.assertFalse(install['core']['configured_program_matches_owner'])
         self.assertFalse(install['core']['configured_port_matches_owner'])
         self.assertIn('temporary', install['free_mib'])
+
+    def test_export_distinguishes_core_storage_and_unfinished_startup(self):
+        core_data = self.root / 'core-data-on-other-volume'
+        core_data.mkdir()
+        self.write_json(self.runtime / 'wallet-core.json', {'data_directory': str(core_data)})
+        (self.runtime / 'wallet-launch-intent.json').write_bytes(b'INERT LAUNCH CONTENT')
+        (self.runtime / 'wallet-core-rebind.json').write_bytes(b'INERT REBIND CONTENT')
+        raw = json.dumps(dict(schema='PGN_DIAGNOSTIC_CAPTURE_V1', samples=[{}], context={})).encode()
+
+        real_disk_usage = shutil.disk_usage
+
+        def probe_volume(directory):
+            if directory == core_data:
+                return real_disk_usage(directory)._replace(free=12 * 1024 * 1024)
+            return real_disk_usage(directory)
+
+        with patch('horizon_diagnostics_install.shutil.disk_usage', side_effect=probe_volume):
+            payload = export(raw, self.locations)
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            data = archive.read('diagnostics.json')
+        self.assertNotIn(b'core-data-on-other-volume', data)
+        self.assertNotIn(b'INERT', data)
+        result = json.loads(data)['context']['installation']
+        self.assertEqual(result['free_mib']['core_data'], 12)
+        self.assertIn('core_runtime', result['free_mib'])
+        self.assertEqual(result['core']['startup_transactions'], {
+            'pending_setup': 'missing', 'rebind': 'file', 'launch_intent': 'file',
+        })
 
     def test_portable_baseline_with_a_removed_folder_is_distinguishable(self):
         self.pointer.update(cohort=str(self.root / 'removed'), previous=None)
