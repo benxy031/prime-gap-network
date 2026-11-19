@@ -41,6 +41,21 @@ def digest(data):
 # Shared OS lock also protects staging/installation writers across crashes.
 locked_cache = stage.owned_lock
 
+class WindowsCacheUpdater(Updater):
+    def _update_root_symlink(self):
+        # Windows shares can refuse root metadata links even when the cache
+        # is writable. Keep TUF's verified root history and atomically write
+        # the same current root to the conventional non-versioned path.
+        version = self._trusted_set.root.version
+        current = Path(self._dir, 'root_history', f'{version}.root.json')
+        root = stage._read_plain(current, self.config.root_max_length)
+        alias = Path(self._dir, 'root.json')
+        if (alias.is_file() and not stage._linked(alias) and alias.stat().st_size == len(root)
+                and stage._read_plain(alias, len(root)) == root):
+            return
+        self._persist_metadata('root', root)
+
+
 class AuthenticatedUpdates:
     def __init__(self, cache, bootstrap, bootstrap_sha256, metadata_url,
                  target_url, context, context_sha256, *, fetcher=None):
@@ -251,7 +266,8 @@ class AuthenticatedUpdates:
 
     def _updater(self):
         progress.report('metadata',force=True)
-        return Updater(str(self.metadata), self.metadata_url, str(self.targets),
+        updater = WindowsCacheUpdater if os.name == 'nt' else Updater
+        return updater(str(self.metadata), self.metadata_url, str(self.targets),
                        self.target_url, fetcher=self.fetcher, bootstrap=self.bootstrap,
                        config=UpdaterConfig(max_root_rotations=32, max_delegations=1,
                            root_max_length=262144, timestamp_max_length=16384,
