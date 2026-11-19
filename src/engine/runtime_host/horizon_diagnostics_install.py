@@ -81,7 +81,7 @@ def inspect_installations(locations, observed_pid):
         try:
             raw = bounded(path, 128 * 1024)
             value = json.loads(raw)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return {}, None
         return (value, hashlib.sha256(raw).hexdigest()) if isinstance(value, dict) else ({}, None)
 
@@ -129,8 +129,11 @@ def inspect_installations(locations, observed_pid):
         owned = False
     records['owned_store'] = owned
     if owned:
-        pointer, _ = document(store / 'current.json')
-        records['selection_file'] = status(store / 'current.json')
+        selector = store / 'current.json'
+        pointer, digest = document(selector)
+        records['selection_file'] = status(selector)
+        if records['selection_file'] == 'file' and digest is None:
+            records['selection_document'] = 'unreadable'
         if pointer.get('schema') == 'PGN_ACTIVE_COHORT_V1':
             records['portable_baseline'] = 'previous' in pointer and pointer['previous'] is None
             records['selected_program'] = selector_program(pointer)

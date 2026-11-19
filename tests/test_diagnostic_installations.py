@@ -145,6 +145,17 @@ class DiagnosticInstallationsTests(unittest.TestCase):
         self.write_json(self.store / 'current.json', self.pointer)
         self.assertEqual(inspect_installations(self.locations, 0)['previous_program']['state'], 'linked')
 
+    def test_malformed_old_selector_does_not_abort_the_capture(self):
+        (self.store / 'current.json').write_bytes(b'[' * 10000 + b']' * 10000)
+        raw = json.dumps(dict(schema='PGN_DIAGNOSTIC_CAPTURE_V1', samples=[{}], context={})).encode()
+        with zipfile.ZipFile(io.BytesIO(export(raw, self.locations))) as archive:
+            captured = json.loads(archive.read('diagnostics.json'))
+        install = captured['context']['installation']
+        self.assertEqual(install['selection_file'], 'file')
+        self.assertEqual(install['selection_document'], 'unreadable')
+        self.assertNotIn('selected_program', install)
+        self.assertEqual(install['running_program']['versions']['ui'], '2026.11.17.177')
+
     def test_old_capture_and_unrecognized_local_context_still_export(self):
         for extra in ({}, {'context': {'local_paths': {'program': str(self.active)}}}):
             raw = json.dumps(dict(schema='PGN_DIAGNOSTIC_CAPTURE_V1', samples=[{}], **extra)).encode()
