@@ -44,7 +44,7 @@ public:
     std::function<void()> onAtlasProjectionChanged;
 private:
     PageReader pageReader_;DetailReader detailReader_;QTableWidget* table_;QTreeWidget* details_;QLabel *status_,*summary_;QStackedWidget* statusSlot_{};QLineEdit* search_;QComboBox* filter_;QPushButton *previous_,*next_,*openBlock_,*copy_;QTimer timer_;QJsonObject snapshot_,selected_;QString selectedId_,block_;int offset_{},renderedOffset_{-1};bool busy_{};QHash<QString,QJsonObject> detailCache_;
-    QStringList prefetch_;bool prefetchBusy_{};quint64 prefetchGeneration_{};QString seekRequest_;bool revealRequested_{};
+    QStringList prefetch_;bool prefetchBusy_{};quint64 prefetchGeneration_{},selectionGeneration_{};QString seekRequest_;bool revealRequested_{};
     TicketAtlasView* atlas_{};QLabel* coverage_{};
     QSplitter *content_{},*workspace_{};
     bool rowLayoutPending_{};
@@ -99,19 +99,22 @@ private:
         if(!selectedVisible)table_->clearSelection();
         table_->setUpdatesEnabled(true);summary_->setText(QString("%1 shown · %2 tracked").arg(table_->rowCount()).arg(snapshot_.value("active_lease_count").toInteger(snapshot_.value("leases").toArray().size())));
     }
-    void seekTicketPage(const QString& id,const QJsonObject& lease,int low,int high,int depth=0){
-        if(selectedId_!=id){seekRequest_.clear();return;}
+    bool currentSelection(const QString& id,quint64 generation)const{
+        return selectedId_==id&&selectionGeneration_==generation;
+    }
+    void seekTicketPage(const QString& id,quint64 generation,const QJsonObject& lease,int low,int high,int depth=0){
+        if(!currentSelection(id,generation))return;
         if(low>high||depth>20){seekRequest_.clear();presentStatus("Selected ticket details are available; its table page changed");return;}
         const int page=low+(high-low)/2;const QPointer<NetworkWorkView> guard(this);
-        pageReader_(page*100,[guard,id,lease,low,high,page,depth](QJsonObject state,QString error){
-            if(!guard||guard->selectedId_!=id)return;
+        pageReader_(page*100,[guard,id,generation,lease,low,high,page,depth](QJsonObject state,QString error){
+            if(!guard||!guard->currentSelection(id,generation))return;
             if(!error.isEmpty()){guard->seekRequest_.clear();guard->presentStatus(error,true);return;}
             const auto rows=state.value("leases").toArray();
             for(const auto& item:rows)if(item.toObject().value("request").toString()==id){guard->offset_=page*100;guard->search_->clear();guard->filter_->setCurrentIndex(0);guard->refresh();return;}
-            if(rows.isEmpty()){guard->seekTicketPage(id,lease,low,page-1,depth+1);return;}
+            if(rows.isEmpty()){guard->seekTicketPage(id,generation,lease,low,page-1,depth+1);return;}
             const auto before=[](const QJsonObject& a,const QJsonObject& b){const auto x=a.value("issued").toInteger(),y=b.value("issued").toInteger();return x!=y?x>y:pgn::booking::compareUnsigned(a.value("start").toString(),b.value("start").toString())<0;};
-            if(before(lease,rows.first().toObject()))guard->seekTicketPage(id,lease,low,page-1,depth+1);
-            else if(before(rows.last().toObject(),lease))guard->seekTicketPage(id,lease,page+1,high,depth+1);
+            if(before(lease,rows.first().toObject()))guard->seekTicketPage(id,generation,lease,low,page-1,depth+1);
+            else if(before(rows.last().toObject(),lease))guard->seekTicketPage(id,generation,lease,page+1,high,depth+1);
             else{guard->seekRequest_.clear();guard->presentStatus("Selected ticket details are available; its table page changed");}
         });
     }
@@ -121,23 +124,39 @@ private:
         return false;
     }
     void inspect(const QString& id){
+        const bool changed=selectedId_!=id;
+        const auto generation=++selectionGeneration_;
+        seekRequest_.clear();
+        selectedId_=id;
         if(atlas_)atlas_->setSelected(id);
-        const bool changed=selectedId_!=id;if(changed)seekRequest_.clear();selectedId_=id;revealSelectedRow();const QPointer<NetworkWorkView> guard(this);
+        revealSelectedRow();
+        const QPointer<NetworkWorkView> guard(this);
         if(changed){const QSignalBlocker guard(table_);table_->clearSelection();for(int row=0;row<table_->rowCount();++row)if(table_->item(row,0)->data(Qt::UserRole).toString()==id){table_->selectRow(row);break;}}
         if(changed){openBlock_->setEnabled(false);copy_->setEnabled(false);presentStatus("Reading report and audit details…");if(!detailCache_.contains(id)){details_->setUpdatesEnabled(false);details_->clear();details_->setProperty("pgn_evidence_id",QString{});for(const auto& item:snapshot_.value("leases").toArray()){const auto lease=item.toObject();if(lease.value("request").toString()!=id)continue;new QTreeWidgetItem(details_,{"Ticket",lease.value("ticket_number").toString()});new QTreeWidgetItem(details_,{"Owned interval","["+lease.value("start").toString()+", "+lease.value("end").toString()+")"});new QTreeWidgetItem(details_,{"Stage",lease.value("state").toString()});if(lease.contains("report_root"))new QTreeWidgetItem(details_,{"Committed report",lease.value("report_root").toString()});break;}details_->setUpdatesEnabled(true);}}
-        auto consume=[guard,id](QJsonObject value,QString error){if(!guard||guard->selectedId_!=id)return;if(!error.isEmpty()){guard->presentStatus(error,true);return;}const auto old=guard->selected_;const bool same=guard->details_->property("pgn_evidence_id").toString()==id&&old.value("leases")==value.value("leases")&&old.value("reports")==value.value("reports")&&old.value("audits")==value.value("audits");guard->selected_=value;guard->setProperty("pgn_selected_ticket_evidence",value);if(!guard->revealSelectedRow()&&guard->seekRequest_!=id&&!value.value("leases").toArray().isEmpty()){guard->seekRequest_=id;const int total=std::max(1,int(guard->snapshot_.value("active_lease_count").toInteger()));guard->seekTicketPage(id,value.value("leases").toArray().first().toObject(),0,(total-1)/100);}if(same){guard->presentStatus(QString("Evidence verified at ledger record %1 · %2").arg(value.value("height").toInteger()).arg(value.value("bestblockhash").toString().left(12)));return;}const int scroll=guard->details_->verticalScrollBar()->value();guard->details_->setUpdatesEnabled(false);guard->details_->clear();guard->setProperty("pgn_ticket_detail_rebuilds",guard->property("pgn_ticket_detail_rebuilds").toInt()+1);guard->details_->setProperty("pgn_evidence_id",id);const auto lease=value.value("leases").toArray().first().toObject();
+        auto consume=[guard,id,generation](QJsonObject value,QString error){
+            if(!guard||!guard->currentSelection(id,generation))return;
+            if(!error.isEmpty()){guard->presentStatus(error,true);return;}
+            const auto reports=value.value("reports").toArray();
+            guard->block_=reports.isEmpty()?QString{}:reports.first().toObject().value("block").toString();
+            guard->openBlock_->setEnabled(!guard->block_.isEmpty());
+            guard->copy_->setEnabled(true);
+            const auto old=guard->selected_;const bool same=guard->details_->property("pgn_evidence_id").toString()==id&&old.value("leases")==value.value("leases")&&old.value("reports")==value.value("reports")&&old.value("audits")==value.value("audits");guard->selected_=value;guard->setProperty("pgn_selected_ticket_evidence",value);if(!guard->revealSelectedRow()&&guard->seekRequest_!=id&&!value.value("leases").toArray().isEmpty()){guard->seekRequest_=id;const int total=std::max(1,int(guard->snapshot_.value("active_lease_count").toInteger()));guard->seekTicketPage(id,generation,value.value("leases").toArray().first().toObject(),0,(total-1)/100);}if(same){guard->presentStatus(QString("Evidence verified at ledger record %1 · %2").arg(value.value("height").toInteger()).arg(value.value("bestblockhash").toString().left(12)));return;}const int scroll=guard->details_->verticalScrollBar()->value();guard->details_->setUpdatesEnabled(false);guard->details_->clear();guard->setProperty("pgn_ticket_detail_rebuilds",guard->property("pgn_ticket_detail_rebuilds").toInt()+1);guard->details_->setProperty("pgn_evidence_id",id);const auto lease=value.value("leases").toArray().first().toObject();
             const auto field=[guard](const QString& name,const QString& text){return new QTreeWidgetItem(guard->details_,QStringList{name,text});};
             const auto coordinates=positionRangeFormats(lease.value("start").toString(),lease.value("end").toString());
             field("Ticket",lease.value("ticket_number").toString());field("Ticket request",id);field("Owned interval","["+lease.value("start").toString()+", "+lease.value("end").toString()+")");field("Positions",positionFormats(pgn::booking::subtractUnsigned(lease.value("end").toString(),lease.value("start").toString())).inlineText());field("Start · scientific / binary",coordinates.start.decimal+" · "+coordinates.start.binary);field("End · scientific / binary",coordinates.end.decimal+" · "+coordinates.end.binary);field("Issued at ledger record",QString::number(lease.value("issued").toInteger()));field(computeLeaseDeadlineHeading(lease),computeLeaseDeadlineText(lease));if(lease.contains("report_root"))field("Audit request retention","Pending until processed · no expiry of the submitted report");if(const auto name=publicReportName(value))field("Public discoverer name",*name);field("Owner signing script",lease.value("miner_script").toString());field("Reward signing script",lease.value("reward_script").toString());
-            const auto reports=value.value("reports").toArray();if(reports.isEmpty())field("Report","Not submitted");else{const auto report=reports.first().toObject();field("Immutable report root",report.value("report_root").toString());field("Report confirmation",QString::number(report.value("height").toInteger()));guard->block_=report.value("block").toString();field("Confirming block",guard->block_);guard->openBlock_->setEnabled(!guard->block_.isEmpty());}
+            if(reports.isEmpty())field("Report","Not submitted");else{const auto report=reports.first().toObject();field("Immutable report root",report.value("report_root").toString());field("Report confirmation",QString::number(report.value("height").toInteger()));field("Confirming block",guard->block_);}
             const auto audits=value.value("audits").toArray();if(audits.isEmpty())field("Audits","Waiting for a committed report");else{const auto audit=audits.first().toObject();presentAuditStatus(field("Audit verdict",{}),auditReportPresentation(audit));const auto jobs=audit.value("jobs").toArray();if(jobs.isEmpty())field("Audit allocation","No independent auditor assigned");for(const auto& item:jobs){const auto job=item.toObject();auto* parent=field(QString("Audit %1 · attempt %2").arg(job.value("slot").toInt()+1).arg(job.value("attempt").toInt()+1),job.value("state").toString());presentAuditStatus(parent,auditStatusPresentation(job.value("state").toString()));new QTreeWidgetItem(parent,{"Auditor",job.value("actor").toString()});const auto leaseLine=auditAssignmentLeaseLine(job);new QTreeWidgetItem(parent,{leaseLine.first,leaseLine.second});for(const auto& r:job.value("ranges").toArray()){const auto range=r.toObject();positionRangeItem(parent,QString("Partition %1").arg(range.value("index").toInt()),range.value("start").toString(),range.value("end").toString(),true);}parent->setExpanded(true);}}
-            guard->details_->verticalScrollBar()->setValue(scroll);guard->details_->setUpdatesEnabled(true);guard->copy_->setEnabled(true);guard->presentStatus(QString("Evidence verified at ledger record %1 · %2").arg(value.value("height").toInteger()).arg(value.value("bestblockhash").toString().left(12)));
+            guard->details_->verticalScrollBar()->setValue(scroll);guard->details_->setUpdatesEnabled(true);guard->presentStatus(QString("Evidence verified at ledger record %1 · %2").arg(value.value("height").toInteger()).arg(value.value("bestblockhash").toString().left(12)));
         };
         // The atomic page already carries the matching reports and audit jobs.
         // Project one ticket from that same anchor instead of issuing N RPCs.
         const auto complete=pageDetail(id);if(!complete.isEmpty()){consume(complete,{});return;}
         const auto cached=detailCache_.value(id);if(!cached.isEmpty()){consume(cached,{});if(cached.value("bestblockhash")==snapshot_.value("bestblockhash"))return;presentStatus("Showing verified evidence · checking for updates…");}
-        detailReader_(id,[guard,id,consume](QJsonObject value,QString error){if(!guard||guard->selectedId_!=id)return;if(error.isEmpty())guard->remember(id,value);consume(value,error);});
+        detailReader_(id,[guard,id,generation,consume](QJsonObject value,QString error){
+            if(!guard||!guard->currentSelection(id,generation))return;
+            if(error.isEmpty())guard->remember(id,value);
+            consume(value,error);
+        });
     }
     void refresh(){if(busy_)return;busy_=true;const int page=offset_;const QPointer<NetworkWorkView> guard(this);pageReader_(page,[guard,page](QJsonObject state,QString error){
         if(!guard)return;guard->busy_=false;if(page!=guard->offset_){guard->refresh();return;}if(!error.isEmpty()){if(guard->snapshot_.isEmpty())guard->timer_.setInterval(500);guard->presentStatus(error,true);return;}

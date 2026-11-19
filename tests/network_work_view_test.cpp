@@ -82,6 +82,48 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  selectPoint(250);selectPoint(50);need(seekReads<=6,"page lookup is bounded, not a whole-history walk");paged.close();
  }
  
+
+ { // A late response may have the same selected id but belong to an earlier click.
+ QJsonObject lease=leases.first().toObject();
+ const auto a=lease.value("request").toString(),b=QString(64,'7');
+ QJsonObject thin=page;thin.insert("leases",QJsonArray{lease});thin.insert("reports",QJsonArray{});thin.insert("audits",QJsonArray{});
+ thin.insert("height",170);thin.insert("bestblockhash",QString(64,'8'));thin.insert("active_lease_count",1);
+ QList<NetworkWorkView::Result> aCalls;
+ NetworkWorkView raced([&](int,NetworkWorkView::Result done){done(thin,{});},
+     [&](const QString& id,NetworkWorkView::Result done){if(id==a)aCalls.append(std::move(done));},
+     nullptr,[](const QString&,const QString&,int,auto done){done({},"Separate atlas data is outside the ordering fixture");});
+ raced.resize(1366,850);raced.show();app.processEvents();
+ auto* point=static_cast<pgn::ui::TicketAtlasView*>(raced.findChild<QWidget*>("pgn-ticket-atlas"));
+ need(point&&aCalls.size()==1,"first point evidence request remains outstanding");
+ raced.resize(930,850);app.processEvents();need(aCalls.size()==1,"resize adds zero point evidence reads");
+ point->inspect(b);point->inspect(a);app.processEvents();
+ need(aCalls.size()==2,"same ticket was selected again after another ticket");
+ auto* racedTable=raced.findChild<QTableWidget*>("pgn-network-ticket-table");
+ need(racedTable->currentRow()==0&&racedTable->item(0,0)->isSelected(),"current point is visible on the narrower table");
+ auto fresh=thin;fresh.insert("height",171);fresh.insert("bestblockhash",QString(64,'9'));
+ fresh.insert("reports",QJsonArray{QJsonObject{{"request_id",a},{"block",QString(64,'c')},{"height",171}}});
+ aCalls[1](fresh,{});
+ auto fromOlderClick=thin;
+ fromOlderClick.insert("reports",QJsonArray{QJsonObject{{"request_id",a},{"block",QString(64,'d')},{"height",170}}});
+ aCalls[0](fromOlderClick,{});
+ const bool keptNewest=raced.property("pgn_selected_ticket_evidence").toJsonObject().value("height")==171;
+ QPushButton* open=nullptr;QPushButton* reread=nullptr;
+ for(auto* button:raced.findChildren<QPushButton*>()){
+     if(button->text()=="Open block")open=button;
+     if(button->text()=="Refresh work")reread=button;
+ }
+ need(open&&reread&&open->isEnabled(),"confirmed block is available on the current evidence");
+ lease.remove("report_root");thin.insert("leases",QJsonArray{lease});
+ thin.insert("height",172);thin.insert("bestblockhash",QString(64,'a'));
+ raced.resize(1366,850);reread->click();app.processEvents();
+ const bool clearedBlock=!open->isEnabled();
+ std::cout<<"Delayed repeated-selection kept newest: "<<keptNewest<<"; report removal disabled Open block: "<<clearedBlock<<"\n";
+ need(keptNewest,"delayed response from before selecting the other point replaced current evidence");
+ need(clearedBlock,"report removed on the same point but Open block still uses a previous branch");
+ need(racedTable->currentRow()==0&&racedTable->item(0,0)->isSelected(),"same selected row remains visible after reorganization");
+ raced.close();
+ }
+
  { // Exhaustive native-atlas projection: all 36 logical slot pairs.
  const QString states[]{"awaiting","assigned","expired","committed","passed","failed"};
  const char* expected[6][6]{
