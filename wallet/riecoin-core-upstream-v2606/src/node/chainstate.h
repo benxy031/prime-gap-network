@@ -50,6 +50,8 @@ enum class ChainstateLoadStatus {
     FAILURE_INCOMPATIBLE_DB,
     FAILURE_INSUFFICIENT_DBCACHE,
     INTERRUPTED,
+    CORRUPT_COINS_DB, //!< Detected corruption while opening the chainstate database
+    CORRUPT_BLOCK_INDEX, //!< Detected corruption while opening the block index
 };
 
 //! Chainstate load status code and optional error string.

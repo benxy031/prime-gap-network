@@ -60,7 +60,13 @@ struct DBParams {
 class dbwrapper_error : public std::runtime_error
 {
 public:
-    explicit dbwrapper_error(const std::string& msg) : std::runtime_error(msg) {}
+    explicit dbwrapper_error(const std::string& msg, bool corruption = false)
+        : std::runtime_error(msg), m_corruption(corruption) {}
+
+    [[nodiscard]] bool IsCorruption() const { return m_corruption; }
+
+private:
+    const bool m_corruption;
 };
 
 class CDBWrapper;

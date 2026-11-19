@@ -104,9 +104,10 @@ static ChainstateLoadResult CompleteChainstateInitialization(
                 /*cache_size_bytes=*/chainman.m_total_coinsdb_cache * init_cache_fraction,
                 /*in_memory=*/options.coins_db_in_memory,
                 /*should_wipe=*/options.wipe_chainstate_db);
-        } catch (dbwrapper_error& err) {
+        } catch (const dbwrapper_error& err) {
             LogError("%s\n", err.what());
-            return {ChainstateLoadStatus::FAILURE, _("Error opening coins database")};
+            const auto status = err.IsCorruption() ? ChainstateLoadStatus::CORRUPT_COINS_DB : ChainstateLoadStatus::FAILURE;
+            return {status, _("Error opening coins database")};
         }
 
         if (options.coins_error_cb) {

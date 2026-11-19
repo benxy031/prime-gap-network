@@ -1344,9 +1344,10 @@ static ChainstateLoadResult InitAndLoadChainstate(
     Assert(!node.chainman); // Was reset above
     try {
         node.chainman = std::make_unique<ChainstateManager>(*Assert(node.shutdown_signal), chainman_opts, blockman_opts);
-    } catch (dbwrapper_error& e) {
+    } catch (const dbwrapper_error& e) {
         LogError("%s", e.what());
-        return {ChainstateLoadStatus::FAILURE, _("Error opening block database")};
+        const auto status = e.IsCorruption() ? ChainstateLoadStatus::CORRUPT_BLOCK_INDEX : ChainstateLoadStatus::FAILURE;
+        return {status, _("Error opening block database")};
     } catch (std::exception& e) {
         return {ChainstateLoadStatus::FAILURE_FATAL, Untranslated(strprintf("Failed to initialize ChainstateManager: %s", e.what()))};
     }
@@ -1875,17 +1876,27 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         std::tie(status, error) = InitAndLoadChainstate(
             node, false, true, kernel_cache_sizes, args);
     }
-    if (status == ChainstateLoadStatus::FAILURE && !do_reindex && !ShutdownRequested(node)) {
-        // suggest a reindex
+    const bool coins_only{status == ChainstateLoadStatus::CORRUPT_COINS_DB};
+    const bool block_index{status == ChainstateLoadStatus::CORRUPT_BLOCK_INDEX};
+    const bool can_retry{status == ChainstateLoadStatus::FAILURE || block_index ||
+                         (coins_only && !do_reindex_chainstate)};
+    if (can_retry && !do_reindex && !ShutdownRequested(node)) {
+        const auto question = coins_only ? _("Do you want to rebuild the chainstate database now?")
+                                         : _("Do you want to rebuild the databases now?");
+        const char* instructions = ".\nPlease restart with -reindex or -reindex-chainstate to recover.";
+        if (coins_only) {
+            instructions = ".\nPlease restart with -reindex-chainstate to recover.";
+        } else if (block_index) {
+            instructions = ".\nPlease restart with -reindex to recover.";
+        }
         bool do_retry{HasTestOption(args, "reindex_after_failure_noninteractive_yes") ||
-            uiInterface.ThreadSafeQuestion(
-            error + Untranslated(".\n\n") + _("Do you want to rebuild the databases now?"),
-            error.original + ".\nPlease restart with -reindex or -reindex-chainstate to recover.",
-            CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT)};
+            uiInterface.ThreadSafeQuestion(error + Untranslated(".\n\n") + question,
+                error.original + instructions, CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT)};
         if (!do_retry) {
             return false;
         }
-        do_reindex = true;
+        do_reindex = !coins_only;
+        do_reindex_chainstate |= coins_only;
         if (!Assert(node.shutdown_signal)->reset()) {
             LogError("Internal error: failed to reset shutdown signal.\n");
         }

@@ -50,7 +50,7 @@ static void HandleError(const leveldb::Status& status)
     const std::string errmsg = "Fatal LevelDB error: " + status.ToString();
     LogError("%s", errmsg);
     LogInfo("You can use -debug=leveldb to get more complete diagnostic messages");
-    throw dbwrapper_error(errmsg);
+    throw dbwrapper_error(errmsg, status.IsCorruption());
 }
 
 class CBitcoinLevelDBLogger : public leveldb::Logger {
