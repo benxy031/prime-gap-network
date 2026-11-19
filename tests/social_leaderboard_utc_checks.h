@@ -90,7 +90,37 @@ inline void run(QApplication& app,const QString& path){
     expect(table->rowCount()==1&&interval->text()==label,"Returning to verified Today cleared its row while Core was pending");
     answer(pendingTotal,page());
     expect(table->rowCount()==1&&interval->text()==label,"Late Total replaced the cached Today interval");
-    answer(pending.last(),freshDay);
+    const auto advertised=[](QJsonObject value) {
+        value.insert("supported_periods", QJsonArray{"today_utc", "month_utc", "week_utc", "hour_utc"});
+        return value;
+    };
+    answer(pending.last(),advertised(freshDay));
+    auto* totalButton=control<QPushButton>(view,"pgn-social-period-total");
+    auto* todayButton=control<QPushButton>(view,"pgn-social-period-today");
+    auto* monthButton=control<QPushButton>(view,"pgn-social-period-month");
+    expect(monthButton->isVisible(),"The advertised This month button was hidden");
+
+    monthButton->click();
+    expect(pending.last().request.window==Window::Month&&table->rowCount()==0,
+           "This month showed Today before receiving its own data");
+    const QDate date=QDateTime::currentDateTimeUtc().date();
+    const auto monthStart=QDateTime(QDate(date.year(),date.month(),1),QTime(0,0),Qt::UTC).toSecsSinceEpoch();
+    auto freshMonth=advertised(today(page(0,false),monthStart));
+    freshMonth.insert("period","month_utc");
+    freshMonth.insert("utc_end",*leaderboardWindowEnd(Window::Month,monthStart));
+    answer(pending.last(),freshMonth);
+    const auto monthLabel=interval->text();
+    expect(table->rowCount()==1&&!monthLabel.isEmpty()&&monthLabel!=label,
+           "This month did not show its own UTC interval");
+
+    totalButton->click();
+    expect(table->rowCount()==1&&interval->text().isEmpty(),"Total cleared while its refresh was pending");
+    todayButton->click();
+    expect(table->rowCount()==1&&interval->text()==label,"Today cleared while its refresh was pending");
+    monthButton->click();
+    expect(table->rowCount()==1&&interval->text()==monthLabel,"This month cleared while its refresh was pending");
+    answer(pending.last(),freshMonth);
+
     view.refresh();const auto stale=pending.last();view.setIdentity({identity.genesis,"SYNTHETIC-OTHER-ACCOUNT"});answer(stale,newDay);
     expect(table->rowCount()==0&&interval->text().isEmpty(),"Identity change retained old rows/UTC interval or accepted stale callback");
     view.close();
