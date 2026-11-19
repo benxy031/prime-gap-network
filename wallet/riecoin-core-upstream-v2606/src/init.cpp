@@ -60,6 +60,7 @@
 #include <node/blockstorage.h>
 #include <node/caches.h>
 #include <node/chainstate.h>
+#include <pgn/chainstate_recovery_journal.h>
 #include <node/chainstatemanager_args.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
@@ -1287,6 +1288,20 @@ static std::optional<CService> CheckBindingConflicts(const CConnman::Options& co
 
 // A GUI user may opt to retry once with do_reindex set if there is a failure during chainstate initialization.
 // The function therefore has to support re-entry.
+static std::optional<uint256> TrustedRecoveryTip(ChainstateManager& chainman)
+{
+    LOCK(cs_main);
+    const auto* tip = chainman.m_best_header;
+    if (!tip || tip->nHeight == 0 || chainman.m_blockman.IsPruneMode() ||
+        !chainman.m_blockman.m_blockfiles_indexed || chainman.HistoricalChainstate()) {
+        return std::nullopt;
+    }
+    for (const auto* entry = tip; entry; entry = entry->pprev) {
+        if (!(entry->nStatus & BLOCK_HAVE_DATA) || !entry->IsValid(BLOCK_VALID_SCRIPTS)) return std::nullopt;
+    }
+    return tip->GetBlockHash();
+}
+
 static ChainstateLoadResult InitAndLoadChainstate(
     NodeContext& node,
     bool do_reindex,
@@ -1843,6 +1858,23 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     bool do_reindex{args.GetBoolArg("-reindex", false)};
     bool do_reindex_chainstate{args.GetBoolArg("-reindex-chainstate", false)};
 
+    // These operations run after Core has acquired both directory locks, before opening the wallet.
+    const fs::path net_dir = args.GetDataDirNet();
+    const bool standard_blocks = args.GetBlocksDirPath() == net_dir / "blocks";
+    std::optional<pgn::core::ChainstateRecoveryJournal> recovery;
+    bool rebuilt_coins{false};
+    if (standard_blocks && fs::exists(net_dir / "pgn-chainstate-recovery")) {
+        try {
+            recovery.emplace(net_dir.std_path());
+            if (recovery->Pending()) {
+                recovery->Restore();
+                LogInfo("Restored the previous state after interrupted local chainstate recovery");
+            }
+        } catch (const std::exception& failure) {
+            return InitError(Untranslated(strprintf("Could not restore the local chainstate recovery: %s", failure.what())));
+        }
+    }
+
     // Chainstate initialization and loading may be retried once with reindexing by GUI users
     auto [status, error] = InitAndLoadChainstate(
         node,
@@ -1850,6 +1882,55 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         do_reindex_chainstate,
         kernel_cache_sizes,
         args);
+    if (status == ChainstateLoadStatus::CORRUPT_COINS_DB && standard_blocks &&
+        !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node) &&
+        args.GetArgs("-loadblock").empty()) {
+        const auto trusted_tip = TrustedRecoveryTip(*Assert(node.chainman));
+        if (trusted_tip) {
+            const auto reset_chain = [&] {
+                node.notifications->setChainstateLoaded(false);
+                node.mempool.reset();
+                node.chainman.reset();
+            };
+            reset_chain();
+            try {
+                if (!recovery) recovery.emplace(net_dir.std_path());
+                recovery->Prepare(trusted_tip->GetHex());
+                uiInterface.InitMessage(_("Rebuilding corrupt local chainstate from retained blocks…"));
+                std::tie(status, error) = InitAndLoadChainstate(
+                    node, false, true, kernel_cache_sizes, args);
+                if (status == ChainstateLoadStatus::SUCCESS && !ShutdownRequested(node)) {
+                    auto& repaired = *Assert(node.chainman);
+                    ImportBlocks(repaired, {});
+                    const bool matched = WITH_LOCK(::cs_main, return repaired.ActiveTip() &&
+                        repaired.ActiveTip()->GetBlockHash() == *trusted_tip);
+                    BlockValidationState flush;
+                    rebuilt_coins = matched && !ShutdownRequested(node) &&
+                        repaired.ActiveChainstate().FlushStateToDisk(flush, FlushStateMode::FORCE_SYNC) &&
+                        recovery->Complete(trusted_tip->GetHex());
+                }
+                if (!rebuilt_coins) {
+                    reset_chain();
+                    recovery->Restore();
+                    if (ShutdownRequested(node)) return true;
+                    return InitError(_("Could not verify the rebuilt chainstate. The original database has been restored."));
+                }
+                LogInfo("Local chainstate recovery verified at %s", trusted_tip->GetHex());
+            } catch (const std::exception& failure) {
+                if (const auto* fs_error = dynamic_cast<const std::filesystem::filesystem_error*>(&failure);
+                    fs_error && fs_error->code() == std::errc::no_space_on_device) {
+                    LogError("Disk space is too low!");
+                }
+                reset_chain();
+                try {
+                    if (recovery && recovery->Pending()) recovery->Restore();
+                } catch (const std::exception& rollback) {
+                    LogError("Local chainstate recovery snapshot retained: %s", rollback.what());
+                }
+                return InitError(Untranslated(strprintf("Local chainstate recovery stopped: %s", failure.what())));
+            }
+        }
+    }
     if ((status == ChainstateLoadStatus::NATIVE_LEGACY_CACHE ||
          status == ChainstateLoadStatus::NATIVE_FORWARD_REPLAY) &&
         !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node)) {
@@ -2058,7 +2139,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     node.background_init_thread = std::thread(&util::TraceThread, "initload", [=, &chainman, &args, &node] {
         ScheduleBatchPriority();
         // Import blocks and ActivateBestChain()
-        ImportBlocks(chainman, vImportFiles);
+        if (!rebuilt_coins) ImportBlocks(chainman, vImportFiles);
         if (ShutdownRequested(node)) {
             // A failed or interrupted import can stop before announcing any tip.
             auto& notifications = *Assert(node.notifications);
