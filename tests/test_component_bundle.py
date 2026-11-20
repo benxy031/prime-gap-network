@@ -15,6 +15,18 @@ class ComponentBundleTests(unittest.TestCase):
  def tearDown(self):self.temp.cleanup()
  def manifest(self,files):
   value=component.build(dict(release_version='1.0',network='testnet',published=False,components=[dict(id='ui',version='1.0',root=str(self.code),files=files)]));(self.code/'components.json').write_text(json.dumps(value))
+ def test_invalid_versions_fail_before_opening_payload(self):
+  self.manifest(['PGN-Horizon.exe'])
+  (self.code/'PGN-Horizon.exe').unlink()
+  inventory=self.code/'components.json'
+  valid=json.loads(inventory.read_bytes())
+  for release,component_version in [('2.qa','2.0'),('2.0','2.qa')]:
+   with self.subTest(release=release,component_version=component_version):
+    valid['components'][0]['version']=component_version
+    inventory.write_text(json.dumps(valid))
+    with self.assertRaisesRegex(stage.StageError,'Explicit numeric component version required'):
+     builder.build(self.code,self.context,self.root/'bundle.zip',2,release,'qa.1')
+    self.assertFalse((self.root/'bundle.zip').exists())
  def test_only_known_empty_installer_marker_is_omitted(self):
   self.manifest(['PGN-Horizon.exe',self.marker]);r=builder.build(self.code,self.context,self.root/'bundle.zip',2,'1.0','qa.1')
   self.assertEqual(r['files'],1);self.assertEqual(r['omitted_optional_installer_metadata'],[self.marker]);self.assertTrue(r['privacy']['PASS'])

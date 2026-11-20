@@ -106,6 +106,7 @@ def validate_core_deployment(root, declared_paths, context):
 def build(cohort, context_path, output, sequence, release_version, abi):
     root = stage._plain_chain(cohort)
     context, context_hash = stage.read_context(context_path)
+    stage._version(release_version)
     primary = primary_programs(context['platform'])
     inventory = stage._json(stage._read_plain(root/'components.json', stage.MAX_MANIFEST))
     stage.require(inventory.get('schema') == 'PGN_COMPONENT_MANIFEST_V1'
@@ -114,6 +115,8 @@ def build(cohort, context_path, output, sequence, release_version, abi):
     components, sources, final_paths, omitted = [], {}, set(), []
     declared = inventory.get('components', [])
     stage.require(type(declared) is list and 1 <= len(declared) <= 4, 'Bounded component inventory required')
+    for row in declared:
+        stage._version(row['version'])
     versions = {row['id']: row['version'] for row in declared}
     for row in declared:
         component = row['id']
