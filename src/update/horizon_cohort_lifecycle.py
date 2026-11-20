@@ -39,12 +39,12 @@ class NativeCohortLifecycle:
         stage.require(store.context['platform']==self.platform, 'Activation platform differs from update context')
         self.store=store
         self.base=stage._plain_chain(base)
-        self.current,files=store.verified_running_base(self.base)
+        self.current,self.base_files=store.verified_running_base(self.base)
         self.root=stage._plain_chain(activation['application_root'])
         self.data=stage._plain_chain(activation['data_root'])
         stage.require(self.data not in (self.base,self.store.root) and not self.data.is_relative_to(self.base), 'User data must be separate from code')
         self.runtime=self.data/('testnet/ui-runtime' if store.context['network']=='testnet' else 'ui-runtime')
-        self.ui=self.own_process(activation['ui_pid'],self.base/self.ui_relative,files[self.ui_relative.casefold()]['sha256'],activation['ui_birth'])
+        self.ui=self.own_process(activation['ui_pid'],self.base/self.ui_relative,self.base_files[self.ui_relative.casefold()]['sha256'],activation['ui_birth'])
         self.core=None
         self.new_ui=None
         self.profiles={}
@@ -93,9 +93,20 @@ class NativeCohortLifecycle:
         self.record('drained')
         return True
 
-    def rebind_profiles(self, candidate):
-        _,old,_,_=inventory(self.base)
-        _,new,_,_=inventory(candidate)
+    def rebind_profiles(self, candidate, *, expected_inventory_sha256=None):
+        # The old paths came from the verified running base. For managed
+        # activation, bind the new Core path to the authenticated inventory
+        # before writing profiles. launch() still verifies all candidate bytes.
+        if expected_inventory_sha256 is None:
+            _,files,_,_=inventory(candidate)
+            core_hash=files.get(self.core_relative.casefold(),{}).get('sha256')
+        else:
+            raw=stage._read_plain(candidate/'components.json',stage.MAX_MANIFEST)
+            stage.require(stage.sha(raw)==expected_inventory_sha256,'Prepared candidate inventory changed')
+            manifest=stage._json(raw)
+            core=next((c for c in manifest['components'] if c['id']=='core'),None)
+            relative=Path(self.core_relative).relative_to('Core').as_posix()
+            core_hash=next((row['sha256'] for row in core['files'] if row['path'].casefold()==relative.casefold()),None) if core else None
         changes=[]
         for name in ('wallet-core.json','worker-stream.json','cpu-controllers.json'):
             path=(self.core_runtime if name=='wallet-core.json' else self.runtime)/name
@@ -105,9 +116,10 @@ class NativeCohortLifecycle:
                 stage.require(value.get('genesis_hash')==self.store.context['genesis_hash'],'Core profile genesis differs')
                 program=stage._plain_chain(value['executable'])
                 with program.open('rb')as stream:old_sha=hashlib.file_digest(stream,'sha256').hexdigest()
-                stage.require(old_sha==old[self.core_relative.casefold()]['sha256'],'Core profile uses an unrelated installation')
+                stage.require(old_sha==self.base_files[self.core_relative.casefold()]['sha256'],'Core profile uses an unrelated installation')
+                stage.require(core_hash is not None,'Candidate does not contain the declared Core executable')
                 value['executable']=str(candidate/self.core_relative)
-                value['executable_sha256']=new[self.core_relative.casefold()]['sha256']
+                value['executable_sha256']=core_hash
             else:
                 def replace(item):
                     if isinstance(item,dict):return {k:replace(v)for k,v in item.items()}
@@ -120,7 +132,7 @@ class NativeCohortLifecycle:
                             # All old cohort files are code-only. External
                             # CPU/SSH deployments and workspaces stay intact.
                             key=relative.as_posix().casefold()
-                            stage.require(key in old or any(k.startswith(key+'/')for k in old),'Configuration points to undeclared old code')
+                            stage.require(key in self.base_files or any(k.startswith(key+'/') for k in self.base_files),'Configuration points to undeclared old code')
                             return str(candidate/relative)
                     return item
                 value=replace(value)
@@ -141,8 +153,10 @@ class NativeCohortLifecycle:
             self.owner_path.unlink()
         for path,value in changes:_write(path,value)
 
-    def launch(self, candidate):
-        _,files,_,_=inventory(candidate)
+    def launch(self, candidate, *, expected_inventory_sha256=None):
+        _,files,digest,_=inventory(candidate)
+        if expected_inventory_sha256 is not None:
+            stage.require(digest==expected_inventory_sha256,'Prepared candidate inventory changed')
         exe=candidate/self.ui_relative
         args=[str(exe)]
         if self.explicit_root:args.append(str(self.root))
@@ -184,9 +198,9 @@ class NativeCohortLifecycle:
             time.sleep(.25)
         raise RuntimeError('Updated client health was not confirmed: '+last_error[:200])
 
-    def start_and_verify(self,candidate):
-        self.rebind_profiles(candidate)
-        return self.launch(candidate)
+    def start_and_verify(self,candidate, *, expected_inventory_sha256=None):
+        self.rebind_profiles(candidate,expected_inventory_sha256=expected_inventory_sha256)
+        return self.launch(candidate,expected_inventory_sha256=expected_inventory_sha256)
 
     def restore_previous(self, previous, failed):
         if self.restored:return
