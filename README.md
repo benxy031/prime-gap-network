@@ -25,6 +25,8 @@ Select either image to view it at full resolution. These are captures of the cur
 
 ## Windows supervised testnet preview
 
+[Current Windows and Ubuntu downloads](https://github.com/wizz13150/prime-gap-network/releases/tag/horizon-testnet-epoch3) · [Tester guide](docs/TESTING.md)
+
 ### Whole-audit progress and integrated audit preview
 
 Interface **2026.11.8.99** / GPU runtime **2026.11.8.34** / Core **2026.11.8.5** preserve results across the internal partitions of the same audit. Results reset when the audit changes or research begins. The first two actually observed audits fill the first two progress sections; additional audits use orange sections retained throughout research. Current-step and cycle ETA are estimates; unavailable future quantities keep the cycle ETA unknown rather than inventing a time.
@@ -34,7 +36,7 @@ The Network Work scene is preloaded during application startup. Names are center
 Startup diagnostics retain a bounded structured failure through process exit and into an export started afterwards: startup stage, failing resource basename, OS error and relevant call sites. This path has been tested using the actual frozen host through native process capture and ZIP export. It does not establish the cause of Robert's machine-specific startup failure. Diagnostics are optional and are never a prerequisite for mining.
 
 
-[Download Windows x64](https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Windows-178.zip) · [Download Ubuntu x86_64](https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet/PGN-Horizon-testnet-Ubuntu-x86_64.tar.gz) · [Release and checksums](https://github.com/wizz13150/prime-gap-network/releases/tag/horizon-testnet-epoch3) · [Tester guide](docs/TESTING.md)
+
 
 This is the current portable Windows preview for supervised tests on the PGN testnet. Use this epoch's package when joining; older alpha packages belong to an older test network.
 
