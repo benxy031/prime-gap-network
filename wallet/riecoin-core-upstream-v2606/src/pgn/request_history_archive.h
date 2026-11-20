@@ -20,12 +20,12 @@ public:
     // Explicit separate path/cache budget. No wipe flag or background service.
     NativeRequestHistoryArchive(fs::path path,size_t cache_bytes);
     RequestArchiveVerdict Store(const CCoinsView&,const CBlockIndex&,const VerifiedNativeRequestBlock&,
-        std::span<const unsigned char> compact_proof,RequestHistoryArchiveBudget);
+        std::span<const unsigned char> compact_proof,RequestHistoryArchiveBudget,bool sync=true);
     // Native accepted-block ingestion: authenticates the full transaction root
     // and builds the maintained coinbase proof itself. No caller-selected
     // request subset or externally asserted inclusion flag enters the cache.
     RequestArchiveVerdict StoreBlock(const CCoinsView&,const CBlockIndex&,int32_t height,
-        const CBlock&,RequestHistoryArchiveBudget);
+        const CBlock&,RequestHistoryArchiveBudget,bool sync=true);
     // Selects the block hash from ACTUAL current native ancestry, never an
     // archive-supplied head. Reauthenticates every present record on reopen.
     // Missing is NOT empty batch or known request absence. DB errors propagate.

@@ -97,7 +97,7 @@ std::optional<std::vector<unsigned char>> NativeRequestHistoryArchive::LoadRepla
 }
 NativeRequestHistoryArchive::NativeRequestHistoryArchive(fs::path path,size_t bytes):m_db(Parameters(std::move(path),bytes)){}
 RequestArchiveVerdict NativeRequestHistoryArchive::StoreBlock(const CCoinsView& view,const CBlockIndex& parent,
-    int32_t height,const CBlock& block,RequestHistoryArchiveBudget budget){
+    int32_t height,const CBlock& block,RequestHistoryArchiveBudget budget,bool sync){
     AssertLockHeld(cs_main);
     if(!BudgetValid(budget))return RequestArchiveVerdict::BudgetExceeded;
     // Guard coinbase allocation before constructing the native Merkle proof.
@@ -110,10 +110,10 @@ RequestArchiveVerdict NativeRequestHistoryArchive::StoreBlock(const CCoinsView& 
     if(GetSerializeSize(compact.txn)>budget.proof_bytes)return RequestArchiveVerdict::BudgetExceeded;
     DataStream encoded;encoded<<compact.txn;
     return Store(view,parent,*verified.block,std::span<const unsigned char>{
-        reinterpret_cast<const unsigned char*>(encoded.data()),encoded.size()},budget);
+        reinterpret_cast<const unsigned char*>(encoded.data()),encoded.size()},budget,sync);
 }
 RequestArchiveVerdict NativeRequestHistoryArchive::Store(const CCoinsView& view,const CBlockIndex& parent,
-    const VerifiedNativeRequestBlock& block,std::span<const unsigned char> proof,RequestHistoryArchiveBudget budget){
+    const VerifiedNativeRequestBlock& block,std::span<const unsigned char> proof,RequestHistoryArchiveBudget budget,bool sync){
     AssertLockHeld(cs_main);
     if(!block.Coinbase()||!block.Coinbase()->IsCoinBase())return RequestArchiveVerdict::InvalidProof;
     if(!BudgetValid(budget)||proof.size()>budget.proof_bytes||GetSerializeSize(TX_NO_WITNESS(*block.Coinbase()))>budget.coinbase_bytes)return RequestArchiveVerdict::BudgetExceeded;
@@ -133,7 +133,9 @@ RequestArchiveVerdict NativeRequestHistoryArchive::Store(const CCoinsView& view,
             return RequestArchiveVerdict::AlreadyStored;
         return RequestArchiveVerdict::Conflict;
     }
-    m_db.Write(Key(record.chain,record.block),record,true); // native atomic synchronous single-entry cache write
+    // Atomic cache write. The caller may buffer it only when canonical
+    // block bodies remain available to reconstruct any unwritten entry.
+    m_db.Write(Key(record.chain,record.block),record,sync);
     return RequestArchiveVerdict::Stored;
 }
 RequestArchiveRead NativeRequestHistoryArchive::Load(const CCoinsView& view,const CBlockIndex& parent,int32_t height,RequestHistoryArchiveBudget budget)const{

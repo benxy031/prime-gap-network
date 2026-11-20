@@ -3083,8 +3083,12 @@ void Chainstate::CachePgnRequestHistory(const CBlockIndex& index,const CBlock& b
             m_pgn_request_archive=std::make_unique<pgn::core::NativeRequestHistoryArchive>(path,size_t{1}<<20);
         }
         // Local cache implementation bounds, NOT network block/schema caps.
+        // The archive is rebuildable from accepted full blocks. During
+        // initial download on unpruned nodes, avoid one forced cache flush
+        // per block. Pruned and normal live writes retain their durability.
+        const bool sync=m_blockman.IsPruneMode()||!m_chainman.IsInitialBlockDownload();
         const auto result=m_pgn_request_archive->StoreBlock(CoinsTip(),index,index.nHeight,block,
-            {size_t{8}<<20,size_t{1}<<20});
+            {size_t{8}<<20,size_t{1}<<20},sync);
         if(result==pgn::core::RequestArchiveVerdict::Stored||result==pgn::core::RequestArchiveVerdict::AlreadyStored)return;
         m_pgn_request_archive_held=true;
         LogWarning("PGN request-history cache held at accepted height %d (local cache result %d); dependent request history unavailable, consensus unchanged\n",index.nHeight,int(result));
