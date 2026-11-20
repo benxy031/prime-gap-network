@@ -17,11 +17,11 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.20.33'
+VERSION='2026.11.20.34'
 
 
 def maintain_installation(cache,context,context_sha,result):
-    """Catch up old-helper installations on the next authenticated check."""
+    """Retire obsolete program cohorts during explicit storage cleanup."""
     root=cache.parent/'installation'
     if not root.exists():return result
     try:
@@ -98,7 +98,7 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
         if action=='clean_storage':
             maintain_installation(client.cache,context,context_sha,result)
         return result
-    if action=='check':return maintain_installation(client.cache,context,context_sha,client.refresh(selected))
+    if action=='check':return client.refresh(selected)
     if action=='prepare':return client.prepare(selected)
     stage.require(all(type(request[k])is str and Path(request[k]).is_absolute()for k in ('base_cohort','installation_store')),'Absolute code/store paths required')
     store_path=Path(request['installation_store'])
@@ -113,7 +113,10 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             from horizon_linux_install import LinuxCohortLifecycle
             native_lifecycle=LinuxCohortLifecycle
         verify_running_base=lambda base:native_lifecycle.verify_running_base(store,base,request['activation'])
-    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),verify_running_base=verify_running_base,retain_download=action=='prepare_install')
+    writer_wait=90 if action=='install' else 0
+    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),
+                            verify_running_base=verify_running_base,
+                            retain_download=action=='prepare_install',writer_wait=writer_wait)
     if action=='install':
         stage.require(context['platform'] in ('windows-x86_64','linux-x86_64'),'Native installation platform is unsupported')
         native_install=lifecycle_factory is None
@@ -142,7 +145,7 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
         def restore(*args):
             if lifecycle is not None:return lifecycle.restore_previous(*args)
         try:
-            committed=store.activate(candidate,drain,start,restore)
+            committed=store.activate(candidate,drain,start,restore,writer_wait=writer_wait)
             if committed:
                 try:progress.report('committed',completed=1,total=1,force=True)
                 except OSError:

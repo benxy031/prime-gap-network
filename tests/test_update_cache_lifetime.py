@@ -2,9 +2,10 @@
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
-import json, os, subprocess, sys, unittest
+import json, os, subprocess, sys, threading, time, unittest
 P = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(P/'tools'), str(P/'src/update')]
+import horizon_update_cli as update_helper
 import horizon_update_client as client_module
 import test_authenticated_updates as fixtures
 import stage_component_bundle as stage
@@ -75,6 +76,21 @@ class CacheLifetimeTests(unittest.TestCase):
         self.assertEqual(len(list(client.targets.glob('*-components.json'))), 1)
         for p, raw in history.items(): self.assertEqual(p.read_bytes(), raw)
 
+    def test_signed_version_check_does_not_enter_installation_cleanup(self):
+        request = dict(schema='PGN_UPDATE_REQUEST_V1', action='check',
+                       context=self.context, cache=str(self.root/'cache'), selected=['cpu'])
+        repository = dict(genesis_hash=self.context['genesis_hash'],
+                          compatibility_set=self.context['compatibility_set'],
+                          root=self.bootstrap.decode(), root_sha256=client_module.digest(self.bootstrap),
+                          metadata_url=self.base, targets_url=self.target)
+        with patch.object(update_helper, 'maintain_installation',
+                          side_effect=PermissionError('Installation is locked by another update')) as maintenance:
+            result = update_helper.run(request, repositories={'testnet': repository},
+                                       fetcher=self.transport)
+            maintenance.assert_not_called()
+        self.assertTrue(result['publisher_authenticated'])
+        self.assertFalse(result['installation_performed'])
+
     def test_failed_consumer_retains_its_authenticated_stage_for_retry(self):
         client = self.client()
         with self.assertRaisesRegex(ValueError, 'Consumer failed'):
@@ -140,6 +156,41 @@ except OSError: sys.exit(16)
                                     capture_output=True, timeout=15)
             self.assertEqual(result.returncode, 16, result.stderr.decode(errors='replace'))
             self.assertTrue(Path(receipt['stage']).is_dir())
+
+    def test_waiting_writer_resumes_after_another_process_releases_lock(self):
+        store = self.root/'overlapping-install'
+        store.mkdir()
+        ready, release = store/'ready', store/'release'
+        owner = """import sys,time
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from stage_component_bundle import owned_lock
+root=Path(sys.argv[2])
+with owned_lock(root):
+ (root/'ready').touch()
+ deadline=time.monotonic()+12
+ while not (root/'release').is_file() and time.monotonic()<deadline: time.sleep(.02)
+"""
+        first = subprocess.Popen([sys.executable, '-I', '-c', owner, str(P/'tools'), str(store)])
+        try:
+            deadline = time.monotonic() + 8
+            while not ready.exists() and first.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(ready.exists())
+            with self.assertRaisesRegex(TimeoutError, 'Another update'):
+                with stage.owned_lock(store, wait_seconds=.05):
+                    self.fail("writer lock taken while another owner is active")
+            later = threading.Timer(.25, release.touch)
+            try:
+                later.start()
+                with stage.owned_lock(store, wait_seconds=5):
+                    self.assertTrue(release.exists())
+            finally:
+                later.cancel()
+                later.join()
+        finally:
+            release.touch()
+            first.wait(timeout=15)
 
     def test_new_build_root_recycles_old_targets_but_keeps_all_trust_history(self):
         old = self.client(); old.prepare(['cpu'])
