@@ -22,7 +22,7 @@ std::optional<int> componentVersionComparison(QString installed,QString availabl
 bool componentUpdateNeedsRecovery(const QString& genesis);
 bool validComponentUpdateProgress(const QJsonObject&);
 QString componentUpdateFailureMessage(const QString& detail);
-QJsonArray componentUpdateDiagnosticHistory();
+QJsonArray componentUpdateDiagnosticHistory(const QString& genesis={});
 QJsonObject currentUpdateActivation(const QString& applicationRoot,const QString& mutableDataRoot);
 QString startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject& request);
 

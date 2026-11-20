@@ -46,6 +46,7 @@
 #include "ui/render/horizon_primary_navigation.h"
 #include "ui/archive_browser.h"
 #include "ui/wallet_core_view.h"
+#include "ui/network_footer_storage.h"
 #include "wallet/core_link_state.h"
 #include "wallet/runtime_paths.h"
 #include "ui/component_status_strip.h"
@@ -470,14 +471,17 @@ int main(int argc,char** argv) {
    const auto coordinationHeight=headersAhead
      ?QString("%1 / %2").arg(anchor->height).arg(*anchor->headerHeight)
      :QString::number(anchor->height);
+   const auto storage=inspectWallet?inspectWallet->property("pgn_native_block_storage").toJsonObject():QJsonObject{};
+   const auto coordinationSize=pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"coordination_bytes");
    if(testnetMode){
     const auto gold=inspectWallet?inspectWallet->property("pgn_network_gold_blocks"):QVariant{};
     const auto goldCount=gold.isValid()?QString::number(gold.toLongLong()):QStringLiteral("—");
     networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
-      .arg(goldCount,coordinationHeight,peersLabel,state));
+      .arg(goldCount+pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"gold_bytes"),
+           coordinationHeight+coordinationSize,peersLabel,state));
    }else{
     networkSummary->setText(QString("NETWORK · COORDINATION BLOCKS %1 · %2 · %3")
-      .arg(coordinationHeight,peersLabel,state));
+      .arg(coordinationHeight+coordinationSize,peersLabel,state));
    }
    const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
       .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
@@ -776,7 +780,7 @@ int main(int argc,char** argv) {
       {"application_data",window.property("pgn_update_data_root").toString()}};
    return QJsonObject{{"startup",startupHistory},{"core_first",linkHistory("pgn_core_first_transitions")},
      {"core_link_history",linkHistory("pgn_core_link_transitions")},{"selector_outcome",selectorStatus},
-     {"update_history",pgn::update::componentUpdateDiagnosticHistory()},
+     {"update_history",pgn::update::componentUpdateDiagnosticHistory(window.property("pgn_update_genesis").toString())},
      {"core_rpc_history",pgn::ui::walletCoreRpcDiagnosticHistory(inspectWallet)},
      {"observed_core_pid",inspectWallet->property("pgn_wallet_embedded_pid").toLongLong()},{"local_paths",locations}};
   });
