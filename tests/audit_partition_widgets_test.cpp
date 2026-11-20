@@ -8,6 +8,7 @@
 #include <QTableWidget>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -51,6 +52,12 @@ void verify(const QJsonArray& frames, QSize size) {
         } else {
             require(projected.value("ticket_id") == input.value("ticket_id"), "audit identity changed");
             require(rail.property("pgn_ticket_progress_fraction").isValid(), "rail progress is blank for the current audit");
+        }
+        if (step.contains("cycle_fraction")) {
+            const auto observed = rail.property("pgn_ticket_cycle_fraction");
+            require(observed.isValid(), "cycle progress is blank at the archive handoff");
+            require(std::abs(observed.toDouble() - step.value("cycle_fraction").toDouble()) < 1e-12,
+                    "whole ticket progress changed at the archive handoff");
         }
         const int rows = step.value("rows").toInt();
         const auto populated = [](const QTableWidget* table) {

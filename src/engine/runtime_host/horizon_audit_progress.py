@@ -73,6 +73,7 @@ class WholeAuditPresentation:
         self.cpu_only = cpu_only
         self.identity = None
         self.parts = {}
+        self.retained_parts = set()
         self.aggregated_scope = None
         self.metadata = {}
         self.last_progress = None
@@ -84,7 +85,8 @@ class WholeAuditPresentation:
         prior = item.get('prior_partitions', [])
         if not isinstance(prior, list) or not 0 < len(prior) == item['part_index'] <= 100:
             return
-        pending = [(i, part) for i, part in enumerate(prior) if i not in self.parts]
+        # A visible live scope may precede the final accepted position.
+        pending = [(i, part) for i, part in enumerate(prior) if i not in self.retained_parts]
         now = time.monotonic()
         if not pending or now < self.prior_retry_at:
             return
@@ -105,8 +107,11 @@ class WholeAuditPresentation:
         for index, part in pending:
             try:
                 snapshot = dict(part, ticket_id=partition_identity(audit, part))
-                self.parts[index] = retained_scope(self.ticket_root, snapshot, cpu_only=self.cpu_only)
-                self.aggregated_scope = None
+                scope = retained_scope(self.ticket_root, snapshot, cpu_only=self.cpu_only)
+                if scope != self.parts.get(index):
+                    self.parts[index] = scope
+                    self.aggregated_scope = None
+                self.retained_parts.add(index)
             except (OSError, ValueError, KeyError, TypeError, BufferError, SqliteError):
                 # Missing files and archive transitions affect display only.
                 # Keep the verified positional prefix and retry bounded reads.
@@ -116,6 +121,7 @@ class WholeAuditPresentation:
         if self.identity != item['audit_id']:
             self.identity = item['audit_id']
             self.parts.clear()
+            self.retained_parts.clear()
             self.aggregated_scope = None
             self.metadata.clear()
             self.last_progress = None
@@ -127,9 +133,11 @@ class WholeAuditPresentation:
             self.last_progress = part, value['positions']
             for key in ('bits', 'minimum_gap', 'target_merit', 'source_device'):
                 if key in source:self.metadata[key] = source[key]
+            index = item['part_index']
+            self.retained_parts.discard(index)
             scope = source.get('scopes', {}).get('ticket')
-            if scope and scope != self.parts.get(item['part_index']):
-                self.parts[item['part_index']] = deepcopy(scope)
+            if scope and scope != self.parts.get(index):
+                self.parts[index] = deepcopy(scope)
                 self.aggregated_scope = None
         elif self.last_progress is not None and self.last_progress[0] == part:
             # A missing read is not a new position. A fresh validated rewind

@@ -14,6 +14,7 @@ from horizon_preparation_scopes import PreparationPlan
 from horizon_engine_host import EngineService,ticket_configuration
 from horizon_network_audits import NetworkAudits,partition_ticket
 from horizon_audit_partition_archive import NAME
+from horizon_audit_progress import WholeAuditPresentation, presentation
 from pgn_session import SessionStore
 import horizon_ticket_archive as archive
 
@@ -79,6 +80,28 @@ class AuditPartitionArchiveTests(unittest.TestCase):
         self.audit.process_one();self.compact();before=(self.folder/NAME).read_bytes()
         self.assertEqual(self.audit.process_one(),'paused');self.assertEqual(self.computations,1)
         self.assertEqual((self.folder/NAME).read_bytes(),before);self.assertEqual(len(self.acked),2)
+
+    def test_running_view_replaces_preliminary_rows_with_the_archived_partition(self):
+        self.audit.process_one()
+        self.assertTrue(self.compact()['compacted'])
+        self.assertFalse((self.folder/'session-index.sqlite3').exists())
+        end = int(self.part['end'])
+        next_part = dict(index=1, start=str(end+10), end=str(end+20))
+        assigned = dict(self.input, ranges=[self.part, next_part])
+        first = presentation(assigned, self.part, self.folder)
+        second = presentation(assigned, next_part, self.root/'unavailable-next-folder')
+        final = archive.frame(self.folder)
+        self.assertEqual(final['scopes']['ticket']['statistics']['count_total'], 1)
+        partial = dict(self.frame, phase='Searching', positions='0')
+        view = WholeAuditPresentation(self.root/'tickets')
+        preliminary = view.frame(first, partial)
+        self.assertEqual(preliminary['scopes']['ticket']['statistics']['count_total'], 0)
+        boundary = view.frame(second)
+        self.assertEqual(boundary['positions'], self.frame['positions'])
+        self.assertTrue(boundary['source_stale'])
+        self.assertEqual(boundary['scopes']['ticket']['statistics']['count_total'], 1)
+        self.assertEqual(boundary['scopes']['ticket']['best'][0]['gap'], 956)
+        self.assertEqual(view.frame(second)['scopes']['ticket'], boundary['scopes']['ticket'])
 
     def test_crash_after_count_before_handoff_recovers_without_recomputation(self):
         with patch.object(self.source,'retain_audit_partition',side_effect=OSError('Controlled handoff crash')):

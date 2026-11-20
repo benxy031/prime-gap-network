@@ -132,6 +132,40 @@ class AuditProgressTests(unittest.TestCase):
         self.assertEqual(boundary['scopes']['ticket']['statistics']['count_total'], 2)
         self.assertEqual(again['scopes']['ticket']['statistics']['count_total'], 5)
 
+    def test_closed_checkpoint_replaces_an_already_displayed_partial_partition(self):
+        first, second = self.item(0), self.item(1)
+        closed = self.result_sample(first, 4)['scopes']['ticket']
+        state = WholeAuditPresentation(Path('/internal'))
+        state.frame(first, self.result_sample(first, 2))
+        with patch('horizon_audit_progress.retained_scope', return_value=closed) as restore:
+            boundary = state.frame(second)
+            result = state.frame(second, self.result_sample(second, 3))
+            restore.assert_called_once()
+            self.assertEqual(restore.call_args.args[1]['ticket_id'], first['part_ticket_id'])
+        self.assertEqual(boundary['positions'], '100')
+        self.assertTrue(boundary['source_stale'])
+        self.assertIsNone(boundary['eta_rate'])
+        self.assertEqual(boundary['scopes']['ticket']['statistics']['count_total'], 4)
+        self.assertEqual(len(boundary['scopes']['ticket']['best']), 4)
+        self.assertEqual(result['scopes']['ticket']['statistics']['count_total'], 7)
+
+    def test_partial_results_survive_a_delayed_checkpoint_and_reconcile_once(self):
+        first, second = self.item(0), self.item(1)
+        state = WholeAuditPresentation(Path('/internal'))
+        state.frame(first, self.result_sample(first, 2))
+        closed = self.result_sample(first, 4)['scopes']['ticket']
+        with patch('horizon_audit_progress.retained_scope', side_effect=[FileNotFoundError, closed]) as restore:
+            with patch('horizon_audit_progress.time.monotonic', return_value=10):
+                before = state.frame(second)
+                state.frame(second)
+            with patch('horizon_audit_progress.time.monotonic', return_value=13):
+                after = state.frame(second, self.result_sample(second, 1))
+                state.frame(second)
+        self.assertEqual(restore.call_count, 2)
+        self.assertEqual(before['scopes']['ticket']['statistics']['count_total'], 2)
+        self.assertEqual(after['positions'], '110')
+        self.assertEqual(after['scopes']['ticket']['statistics']['count_total'], 5)
+
     def test_same_cpu_range_from_another_attempt_cannot_fill_the_new_view(self):
         current = self.item(1, dict(self.audit, attempt=1))
         previous = self.item(1)
