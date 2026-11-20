@@ -9,6 +9,7 @@
 #include <QPainterPath>
 #include <QRegion>
 #include <QImage>
+#include <QJsonArray>
 #include <QHash>
 #include <QTableWidget>
 #include <QRegularExpression>
@@ -17,6 +18,11 @@
 
 namespace pgn::ui {
 namespace {
+constexpr int PrimaryWorkHeight=120, ConcurrentWorkRowHeight=24;
+QString resourceLabel(const QString& source){
+ if(source=="GPU")return source;
+ return QString("CPU %1 #%2").arg(source.section('/',1,1),source.section('/',2,2));
+}
 double ease(double x){x=std::clamp(x,0.,1.);return x*x*(3-2*x);}
 QImage glow(const QColor& color){
  QImage image(40,40,QImage::Format_ARGB32_Premultiplied);image.fill(Qt::transparent);
@@ -289,7 +295,7 @@ private:
  QPointer<MiningTicketProgress> rail_;QVector<Port> ports_;QHash<QRgb,QImage> glows_;
 };
 MiningTicketProgress::MiningTicketProgress(QWidget* parent):QWidget(parent){
- setObjectName("pgn-ticket-progress-rail");setFixedHeight(120);setMouseTracking(true);clock_.start();timer_.setInterval(33);
+ setObjectName("pgn-ticket-progress-rail");setFixedHeight(PrimaryWorkHeight);setMouseTracking(true);clock_.start();timer_.setInterval(33);
  workSelector_=new QComboBox(this);workSelector_->setObjectName("pgn-work-source");workSelector_->addItem("GPU work","GPU");workSelector_->setGeometry(16,94,160,22);
  workSelector_->hide(); // The operator rejected the dropdown presentation.
  workSelector_->setToolTip("Choose which resource's ticket, progress and results to inspect. Mining controls remain independent.");
@@ -308,7 +314,11 @@ void MiningTicketProgress::bindSourceCanvas(QWidget* canvas){canvas_=canvas;if(c
 void MiningTicketProgress::bindResultsView(QWidget* view){results_=view;}
 void MiningTicketProgress::setRecordEligibility(const QJsonArray& pairs){flow_.setEligibility(pairs);if(overlay_)overlay_->update();}
 void MiningTicketProgress::presentResourceActivity(const QString& device,const QJsonObject& status,bool connected){
- resourceActivity_.observe(device,status,connected,clock_.elapsed());ensureOverlay();if(overlay_){overlay_->synchronize();overlay_->update();}
+ const auto previous=resourceActivity_.rows().value(device);
+ resourceActivity_.observe(device,status,connected,clock_.elapsed());
+ const auto current=resourceActivity_.rows().value(device);
+ if(workViews_.contains(device)&&(current.connected!=previous.connected||current.enabled!=previous.enabled))update();
+ ensureOverlay();if(overlay_){overlay_->synchronize();overlay_->update();}
 }
 bool MiningTicketProgress::selectWorkSource(const QString& source){
  if(source!=workSource_&&!workViews_.contains(source))return false;
@@ -316,7 +326,7 @@ bool MiningTicketProgress::selectWorkSource(const QString& source){
  {const QSignalBlocker block(workSelector_);workSelector_->setCurrentIndex(workSelector_->findData(source));}
  auto value=workViews_.value(source).frame;
  if(value.isEmpty())value={{"schema","PGN_HORIZON_MINING_VIEW_V1"},{"phase","Waiting for a ticket"},{"source_device",source},{"source_stale",true},{"scopes",QJsonObject{}}};
- applyFrame(value);if(onWorkSelected)onWorkSelected(value);
+ updateWorkHeight();applyFrame(value);if(onWorkSelected)onWorkSelected(value);
  setProperty("pgn_selected_work_source",source);return true;
 }
 void MiningTicketProgress::present(const QJsonObject& frame){
@@ -324,11 +334,12 @@ void MiningTicketProgress::present(const QJsonObject& frame){
  const auto device=frame.value("source_device").toString();const auto source=device.startsWith("CPU/")?device:QString("GPU");
  if(source!="GPU"&&!QRegularExpression("^CPU/[A-Za-z0-9_.-]{1,100}/[0-9]+$").match(source).hasMatch())return;
  if(!workViews_.contains(source)){
-  if(workViews_.size()>=9)return;
+  if(source!="GPU"&&workViews_.size()-workViews_.contains("GPU")>=8)return;
   if(source!="GPU")workSelector_->addItem(QString("CPU %1").arg(source.section('/',1,1)),source);
  }
  workViews_[source].frame=frame;
- if(source!=workSource_){workViews_[source].cycle.observe(frame);return;}
+ updateWorkHeight();
+ if(source!=workSource_){workViews_[source].cycle.observe(frame);update();return;}
  applyFrame(frame);if(onWorkSelected)onWorkSelected(frame);
  setProperty("pgn_selected_work_source",source);
 }
@@ -357,6 +368,59 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
  setProperty("pgn_ticket_flow_received",QVariant::fromValue(flow_.received()));setProperty("pgn_ticket_flow_coalesced",QVariant::fromValue(flow_.coalesced()));
  ensureOverlay();update();if(overlay_){overlay_->synchronize();overlay_->update();}
 }
+void MiningTicketProgress::updateWorkHeight(){
+ const auto rows=workViews_.size()-workViews_.contains(workSource_);
+ const int wanted=PrimaryWorkHeight+ConcurrentWorkRowHeight*rows;
+ if(height()!=wanted)setFixedHeight(wanted);
+}
+
+void MiningTicketProgress::paintConcurrentWork(QPainter& painter){
+ QFont font("Segoe UI");font.setPixelSize(12);painter.setFont(font);
+ const auto metrics=painter.fontMetrics();
+ QJsonArray rows;
+ int top=PrimaryWorkHeight;
+ const int available=std::max(1,width()-32);
+ for(auto it=workViews_.constBegin();it!=workViews_.constEnd();++it){
+  const auto& source=it.key();
+  if(source==workSource_)continue;
+  const auto& frame=it->frame;
+  const bool audit=frame.value("work_role")=="audit";
+  const auto resource=resourceActivity_.rows().constFind(source);
+  const bool disconnected=resource!=resourceActivity_.rows().constEnd()&&!resource->connected;
+  auto phase=frame.value("phase").toString("Waiting for a ticket");
+  if(disconnected)phase="Disconnected";
+  else if(phase=="Searching"){
+   if(resource!=resourceActivity_.rows().constEnd()&&resource->enabled==false)phase="Paused";
+   else if(frame.value("source_stale").toBool())phase="Last reported";
+   else if(audit)phase="Auditing";
+  }
+  const auto title=frame.value("title").toString(audit?"Network audit":"Network ticket");
+  bool doneOk=false,totalOk=false;
+  const auto done=frame.value("positions").toString().toDouble(&doneOk);
+  const auto total=frame.value("positions_total").toString().toDouble(&totalOk);
+  const bool measured=doneOk&&totalOk&&std::isfinite(done)&&std::isfinite(total)&&total>0&&done>=0&&done<=total;
+  const double fraction=measured?done/total:0.;
+  const QString status=measured?phase+QString(" · %1%").arg(100*fraction,0,'f',2):phase;
+  const auto color=disconnected?QColor("#a7b8bf"):QColor("#8cb9ec");
+  painter.fillRect(QRect(16,top,available,ConcurrentWorkRowHeight-2),QColor("#0b222b"));
+  const int textWidth=std::max(1,available-16);
+  const int statusWidth=std::min(textWidth/2,metrics.horizontalAdvance(status)+2);
+  const int labelWidth=std::max(1,textWidth-statusWidth-9);
+  painter.setPen(QColor("#def2f3"));
+  painter.drawText(QRect(24,top,labelWidth,19),Qt::AlignVCenter,metrics.elidedText(resourceLabel(source)+" · "+title,Qt::ElideRight,labelWidth));
+  painter.setPen(color);
+  painter.drawText(QRect(24+textWidth-statusWidth,top,statusWidth,19),Qt::AlignRight|Qt::AlignVCenter,metrics.elidedText(status,Qt::ElideRight,statusWidth));
+  if(measured){
+   painter.fillRect(QRectF(24,top+19,textWidth,2),QColor("#284655"));
+   painter.fillRect(QRectF(24,top+19,textWidth*fraction,2),color);
+  }
+  rows.append(QJsonObject{{"source",source},{"title",title},{"phase",phase},
+                         {"fraction",measured?QJsonValue(fraction):QJsonValue()}});
+  top+=ConcurrentWorkRowHeight;
+ }
+ setProperty("pgn_ticket_concurrent_work",rows);
+}
+
 void MiningTicketProgress::paintEvent(QPaintEvent*){
  QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);
  const auto phase=frame_.value("phase").toString("Waiting for a ticket");const bool active=phase=="Searching",transition=phase=="Starting"||phase=="Stopping",storageWait=phase=="Waiting for storage";
@@ -404,7 +468,8 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
   painter.setPen(Qt::NoPen);painter.setBrush(accent);painter.drawEllipse(measured,2.,2.);
  }
  QFont titleFont("Segoe UI");titleFont.setPixelSize(13);titleFont.setWeight(QFont::DemiBold);painter.setFont(titleFont);
- const QString title=frame_.contains("bits")?(cycle.known?cycle.title:frame_.value("title").toString(audit?"Network audit":"Network ticket"))+QString(" · %1 bits").arg(frame_.value("bits").toInt()):audit?QString("Network audit"):QString("Network work · awaiting assignment");
+ QString title=frame_.contains("bits")?(cycle.known?cycle.title:frame_.value("title").toString(audit?"Network audit":"Network ticket"))+QString(" · %1 bits").arg(frame_.value("bits").toInt()):audit?QString("Network audit"):QString("Network work · awaiting assignment");
+ if(height()>PrimaryWorkHeight)title=resourceLabel(workSource_)+" · "+title;
  const double rate=frame_.value("eta_rate").toDouble();const auto eta=active&&rate>0&&std::isfinite(rate)&&total>0?std::optional<double>(std::max(0.,total-done)/rate):std::nullopt;
  const bool attention=frame_.value("phase")=="Needs attention";
  const QString status=attention?miningAttentionStatus(frame_.value("message").toString()):
@@ -428,7 +493,8 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const int detailLeft=contentLeft+titleWidth+int(gap),detailWidth=std::max(0,width()-18-activityWidth-int(gap)-detailLeft);
  if(detailWidth>0)painter.drawText(QRectF(detailLeft,rowY,detailWidth,rowHeight),Qt::AlignLeft|Qt::AlignVCenter,painter.fontMetrics().elidedText(positions,Qt::ElideRight,detailWidth));
  painter.setFont(metricFont);painter.setPen(accent);painter.drawText(QRectF(width()-18-activityWidth,rowY,activityWidth,rowHeight),Qt::AlignRight|Qt::AlignVCenter,metricMetrics.elidedText(activity,Qt::ElideRight,activityWidth));
- setProperty("pgn_ticket_display_phase",attention?status:displayPhase);setProperty("pgn_ticket_progress_scope",cycle.preparing?"pre_ticket_audit":cycle.known?"ticket_cycle":"task");setProperty("pgn_ticket_header_rows",1);setProperty("pgn_ticket_header_height",120);
+ setProperty("pgn_ticket_display_phase",attention?status:displayPhase);setProperty("pgn_ticket_progress_scope",cycle.preparing?"pre_ticket_audit":cycle.known?"ticket_cycle":"task");setProperty("pgn_ticket_header_rows",1);setProperty("pgn_ticket_header_height",height());
+ paintConcurrentWork(painter);
  setProperty("pgn_ticket_eta_seconds",eta?QVariant(*eta):QVariant{});setProperty("pgn_ticket_progress_fraction",fraction?QVariant(*fraction):QVariant{});if(storageWait)setProperty("pgn_ticket_cycle_eta_seconds",QVariant{});
  setProperty("pgn_ticket_work_presentation",QJsonObject{{"role",audit?"audit":role},{"phase",displayPhase},{"title",title},{"status",status},{"quantity",positions},{"remaining",remaining}});
  setProperty("pgn_ticket_animation_active",flow_.moving());setProperty("pgn_ticket_animation_phase",flow_.moving()?QVariant(std::fmod(clock_.elapsed()/1000.,1.)):QVariant{});
