@@ -46,8 +46,6 @@ static void resourceWorkSelection(){
  require(rail.selectWorkSource("GPU")&&selected.value("positions")=="110000000000000"&&selected.value("phase")=="Paused","GPU selection did not retain its updated snapshot");
  require(rail.selectWorkSource("CPU/ALEX/0")&&selected.value("ticket_id")==QString(64,'b'),"Switching mixed resource identities");
  require(!rail.selectWorkSource("CPU/UNKNOWN/0"),"Unknown resource borrowed another ticket");
- auto* selector=rail.findChild<QComboBox*>("pgn-work-source");require(selector&&selector->count()==2,"Work selector duplicated or lost resources");
- require(selector->geometry().bottom()<rail.height(),"Work selection added another header row");
 }
 
 static void concurrentWorkRows(const QString& output){
@@ -67,7 +65,7 @@ static void concurrentWorkRows(const QString& output){
  require(view.height()>120,"CPU work overlapped the GPU header");
  require(view.property("pgn_ticket_work_presentation").toJsonObject()["title"].toString().startsWith("GPU · Ticket 857"),
          "Concurrent CPU changed or hid the primary GPU label");
- require(!view.findChild<QComboBox*>("pgn-work-source")->isVisible(),"Rejected work dropdown reappeared");
+ require(!view.findChild<QObject*>("pgn-work-source"),"Rejected work dropdown reappeared");
  for(const int width:{640,1366}){
   view.resize(width,view.height());const auto image=view.grab();
   require(!image.isNull()&&image.width()>=width&&rows().size()==1,"Responsive render lost the CPU row");

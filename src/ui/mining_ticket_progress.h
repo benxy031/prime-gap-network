@@ -7,7 +7,6 @@
 #include <QTimer>
 #include <QWidget>
 #include <QMouseEvent>
-#include <QComboBox>
 #include <functional>
 
 class QPainter;
@@ -36,7 +35,7 @@ private:
  friend class GapFlowOverlay;
  QJsonObject frame_;GapFlowModel flow_;QTimer timer_;QElapsedTimer clock_;
  struct WorkView {QJsonObject frame;GapFlowModel flow;MiningCycleHistory cycle;};
- QMap<QString,WorkView> workViews_;QString workSource_{"GPU"};QComboBox* workSelector_{};
+ QMap<QString,WorkView> workViews_;QString workSource_{"GPU"};
  void applyFrame(const QJsonObject&);
  void updateWorkHeight();
  void paintConcurrentWork(QPainter&);

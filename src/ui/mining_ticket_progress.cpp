@@ -13,7 +13,6 @@
 #include <QHash>
 #include <QTableWidget>
 #include <QRegularExpression>
-#include <QSignalBlocker>
 #include <cmath>
 
 namespace pgn::ui {
@@ -296,11 +295,6 @@ private:
 };
 MiningTicketProgress::MiningTicketProgress(QWidget* parent):QWidget(parent){
  setObjectName("pgn-ticket-progress-rail");setFixedHeight(PrimaryWorkHeight);setMouseTracking(true);clock_.start();timer_.setInterval(33);
- workSelector_=new QComboBox(this);workSelector_->setObjectName("pgn-work-source");workSelector_->addItem("GPU work","GPU");workSelector_->setGeometry(16,94,160,22);
- workSelector_->hide(); // The operator rejected the dropdown presentation.
- workSelector_->setToolTip("Choose which resource's ticket, progress and results to inspect. Mining controls remain independent.");
- workSelector_->setStyleSheet("QComboBox{background:#0b2932;color:#d7efec;border:1px solid #315d68;border-radius:5px;padding:2px 7px;font:12px 'Segoe UI';}QComboBox QAbstractItemView{background:#0b2932;color:#d7efec;selection-background-color:#1b655f;}");
- connect(workSelector_,&QComboBox::currentIndexChanged,this,[this](int index){selectWorkSource(workSelector_->itemData(index).toString());});
  connect(&timer_,&QTimer::timeout,this,[this]{if(!isVisible())return;const bool wasMoving=flow_.moving();flow_.expire(clock_.elapsed());pollLandings();if(results_)flow_.setVisibleBest(results_->property("pgn_visible_best").toJsonObject(),clock_.elapsed());setProperty("pgn_ticket_collection_size",flow_.collected().size());setProperty("pgn_ticket_collection_departing",flow_.departing().size());
   const bool resourceChanged=resourceActivity_.expire(clock_.elapsed());
   if(resourceChanged||resourceActivity_.moving()||wasMoving!=flow_.moving()||flow_.moving()||workMarksActive(clock_.elapsed())||!flow_.events().isEmpty()||!flow_.collected().isEmpty()||!flow_.departing().isEmpty()||frame_.value("phase")=="Starting"||frame_.value("phase")=="Stopping"){
@@ -323,7 +317,6 @@ void MiningTicketProgress::presentResourceActivity(const QString& device,const Q
 bool MiningTicketProgress::selectWorkSource(const QString& source){
  if(source!=workSource_&&!workViews_.contains(source))return false;
  if(source!=workSource_){auto& old=workViews_[workSource_];old.flow=flow_;old.cycle=cycleHistory_;workSource_=source;const auto view=workViews_.value(source);flow_=view.flow;cycleHistory_=view.cycle;frame_={};}
- {const QSignalBlocker block(workSelector_);workSelector_->setCurrentIndex(workSelector_->findData(source));}
  auto value=workViews_.value(source).frame;
  if(value.isEmpty())value={{"schema","PGN_HORIZON_MINING_VIEW_V1"},{"phase","Waiting for a ticket"},{"source_device",source},{"source_stale",true},{"scopes",QJsonObject{}}};
  updateWorkHeight();applyFrame(value);if(onWorkSelected)onWorkSelected(value);
@@ -333,10 +326,7 @@ void MiningTicketProgress::present(const QJsonObject& frame){
  if(!coherentMiningCycleFrame(frame))return;
  const auto device=frame.value("source_device").toString();const auto source=device.startsWith("CPU/")?device:QString("GPU");
  if(source!="GPU"&&!QRegularExpression("^CPU/[A-Za-z0-9_.-]{1,100}/[0-9]+$").match(source).hasMatch())return;
- if(!workViews_.contains(source)){
-  if(source!="GPU"&&workViews_.size()-workViews_.contains("GPU")>=8)return;
-  if(source!="GPU")workSelector_->addItem(QString("CPU %1").arg(source.section('/',1,1)),source);
- }
+ if(source!="GPU"&&!workViews_.contains(source)&&workViews_.size()-workViews_.contains("GPU")>=8)return;
  workViews_[source].frame=frame;
  updateWorkHeight();
  if(source!=workSource_){workViews_[source].cycle.observe(frame);update();return;}
