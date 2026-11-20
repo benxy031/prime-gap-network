@@ -68,6 +68,16 @@ bool processIdentity(qint64 pid,QString& birth,QString& image,bool* exited=nullp
 
 #endif
 
+bool coreRecoveryMemoryAvailable(){
+#ifdef Q_OS_WIN
+ MEMORYSTATUSEX memory{};
+ memory.dwLength=sizeof(memory);
+ return GlobalMemoryStatusEx(&memory)&&memory.ullAvailPhys>=CoreRecoveryPolicy::MemoryPhysicalReserve&&
+  memory.ullAvailPageFile>=CoreRecoveryPolicy::MemoryCommitReserve;
+#else
+ return false;
+#endif
+}
 QByteArray nativeFileIdentity(const QString& path,bool directory){
  const QFileInfo info(path);
  if(!info.exists()||info.isSymLink()||info.isDir()!=directory)return {};
@@ -191,6 +201,12 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
   if(preparationAutomatic_&&(!recoveryBindingValid_||!recoveryBindingMatches(readRecoveryStorage(preparation.profile,runtimeDirectory_))||!departedOwnerAbsent())){
    failStart("Core recovery stopped: profile, data folder or storage identity changed");return;
   }
+  if(preparationAutomatic_&&recovery_.memoryRecovery()&&!coreRecoveryMemoryAvailable()){
+   recovery_.deferMemoryLaunch();launching_=false;
+   if(ownershipLock_)ownershipLock_->unlock();
+   setLinkState(CoreLinkState::Stopped,"Core is waiting for stable memory headroom before restarting.");
+   return;
+  }
   profile_=preparation.profile;if(!preparation.notice.isEmpty())report(preparation.notice);
   managedUpgradePending_=preparation.ownedUpgradePending;
   const QString digest=preparation.digest;
@@ -205,7 +221,7 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
    if(!invalid.isEmpty()){failStart(invalid);return;}
   }
   if(recoverOwned()){
-   if(pending&&!intent.remove())report("OWNED CORE RECOVERED · launch intent retained for repair");
+   if(pending&&!intent.remove())report("OWNED CORE RECOVERED Â· launch intent retained for repair");
    return;
   }
   if(!launching_)return; // Invalid/ambiguous existing owner fails closed.
@@ -267,7 +283,7 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
      !persistOwned()){failStart("Core ownership could not be persisted; client left intact, integration/mutations refused");return;}
   if(!intent.remove()){failStart("Core owner saved but launch intent could not be settled; reattach exact owner before any new launch");return;}
   launching_=false;
-  recoveryClock_.start();clock_.start();report("CORE STARTED · checking exact chain identity");inspect();
+  recoveryClock_.start();clock_.start();report("CORE STARTED Â· checking exact chain identity");inspect();
  });
 }
 CoreRuntime::~CoreRuntime(){
@@ -340,23 +356,27 @@ bool CoreRuntime::recoverOwned(){
   CloseHandle(handle);failStart("Saved Core image changed within the same process; no integration or second launch");return false;
  }
  processHandle_=handle;pid_=savedPid;processBirth_=birth;launching_=false;
-  captureRecoveryBinding();recoveryClock_.start();clock_.start();report("EXISTING OWNED CORE RECOVERED · checking exact chain identity");inspect();return true;
+  captureRecoveryBinding();recoveryClock_.start();clock_.start();report("EXISTING OWNED CORE RECOVERED Â· checking exact chain identity");inspect();return true;
 #elif defined(Q_OS_LINUX)
  QString birth,image;if(!processIdentity(savedPid,birth,image)){if(::kill(pid_t(savedPid),0)<0&&errno==ESRCH)return false;failStart("Saved Core process identity could not be inspected");return false;}
  if(birth!=savedBirth){report("Previous Core process exited; its number was reused");return false;}
- if(!verifyCoreOwnership(profile_,saved,savedPid,birth,image).isEmpty()){failStart("Saved Core image changed within the same process");return false;}pid_=savedPid;processBirth_=birth;launching_=false;captureRecoveryBinding();recoveryClock_.start();clock_.start();report("EXISTING OWNED CORE RECOVERED · checking exact chain identity");inspect();return true;
+ if(!verifyCoreOwnership(profile_,saved,savedPid,birth,image).isEmpty()){failStart("Saved Core image changed within the same process");return false;}pid_=savedPid;processBirth_=birth;launching_=false;captureRecoveryBinding();recoveryClock_.start();clock_.start();report("EXISTING OWNED CORE RECOVERED Â· checking exact chain identity");inspect();return true;
 #else
  failStart("Native process ownership is not qualified on this platform");return false;
 #endif
 }
 bool CoreRuntime::processAlive(){
- bool confirmedExit=false,exitKindAllowed=true;
+ bool confirmedExit=false,exitKindAllowed=true,memoryExitKindAllowed=false;
 #ifdef Q_OS_WIN
  const auto wait=processHandle_?WaitForSingleObject(static_cast<HANDLE>(processHandle_),0):WAIT_FAILED;
  if(wait==WAIT_TIMEOUT)return true;
  if(wait==WAIT_OBJECT_0){
   DWORD code{};confirmedExit=true;
-  exitKindAllowed=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code)&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
+  const bool haveExitCode=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code);
+  exitKindAllowed=haveExitCode&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
+  // The Windows CRT can report terminate() as a fail-fast exit. Require
+  // the exact terminal message from this verified Core run as well.
+  memoryExitKindAllowed=haveExitCode&&(exitKindAllowed||code==0xC0000409u);
  }
  if(processHandle_){CloseHandle(static_cast<HANDLE>(processHandle_));processHandle_=nullptr;}
 #elif defined(Q_OS_LINUX)
@@ -370,6 +390,7 @@ bool CoreRuntime::processAlive(){
   const auto departed=coreOwnershipBinding(profile_,pid_,processBirth_);
   readRecoveryLog(true);
   const bool known=confirmedExit&&exitKindAllowed&&faultEvidence_.knownDiskFull();
+  const bool outOfMemory=confirmedExit&&memoryExitKindAllowed&&faultEvidence_.knownOutOfMemory();
   const bool same=recoveryBindingValid_&&recoveryBindingMatches(readRecoveryStorage(profile_,runtimeDirectory_));
   const auto databaseFailure=confirmedExit&&exitKindAllowed&&same?faultEvidence_.databaseFailure():CoreDatabaseFailure::None;
   ++identityGeneration_;pid_=0;processBirth_.clear();clock_.stop();connected_=false;checking_=false;stopping_=false;walletChecking_=walletReady_=false;
@@ -379,7 +400,7 @@ bool CoreRuntime::processAlive(){
       std::string_view(startupError->constData(),std::size_t(startupError->size())));
   const QString exitDetail=dataDirectoryRefused
       ?coreDataDirectoryRefusedDetail
-      :"The owned Core process exited";
+      :outOfMemory?"Core ran out of memory.":"The owned Core process exited";
   setLinkState(CoreLinkState::Stopped,exitDetail);
   if(onObservation)onObservation(std::nullopt);
   if(ownershipLock_)ownershipLock_->unlock();
@@ -388,10 +409,16 @@ bool CoreRuntime::processAlive(){
    restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
    const auto generation=recovery_.generation();
    QTimer::singleShot(0,this,[this,generation]{if(recovery_.permits(generation))begin(true);});
-  }else if(recovery_.diskExit(known,same,recoveryTime_.elapsed())){
+  }else if(outOfMemory?recovery_.memoryExit(true,same,recoveryTime_.elapsed()):
+                       recovery_.diskExit(known,same,recoveryTime_.elapsed())){
    departedOwner_=departed;recoveryClock_.start();
-   setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
-   report("CORE WAITING FOR STORAGE · automatic recovery is armed");
+   if(outOfMemory){
+    setLinkState(CoreLinkState::Stopped,"Core ran out of memory. Waiting for stable memory headroom before restarting.");
+    report("CORE WAITING FOR MEMORY Â· automatic recovery is armed");
+   }else{
+    setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
+    report("CORE WAITING FOR STORAGE Â· automatic recovery is armed");
+   }
   }else if(databaseFailure!=CoreDatabaseFailure::None&&recovery_.state()!=CoreRecoveryPolicy::State::Suppressed){
    recoveryClock_.stop();
    const auto reason=databaseFailure==CoreDatabaseFailure::Chainstate?
@@ -402,11 +429,11 @@ bool CoreRuntime::processAlive(){
   }else{
    recoveryClock_.stop();
    if(recovery_.state()==CoreRecoveryPolicy::State::Suppressed)
-    report("CORE STOPPED BY REQUEST · automatic restart is suspended");
-   else if(dataDirectoryRefused)
+    report("CORE STOPPED BY REQUEST Â· automatic restart is suspended");
+   else if(dataDirectoryRefused||outOfMemory)
     report(exitDetail);
    else
-    report("CORE STOPPED · cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
+    report("CORE STOPPED Â· cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
   }
  }
  return false;
@@ -507,7 +534,7 @@ void CoreRuntime::recoveryTick(){
   recovery_.attention();recoveryClock_.stop();
   report("Core recovery stopped: approved profile, process ownership or storage identity changed; no client launched");return;
  }
- if(recovery_.probe(now,sample.ready,true,true,sample.available))begin(true,true);
+ if(recovery_.probe(now,sample.ready,true,true,sample.available,coreRecoveryMemoryAvailable()))begin(true,true);
 }
 void CoreRuntime::report(const QString& text){if(onStatus)onStatus(text);}
 void CoreRuntime::setLinkState(CoreLinkState state,const QString& detail){
@@ -613,8 +640,8 @@ void CoreRuntime::inspectFailed(const QString& operation,const CoreRpcResult& re
  const auto state=coreInspectionFailureState(reply);
  setLinkState(state,operation+QStringLiteral(": ")+reply.error);
  if(onObservation)onObservation(std::nullopt);
- report(state==CoreLinkState::WarmingUp?QStringLiteral("CORE · LOADING CHAIN DATA"):
-    QStringLiteral("CORE READ UNAVAILABLE · retrying automatically"));
+ report(state==CoreLinkState::WarmingUp?QStringLiteral("CORE Â· LOADING CHAIN DATA"):
+    QStringLiteral("CORE READ UNAVAILABLE Â· retrying automatically"));
 }
 void CoreRuntime::consoleRequest(const QString& method,const QByteArray& params,bool displayedWallet,std::function<void(QByteArray,QString)> consume){
   const auto validation=validateConsoleCommand(method,params);if(!validation.isEmpty()){consume({},validation);return;}
@@ -993,7 +1020,7 @@ void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJso
    const Integer origin(domain.value("range_origin").toString().toStdString()),
       limit(domain.value("range_limit").toString().toStdString()),width(domain.value("ticket_width").toString().toStdString());
    const Integer first=origin+(Integer(number.toStdString())-1)*width;
-   if(width<=0||first<origin||first>=limit){consume({},"Ticket number is outside this network’s search domain");return;}
+   if(width<=0||first<origin||first>=limit){consume({},"Ticket number is outside this networkâ€™s search domain");return;}
    const Integer last=first+width;
    start=QString::fromStdString(first.str());end=QString::fromStdString((last<limit?last:limit).str());
   }catch(const std::exception&){consume({},"Core ticket domain is invalid");return;}
@@ -1143,7 +1170,7 @@ void CoreRuntime::inspect(){
    if(!genesis.error.isEmpty()){inspectFailed(QStringLiteral("getblockhash(0)"),genesis);return;}
    const auto projected=projectChainObservation(ownerEpoch,profile_,chain.toObject(),genesis.value.toString(),observedUtc);
     if(!projected.observation){checking_=false;connected_=false;clock_.stop();recovery_.attention();recoveryClock_.stop();setLinkState(CoreLinkState::Rejected,projected.error);if(onObservation)onObservation(std::nullopt);
-    report(projected.error+" · refusing wallet integration/RPC mutations; client left intact");return;}
+    report(projected.error+" Â· refusing wallet integration/RPC mutations; client left intact");return;}
    if(!connected_){connected_=true;if(!recoveryBindingValid_&&!automaticRun_)captureRecoveryBinding();}
    if(managedUpgradePending_){
     // Adopt a manually rebuilt portable Core through the same verified RPC
@@ -1163,7 +1190,7 @@ void CoreRuntime::inspect(){
        if(!ownerEpoch.matches(epoch())||!processAlive())return;checking_=false;setLinkState(CoreLinkState::Ready);
        if(onObservation)onObservation(value);
        report(QStringLiteral("PGN CORE")+
-        (value.peers&&*value.peers==0?" · NO PEERS":!value.synchronizing?" · SYNC STATUS UNAVAILABLE":*value.synchronizing?" · SYNCHRONIZING":value.oldTipAt(QDateTime::currentDateTimeUtc())?" · CONNECTED · CHAIN IDLE":" · CONNECTED"));
+        (value.peers&&*value.peers==0?" Â· NO PEERS":!value.synchronizing?" Â· SYNC STATUS UNAVAILABLE":*value.synchronizing?" Â· SYNCHRONIZING":value.oldTipAt(QDateTime::currentDateTimeUtc())?" Â· CONNECTED Â· CHAIN IDLE":" Â· CONNECTED"));
       };
       setProperty("pgn_core_native_peer_sync",QJsonObject{});
       if(!peerBootstrap_){publish(observation);return;}
@@ -1205,12 +1232,12 @@ void CoreRuntime::stopOwned(){
     // stop. Preserve the handoff until that owner exits or can be rechecked.
     managedUpgradeRetry_.start();
     setLinkState(CoreLinkState::Starting,"Waiting for the previously verified Core to shut down");
-    report("CORE UPDATE WAITING · retrying the graceful shutdown of the previous Core");
+    report("CORE UPDATE WAITING Â· retrying the graceful shutdown of the previous Core");
     return;
    }
    report("Graceful Core stop unavailable; client left intact");
   }
-  else report("CORE SHUTDOWN REQUESTED · waiting for actual process exit");
+  else report("CORE SHUTDOWN REQUESTED Â· waiting for actual process exit");
  },false,replacing?30000:3000,{},replacing?CoreRpcChannel::Inspection:CoreRpcChannel::General);
 }
 void CoreRuntime::ensurePeerBootstrap(){

@@ -13,6 +13,9 @@
 #include <atomic>
 #include <iostream>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 namespace {
 unsigned assertions{};
 void need(bool value,const char* message){++assertions;if(!value)throw std::runtime_error(message);}
@@ -155,6 +158,44 @@ struct CoreRuntimeRecoveryTest {
   write(f.debug,"2026-11-11T20:25:14Z [error] Shutting down due to lack of disk space!\n2026-11-11T20:25:16Z Shutdown done\n");
   core.readRecoveryLog(true);need(!core.faultEvidence_.knownDiskFull(),"unowned missing log was adopted");
  }
+#ifdef Q_OS_WIN
+ static void memoryCrashRecovery(){
+  Fixture f;
+  CoreRuntime core(f.root,nullptr,true,f.runtime);
+  CoreProfilePreparation prepared;
+  prepared.profile=f.profile;prepared.digest=f.profile.executableSha256;
+  core.preparationForTest_=[prepared]{return prepared;};
+  write(f.data+"/inert-memory-once","1");
+  auto until=[](const auto& observed,const char* reason){
+   QElapsedTimer timer;timer.start();
+   while(timer.elapsed()<8000&&!observed())settle(40);
+   need(observed(),reason);
+  };
+  core.launch();
+  until([&]{return core.processId()>0&&QFileInfo::exists(f.data+"/inert-starts.txt");},"private Core did not start");
+  const auto first=core.processId();
+  write(f.data+"/inert-exit-now","1");
+  until([&]{return core.recovery_.state()==CoreRecoveryPolicy::State::WaitingMemory;},
+        "owned Windows fail-fast exit did not arm memory recovery");
+  core.recoveryClock_.stop();
+  const auto sample=CoreRuntime::readRecoveryStorage(f.profile,f.runtime);
+  need(core.processId()==0&&core.departedOwnerAbsent()&&core.recoveryBindingMatches(sample),
+       "memory recovery lost exact ownership");
+  const auto next=core.recoveryTime_.elapsed()+6000;
+  need(!core.recovery_.probe(next,true,true,true,sample.available,false),"low memory permitted restart");
+  need(!core.recovery_.probe(next+5000,true,true,true,sample.available,true),"first sample restarted Core");
+  need(!core.recovery_.probe(next+10000,true,true,true,sample.available,true),"second sample restarted Core");
+  need(core.recovery_.probe(next+15000,true,true,true,sample.available,true),"third sample did not authorize retry");
+  core.begin(true,true);
+  until([&]{return read(f.data+"/inert-starts.txt").count("INERT CHILD STARTED")==2;},
+        "approved private Core did not restart");
+  need(core.processId()>0&&core.processId()!=first&&read(f.runtime+"/wallet-core.json")==f.receipt&&
+       read(f.data+"/public-chain-marker")=="PUBLIC INERT CHAIN MARKER",
+       "recovery changed saved data or reused departed owner");
+  core.suspendRecoveryForMaintenance();
+  settle(650);
+ }
+#endif
  static void cancelledHash(bool maintenance,bool automatic){
   Fixture f;CoreRuntime core(f.root,nullptr,true,f.runtime);QSemaphore entered,release;std::atomic<unsigned> calls{};
   CoreProfilePreparation prepared;prepared.profile=f.profile;prepared.digest=f.profile.executableSha256;
@@ -190,10 +231,31 @@ struct CoreRuntimeRecoveryTest {
 int main(int argc,char** argv){
  QCoreApplication application(argc,argv);
  for(int n=1;n<argc;++n){const QString value=QString::fromLocal8Bit(argv[n]);if(value.startsWith("-datadir=")){
-  write(value.mid(9)+"/inert-starts.txt","INERT CHILD STARTED\n",true);QTimer::singleShot(500,&application,&QCoreApplication::quit);return application.exec();
+  const auto data=value.mid(9);
+  write(data+"/inert-starts.txt","INERT CHILD STARTED\n",true);
+#ifdef Q_OS_WIN
+  if(QFileInfo::exists(data+"/inert-memory-once")){
+   need(QFile::remove(data+"/inert-memory-once"),"cannot consume private exit marker");
+   QTimer gate;
+   gate.setInterval(30);
+   QObject::connect(&gate,&QTimer::timeout,&application,[data]{
+    if(!QFileInfo::exists(data+"/inert-exit-now"))return;
+    write(data+"/testnet/debug.log","2026-11-20T20:18:40Z [error] Out of memory. Terminating.\n",true);
+    ExitProcess(0xC0000409u);
+   });
+   gate.start();
+   QTimer::singleShot(8000,&application,&QCoreApplication::quit);
+   return application.exec();
+  }
+#endif
+  QTimer::singleShot(500,&application,&QCoreApplication::quit);
+  return application.exec();
  }}
  try{
   policyCases();evidenceCases();pgn::wallet::CoreRuntimeRecoveryTest::logAndStorage();pgn::wallet::CoreRuntimeRecoveryTest::firstOwnedLog();
+#ifdef Q_OS_WIN
+  pgn::wallet::CoreRuntimeRecoveryTest::memoryCrashRecovery();
+#endif
   for(bool maintenance:{false,true})for(bool automatic:{false,true})pgn::wallet::CoreRuntimeRecoveryTest::cancelledHash(maintenance,automatic);
   std::cout<<"PASS "<<assertions<<" recovery assertions; private clocks/space/owner/log/hash fixtures, no Core/GPU/disk-fill\n";
  }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<"\n";return 1;}
