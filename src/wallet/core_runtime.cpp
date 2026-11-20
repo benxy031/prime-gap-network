@@ -376,7 +376,7 @@ bool CoreRuntime::processAlive(){
   const bool dataDirectoryRefused=startupError&&coreRefusedDataDirectory(
       std::string_view(startupError->constData(),std::size_t(startupError->size())));
   const QString exitDetail=dataDirectoryRefused
-      ?"Core reported that it could not open its configured data folder."
+      ?coreDataDirectoryRefusedDetail
       :"The owned Core process exited";
   setLinkState(CoreLinkState::Stopped,exitDetail);
   if(onObservation)onObservation(std::nullopt);

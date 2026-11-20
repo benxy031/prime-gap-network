@@ -745,6 +745,8 @@ int main(int argc,char** argv) {
     for(const auto& entry:inspectWallet->property(property).toJsonArray()){
      const auto event=entry.toObject();const auto detail=event.value("detail").toString();
      QJsonObject safe{{"state",event.value("state")},{"observed_utc",event.value("observed_utc")}};
+     if(event.value("state")=="stopped"&&detail==pgn::wallet::coreDataDirectoryRefusedDetail)
+      safe.insert("startup_failure","data_directory_unavailable");
      const auto code=networkError.match(detail);if(code.hasMatch())safe.insert("rpc_transport_code",code.captured(1).toInt());
      if(detail.startsWith("getblockchaininfo:"))safe.insert("rpc_method","getblockchaininfo");
      else if(detail.startsWith("getblockhash(0):"))safe.insert("rpc_method","getblockhash");
