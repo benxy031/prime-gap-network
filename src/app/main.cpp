@@ -343,11 +343,10 @@ int main(int argc,char** argv) {
  const auto applicationDirectory=QCoreApplication::applicationDirPath();
  const auto startupArguments=QCoreApplication::arguments();
  const QString root=pgn::app::resolveHorizonApplicationRoot(startupArguments,applicationDirectory);
- QFile installedCore(root+"/Core/core-template.json");std::optional<QByteArray> installedTemplate;
- if(installedCore.exists())installedTemplate=installedCore.open(QIODevice::ReadOnly)?installedCore.read(32769):QByteArray{};
- const auto startup=pgn::app::resolveHorizonStartup(startupArguments,installedTemplate);installedCore.close();
+ const auto installedTemplate=pgn::wallet::readCoreBundleTemplate(root);
+ const auto startup=pgn::app::resolveHorizonStartup(startupArguments,installedTemplate);
  const bool testnetMode=startup.testnet;
- const auto installedGenesis=pgn::wallet::installedCoreGenesis(root,testnetMode);
+ const auto installedGenesis=installedTemplate?pgn::wallet::coreTemplateGenesis(*installedTemplate,testnetMode):QString{};
  const bool explicitLegacyRoot=startupArguments.size()>1&&!startupArguments[1].startsWith("--");
  if(!pgn::app::bindMutableDataRoot(root,installedGenesis,explicitLegacyRoot,testnetMode)){std::cerr<<"User-data path binding unavailable\n";return 7;}
  const auto updateState=pgn::update::updateStateDirectory(installedGenesis);

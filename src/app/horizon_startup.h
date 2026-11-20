@@ -1,9 +1,6 @@
 #pragma once
-#include <QByteArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include "wallet/core_bundle_template.h"
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QStringList>
 #include <optional>
@@ -21,12 +18,11 @@ struct HorizonStartup {
 // data/runtime receipts or wallet profiles to infer the application root.
 inline bool hasHorizonCoreCodeMarker(const QString& directory) {
     const QFileInfo info(QDir(directory).filePath("Core/core-template.json"));
-    if(!info.isFile()||info.isSymLink()||info.size()<=0||info.size()>32768)return false;
-    QFile file(info.absoluteFilePath());if(!file.open(QIODevice::ReadOnly))return false;
-    QJsonParseError error;const auto document=QJsonDocument::fromJson(file.read(32769),&error);
-    const auto object=document.object(),deployment=object.value("deployment").toObject();
-    return error.error==QJsonParseError::NoError&&document.isObject()&&
-        object.value("schema")=="PGN_CORE_BUNDLE_V1"&&deployment.value("product")=="PGN Core"&&
+    if(!info.isFile()||info.isSymLink()||info.size()<=0||info.size()>wallet::CoreBundleTemplateLimit)return false;
+    const auto bytes=wallet::readCoreBundleTemplate(directory);
+    if(!bytes)return false;
+    const auto deployment=wallet::parseCoreBundleTemplate(*bytes).value("deployment").toObject();
+    return deployment.value("product")=="PGN Core"&&
         (deployment.value("chain")=="test"||deployment.value("chain")=="main");
 }
 inline QString resolveHorizonApplicationRoot(const QStringList& arguments,const QString& applicationDirectory) {
@@ -54,14 +50,9 @@ inline HorizonStartup resolveHorizonStartup(const QStringList& arguments,
         result.diagnostic="Horizon is running on the test network.";
         return result;
     }
-    QJsonParseError error;
-    const auto document=coreTemplate->size()<=32768?QJsonDocument::fromJson(*coreTemplate,&error):QJsonDocument{};
-    const auto object=document.object();
-    const auto deployment=object.value("deployment");
-    const auto chain=deployment.toObject().value("chain");
-    if(coreTemplate->size()>32768||error.error!=QJsonParseError::NoError||!document.isObject()||
-       object.value("schema")!="PGN_CORE_BUNDLE_V1"||!deployment.isObject()||!chain.isString()||
-       (chain!="test"&&chain!="main")) {
+    const auto deployment=wallet::parseCoreBundleTemplate(*coreTemplate).value("deployment").toObject();
+    const auto chain=deployment.value("chain");
+    if(chain!="test"&&chain!="main") {
         result.profileState="invalid-core-template";
         result.diagnostic="The PGN Core bundle configuration is invalid. Use wallet setup to select a valid testnet Core bundle.";
     } else if(chain=="main") {

@@ -2,12 +2,15 @@
 from pathlib import Path
 import argparse,subprocess,sys,ssl,os,hashlib,json,ast
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',required=True,type=Path);args=parser.parse_args();root=Path(__file__).resolve().parents[1];source=root/'src/engine/runtime_host';out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
+shared_policy=root/'src/engine/cpu_auditor/shared_service/merit_policy.py'
 inputs={p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
         for folder in (source,root/'src/protocol',root/'src/engine/shared_composite')for p in sorted(folder.glob('*.py'))}
+inputs[shared_policy.relative_to(root).as_posix()]=hashlib.sha256(shared_policy.read_bytes()).hexdigest()
 inputs[Path(__file__).resolve().relative_to(root).as_posix()]=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 for name in ('export_gap_observations.py','export_scientific_results.py'):
  p=root/'tools'/name;inputs[p.relative_to(root).as_posix()]=hashlib.sha256(p.read_bytes()).hexdigest()
 command=[sys.executable,'-m','PyInstaller','--noconfirm','--onedir','--console','--name','horizon-engine-host','--distpath',str(out/'dist'),'--workpath',str(out/'work'),'--specpath',str(out/'spec'),'--paths',str(source),'--paths',str(root/'src/protocol'),'--paths',str(root/'src/engine/shared_composite'),'--hidden-import','sqlite3','--hidden-import','_sqlite3']
+command+=['--paths',str(shared_policy.parent)]
 for p in source.glob('pgn_*.py'):command+=['--hidden-import',p.stem]
 # Some managed Python distributions load an additional certificate policy from
 # ssl.py itself. Preserve that runtime dependency instead of weakening TLS.

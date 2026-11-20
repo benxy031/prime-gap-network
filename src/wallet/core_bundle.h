@@ -1,10 +1,10 @@
 #pragma once
+#include "wallet/core_bundle_template.h"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QSet>
@@ -18,13 +18,11 @@ inline CoreBundle readCoreBundle(const QString& applicationRoot, const QString& 
     const auto reject=[](const QString& error){return CoreBundle{{},error};};
     const auto directory=QFileInfo(applicationRoot+"/Core").canonicalFilePath();
     QFile manifest(applicationRoot+"/Core/core-template.json");
-    if(directory.isEmpty()||!manifest.open(QIODevice::ReadOnly)||manifest.size()>32768)
+    if(directory.isEmpty()||!manifest.open(QIODevice::ReadOnly)||manifest.size()>CoreBundleTemplateLimit)
         return reject("The verified PGN Core bundle is unavailable.");
-    QJsonParseError parse;
-    const auto document=QJsonDocument::fromJson(manifest.readAll(),&parse);manifest.close();
-    const auto bundle=document.object(),deployment=bundle.value("deployment").toObject();
-    if(parse.error!=QJsonParseError::NoError||bundle.value("schema")!="PGN_CORE_BUNDLE_V1"||
-       deployment.value("product")!="PGN Core"||deployment.value("chain")!=chain||
+    const auto bundle=parseCoreBundleTemplate(manifest.read(CoreBundleTemplateLimit+1));manifest.close();
+    const auto deployment=bundle.value("deployment").toObject();
+    if(deployment.value("product")!="PGN Core"||deployment.value("chain")!=chain||
        (chain!="main"&&chain!="test")||
        (deployment.value("frontend")!="daemon"&&deployment.value("frontend")!="qt"))
         return reject("PGN Core bundle or selected network is invalid.");

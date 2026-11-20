@@ -1,4 +1,5 @@
 #pragma once
+#include "wallet/core_bundle_template.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -7,14 +8,15 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 namespace pgn::wallet {
-inline QString installedCoreGenesis(const QString& applicationRoot,bool testnet){
-    QFile file(applicationRoot+"/Core/core-template.json");
-    if(!file.open(QIODevice::ReadOnly)||file.size()>32768)return {};
-    const auto object=QJsonDocument::fromJson(file.readAll()).object();
-    const auto deployment=object.value("deployment").toObject();
-    const auto genesis=deployment.value("genesis_hash").toString().toLower();
+inline QString coreTemplateGenesis(const QByteArray& bytes,bool testnet){
+    const auto deployment=parseCoreBundleTemplate(bytes).value("deployment").toObject();
     if(deployment.value("chain")!=(testnet?"test":"main"))return {};
-    return object.value("schema")=="PGN_CORE_BUNDLE_V1"&&QRegularExpression("^[0-9a-f]{64}$").match(genesis).hasMatch()?genesis:QString{};
+    const auto genesis=deployment.value("genesis_hash").toString().toLower();
+    return QRegularExpression("^[0-9a-f]{64}$").match(genesis).hasMatch()?genesis:QString{};
+}
+inline QString installedCoreGenesis(const QString& applicationRoot,bool testnet){
+    const auto bytes=readCoreBundleTemplate(applicationRoot);
+    return bytes?coreTemplateGenesis(*bytes,testnet):QString{};
 }
 inline bool runtimeProfileMatches(const QString& directory,const QString& genesis,bool testnet){
     QFile file(directory+"/wallet-core.json");
