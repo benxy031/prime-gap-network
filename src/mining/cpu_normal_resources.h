@@ -16,6 +16,11 @@ class CpuNormalResources final:public QObject {
     struct Resource {CpuControlEndpoint endpoint;CpuControllerClient* client{};QJsonObject inventory,status;QHash<qint64,Bridge> pending;QString control,reason,reasonCode;bool selected{},wanted{},compatible{};int desiredThreads{1};std::optional<Choice> queued;};
     QHash<QString,std::shared_ptr<Resource>> resources_;QPointer<QProcess> miner_;bool closing_{},restored_{};
     QProcess* cpuMiner_{};QString cpuProgram_,frameDevice_;QStringList cpuArguments_;QByteArray cpuBuffer_;
+    void finishCpuMinerClose() {
+        if (!closing_) return;
+        for (const auto& resource : resources_) resource->client->close();
+        if (allStopped() && onCloseReady) onCloseReady();
+    }
     bool launchCpuMiner(){
         if(closing_||cpuProgram_.isEmpty())return false;
         if(!cpuMiner_){
@@ -35,9 +40,20 @@ class CpuNormalResources final:public QObject {
             });
             connect(cpuMiner_,&QProcess::readyReadStandardError,this,[this]{const auto error=cpuMiner_->readAllStandardError();if(!error.isEmpty()&&onNormalFrame)onNormalFrame({{"schema","PGN_HORIZON_MINING_VIEW_UNAVAILABLE_V1"},{"phase","Needs attention"},{"message",QString::fromUtf8(error).right(400)}});});
             connect(cpuMiner_,&QProcess::errorOccurred,this,[this](QProcess::ProcessError error){
-                if(error==QProcess::FailedToStart){for(const auto& r:resources_)if(r->queued){const auto choice=*r->queued;r->queued.reset();refuse(r->endpoint.deviceId,choice.request,"CPU normal miner could not start: "+cpuMiner_->errorString());}}
+                if (error != QProcess::FailedToStart) return;
+                for (const auto& resource : resources_) {
+                    if (!resource->queued) continue;
+                    const auto choice = *resource->queued;
+                    resource->queued.reset();
+                    refuse(resource->endpoint.deviceId, choice.request,
+                           "CPU normal miner could not start: " + cpuMiner_->errorString());
+                }
+                finishCpuMinerClose();
             });
-            connect(cpuMiner_,&QProcess::finished,this,[this](int,QProcess::ExitStatus){disconnected(cpuMiner_);if(closing_)for(const auto& r:resources_)r->client->close();if(closing_&&allStopped()&&onCloseReady)onCloseReady();});
+            connect(cpuMiner_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
+                disconnected(cpuMiner_);
+                finishCpuMinerClose();
+            });
         }
         if(cpuMiner_->state()!=QProcess::NotRunning)return true;
         cpuBuffer_.clear();cpuMiner_->setProgram(cpuProgram_);cpuMiner_->setArguments(cpuArguments_);cpuMiner_->start();return true;

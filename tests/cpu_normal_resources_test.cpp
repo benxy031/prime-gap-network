@@ -94,6 +94,35 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
   check(automatic.updateResumeChoices().isEmpty(),"unacknowledged manual OFF remained eligible for update resume");
   check(until([&]{return lastRequest=="after-abort-off"&&latest.value("enabled")==false;}),"manual OFF lost to stale CPU ON");
   check(automatic.requestClose()||until([&]{return automatic.allStopped();}),"reopened CPU fleet did not drain normally");
+  latest = {};
+  check(automatic.reopenAfterAbortedUpdate(), "CPU channels did not reopen for failed-start test");
+  check(until([&] { return !latest.isEmpty(); }), "test endpoint did not reconnect");
+  auto missing = profile;
+  missing.insert("program", root + "/missing-cpu-host.exe");
+  check(automatic.configureNormalMiner(missing), "missing test executable profile could not be armed");
+  auto* ownedMiner = automatic.findChild<QProcess*>();
+  check(ownedMiner != nullptr, "test CPU miner process object unavailable");
+  bool heldWhileStarting = false;
+  bool startFailure = false;
+  bool closeReady = false;
+  QObject::connect(ownedMiner, &QProcess::stateChanged, &automatic, [&](QProcess::ProcessState state) {
+   if (state == QProcess::Starting) heldWhileStarting = !automatic.requestClose();
+  });
+  automatic.onControl = [&](auto, const QString& id, bool okay, auto) {
+   if (id == "close-during-start") startFailure = !okay;
+  };
+  automatic.onCloseReady = [&] { closeReady = true; };
+  check(automatic.control(endpoint.deviceId, "close-during-start", true, 50),
+        "failed-start CPU control was not dispatched");
+  const bool drained = until([&] { return startFailure && closeReady && automatic.allStopped(); }, 4000);
+  if (!drained) {
+   // Clean up the deliberately failing baseline before reporting the regression.
+   for (auto* child : automatic.children())
+    if (auto* controller = dynamic_cast<CpuControllerClient*>(child)) controller->close();
+   check(until([&] { return automatic.allStopped(); }), "failed-start test could not clean up its fixture");
+  }
+  check(heldWhileStarting && startFailure, "test did not close during a real FailedToStart transition");
+  check(drained, "a CPU miner that failed to start left its controllers open during shutdown");
  }
  std::cout<<"{\"PASS\":true,\"hosts\":2,\"distinct_workspaces\":true,\"normal_cycle_bound\":true,\"all_own_processes_exited\":true}"<<std::endl;return 0;
  }catch(const std::exception& error){std::cerr<<error.what()<<std::endl;return 1;}}
