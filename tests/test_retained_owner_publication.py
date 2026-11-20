@@ -27,7 +27,10 @@ class PublicationIsolationTests(unittest.TestCase):
   audit.states=lambda requests:{r:copy.deepcopy(self.states[r])for r in requests}
   audit.state=lambda request:copy.deepcopy(self.states[request])
   def apply(action,request,*args):
-   self.sent.append(request);self.states[request]['jobs'][0]['state']='passed'
+   self.sent.append(request)
+   job=self.states[request]['jobs'][0]
+   job['state']='passed'
+   self.worker.rpc.confirm_audit(request,job['commitment'],slot=job['slot'],attempt=job['attempt'])
    return dict(available=True)
   audit.apply=apply
  def waiting(self):

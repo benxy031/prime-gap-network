@@ -12,12 +12,15 @@ P=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(P/'src/protocol'),str(P/'src/engine/runtime_host'),str(P/'tests')]
 from horizon_audit_answers import AuditAnswers
 from horizon_network_audits import NetworkAudits,save
+from report_commitment import audit_commitment
 from audit_publication_chain_fixture import ChainRPC
 
 
 class FairAnswerRecovery(unittest.TestCase):
  def sealed(self,folder,n):
-  name=f'{n:064x}-0-0';value=dict(request_id=f'{n:064x}',slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+  request=f'{n:064x}';name=request+'-0-0'
+  answer=audit_commitment(request,0,list(range(5)),['7']*5,'b'*64)
+  value=dict(request_id=request,slot=0,attempt=0,answer=answer)
   (folder/(name+'.json')).write_text(json.dumps(value),encoding='utf8');return name
 
  def test_later_ready_answer_survives_5000_waiting_entries_and_cold_restarts(self):
@@ -38,7 +41,13 @@ class FairAnswerRecovery(unittest.TestCase):
      self.assertLessEqual(len(requests),64,'Old waiting index monopolizes the active recovery window')
      return {r:copy.deepcopy(ready if r==target else waiting)for r in requests}
     instance.states=states;instance.state=lambda request:copy.deepcopy(passed)
-    instance.apply=lambda *args:(published.append(args)or dict(available=True))
+    def apply(action,request,slot,attempt,payload):
+     published.append((action,request,slot,attempt,payload))
+     self.assertEqual(request,target)
+     retained=json.loads(answer.read_bytes())
+     worker.rpc.confirm_audit(request,retained['answer']['commitment'],slot=slot,attempt=attempt)
+     return dict(available=True)
+    instance.apply=apply
    bind(audit)
    for turn in range(81):
     audit.reveal_committed()

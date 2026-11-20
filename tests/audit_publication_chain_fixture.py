@@ -1,6 +1,8 @@
 """Strict tiny chain fixture for publication-journal lifecycle tests."""
 class ChainRPC:
     def __init__(self):self.chain={0:'0'*64,1:'1'*64};self.calls=[];self.audit_job=dict(slot=0,attempt=0,state='passed');self.audit_jobs={}
+    def confirm_audit(self, request, commitment, *, slot=0, attempt=0):
+        self.audit_jobs[request] = dict(slot=slot, attempt=attempt, state='passed', commitment=commitment)
     def fork(self):self.chain={0:'0'*64,1:'2'*64}
     def extend(self):self.chain[2]='3'*64
     def call(self,method,parameters=None,**kwargs):

@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src/engine/runtime_host'),str(ROOT/'src/protocol'),str(ROOT/'tests')]
 from horizon_network_audits import NetworkAudits,save
 from horizon_report_poll import ReportPoller
+from report_commitment import audit_commitment
 from audit_publication_chain_fixture import ChainRPC
 
 class PublicationIsolation(unittest.TestCase):
@@ -15,7 +16,8 @@ class PublicationIsolation(unittest.TestCase):
   self.audit=NetworkAudits(self.worker);self.names=[];self.original={}
   for n in (1,2):
    request=f'{n:064x}';name=request+'-0-0';self.names.append(name)
-   value=dict(request_id=request,slot=0,attempt=0,answer=dict(body=dict(counts=['7'],nonce='b'*64)))
+   answer=audit_commitment(request,0,list(range(5)),['7']*5,'b'*64)
+   value=dict(request_id=request,slot=0,attempt=0,answer=answer)
    save(self.audit.folder/(name+'.json'),value);self.original[name]=(self.audit.folder/(name+'.json')).read_bytes()
   self.audit.answers.register(self.names)
   with self.audit.answers.database()as db:db.execute("INSERT OR REPLACE INTO meta VALUES('migration_done','true')")
@@ -28,7 +30,12 @@ class PublicationIsolation(unittest.TestCase):
   audit.states=lambda requests:{r:copy.deepcopy(ready)for r in requests}
   done=copy.deepcopy(ready);done['jobs'][0]['state']='passed'
   audit.state=lambda request:copy.deepcopy(done)
-  audit.apply=lambda *args:(self.sent.append(args)or dict(available=True))
+  def apply(action,request,slot,attempt,payload):
+   self.sent.append((action,request,slot,attempt,payload))
+   sealed=json.loads(self.original[f'{request}-{slot}-{attempt}'])
+   self.worker.rpc.confirm_audit(request,sealed['answer']['commitment'],slot=slot,attempt=attempt)
+   return dict(available=True)
+  audit.apply=apply
  def waiting(self,audit):
   with audit.answers.database()as db:return dict(db.execute('SELECT name,waiting FROM answers'))
  def test_bad_seal_is_retained_while_healthy_answer_finalizes(self):
