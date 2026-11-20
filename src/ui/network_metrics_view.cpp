@@ -12,6 +12,7 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <optional>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -120,11 +121,18 @@ protected:
             }
             const double first=points.first().toObject().value("time").toDouble(),last=points.last().toObject().value("time").toDouble();
             const double left=first==last?first-30:first,right=first==last?last+30:last;
+            const auto valueAt=[chart](const QJsonObject& sample) -> std::optional<double> {
+                if(chart==0)return sample.value("merit_target_q16").toDouble()/65536.;
+                const auto seconds=sample.value("window_seconds").toDouble();
+                if(seconds<=0)return std::nullopt;
+                return sample.value("reported_positions").toString().toDouble()/seconds;
+            };
             double low=chart==0?std::numeric_limits<double>::max():0,high=0;
             for(const auto& entry:points){
-                const auto point=entry.toObject();const auto seconds=point.value("window_seconds").toDouble();
-                if(chart==0){const auto merit=point.value("merit_target_q16").toDouble()/65536.;low=std::min(low,merit);high=std::max(high,merit);}
-                else if(seconds>0)high=std::max(high,point.value("reported_positions").toString().toDouble()/seconds);
+                if(const auto value=valueAt(entry.toObject())){
+                    low=std::min(low,*value);
+                    high=std::max(high,*value);
+                }
             }
             if(chart==0){const auto margin=std::max(.05,(high-low)*.1);low=std::max(0.,low-margin);high+=margin;}
             else high=high>0?high*1.08:1.;
@@ -139,22 +147,27 @@ protected:
                 auto label=chart==0?QString("≈ ")+QString::number(value,'f',precision):networkRate(value).replace(" pos/s","");
                 painter.drawText(QRectF(card.left()+4,y-8,60,16),Qt::AlignRight|Qt::AlignVCenter,label);
             }
-            for(int series=0;series<(chart==0?1:2);++series){
-                QPainterPath path;bool begun=false;
-                for(const auto& entry:points){
-                    const auto point=entry.toObject();const double seconds=point.value("window_seconds").toDouble();
-                    if(chart==1&&seconds<=0){begun=false;continue;}
-                    const double value=chart==0?point.value("merit_target_q16").toDouble()/65536.:
-                        point.value(series==0?"reported_positions":"audited_positions").toString().toDouble()/seconds;
-                    const auto at=map(point.value("time").toDouble(),value);
-                    if(begun)path.lineTo(at);else path.moveTo(at);begun=true;
-                }
-                painter.save();painter.setClipRect(plot.adjusted(-2,-2,2,2));
-                painter.setPen(QPen(chart==0?QColor("#ffd166"):series==0?QColor("#65e6c2"):QColor("#68baff"),1.7));
-                painter.setBrush(Qt::NoBrush);painter.drawPath(path);
-                if(points.size()==1){const auto point=points.last().toObject();const auto seconds=point.value("window_seconds").toDouble();if(chart==0||seconds>0){const auto value=chart==0?point.value("merit_target_q16").toDouble()/65536.:point.value(series==0?"reported_positions":"audited_positions").toString().toDouble()/seconds;painter.drawEllipse(map(last,value),2.5,2.5);}}
-                painter.restore();
+            const QColor lineColor(chart==0?"#ffd166":"#65e6c2");
+            QPainterPath path;
+            bool begun=false;
+            for(const auto& entry:points){
+                const auto sample=entry.toObject();
+                const auto value=valueAt(sample);
+                if(!value){begun=false;continue;}
+                const auto at=map(sample.value("time").toDouble(),*value);
+                if(begun)path.lineTo(at);
+                else path.moveTo(at);
+                begun=true;
             }
+            painter.save();
+            painter.setClipRect(plot.adjusted(-2,-2,2,2));
+            painter.setPen(QPen(lineColor,1.7));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPath(path);
+            if(points.size()==1){
+                if(const auto value=valueAt(points.first().toObject()))painter.drawEllipse(map(last,*value),2.5,2.5);
+            }
+            painter.restore();
             painter.setPen(QColor("#91b5bd"));
             const bool changesDay=QDateTime::fromSecsSinceEpoch(qint64(first)).toLocalTime().date()!=QDateTime::fromSecsSinceEpoch(qint64(last)).toLocalTime().date();
             const auto timeFormat=changesDay||right-left>86400?QString("dd/MM HH:mm"):QString("HH:mm");
@@ -168,20 +181,19 @@ protected:
                 painter.drawText(QRectF(at,plot.bottom()+7,labelWidth,17),Qt::AlignHCenter,label);
             }
             if(hoverChart_==chart&&hoverIndex_>=0&&hoverIndex_<points.size()){
-                const auto sample=points[hoverIndex_].toObject();const double seconds=sample.value("window_seconds").toDouble();
-                const double value=chart==0?sample.value("merit_target_q16").toDouble()/65536.:seconds>0?sample.value("reported_positions").toString().toDouble()/seconds:0.;
-                if(chart==0||seconds>0){
-                    const auto selected=map(sample.value("time").toDouble(),value);painter.save();painter.setClipRect(plot.adjusted(-4,-4,4,4));
+                const auto sample=points[hoverIndex_].toObject();
+                if(const auto value=valueAt(sample)){
+                    const auto selected=map(sample.value("time").toDouble(),*value);painter.save();painter.setClipRect(plot.adjusted(-4,-4,4,4));
                     painter.setPen(QPen(QColor("#b0d6dc"),1,Qt::DashLine));painter.drawLine(QPointF(selected.x(),plot.top()),QPointF(selected.x(),plot.bottom()));painter.drawLine(QPointF(plot.left(),selected.y()),QPointF(plot.right(),selected.y()));
-                    painter.setPen(QPen(chart==0?QColor("#ffd166"):QColor("#65e6c2"),2));painter.setBrush(QColor("#061b22"));painter.drawEllipse(selected,3.5,3.5);painter.restore();
+                    painter.setPen(QPen(lineColor,2));painter.setBrush(QColor("#061b22"));painter.drawEllipse(selected,3.5,3.5);painter.restore();
                 }
             }
             chartGeometry.append(QJsonObject{{"title",chart==0?"Difficulty · target merit":"Network hashrate · search positions/s"},{"x",plot.x()},{"y",plot.y()},{"width",plot.width()},{"height",plot.height()},{"vertical_ticks",verticalTicks},{"horizontal_ticks",horizontalTicks},{"samples",points.size()},{"axis_font_px",11}});
             const auto latest=points.last().toObject();const double seconds=latest.value("window_seconds").toDouble();
-            painter.setPen(chart==0?QColor("#ffd166"):QColor("#65e6c2"));
+            painter.setPen(lineColor);
             const QString current=chart==0?meritTargetText(latest.value("merit_target_q16").toInteger()):
                 seconds>0?reportedRateText(latest.value("reported_positions").toString(),latest.value("window_seconds").toInteger()):QString("Not enough chain time");
-            painter.drawText(QRectF(card.left()+12,card.top()+23,card.width()-24,16),Qt::AlignLeft,current+(chart==1&&!compact_?QString(" · reported; audited in blue"):QString{}));
+            painter.drawText(QRectF(card.left()+12,card.top()+23,card.width()-24,16),Qt::AlignLeft,current);
             painter.setPen(QColor("#83aaa9"));const QString caption=chart==0?QString("%1 chain samples").arg(points.size()):QString("%1 chain samples · %2 min window").arg(points.size()).arg(seconds/60.,0,'g',3);
             painter.drawText(QRectF(card.left()+12,card.top()+39,card.width()-24,14),Qt::AlignLeft,caption);
             setProperty(chart==0?"pgn_merit_plot_bounds":"pgn_rate_plot_bounds",QVariantList{left,right,low,high});
