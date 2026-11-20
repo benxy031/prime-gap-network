@@ -459,7 +459,7 @@ int main(int argc,char** argv) {
      condition==Condition::PeersUnknown?QStringLiteral("PEER STATUS UNAVAILABLE"):
      condition==Condition::SyncUnknown?QStringLiteral("SYNC UNKNOWN"):
      syncing?QStringLiteral("SYNCING"):
-     idleChain?QStringLiteral("CHAIN IDLE"):QStringLiteral("UP TO DATE");
+     idleChain?QStringLiteral("NO RECENT BLOCK"):QStringLiteral("UP TO DATE");
    const bool attention=condition==Condition::NoPeers||condition==Condition::PeersUnknown||
      condition==Condition::SyncUnknown||idleChain;
    const auto networkStyle=QString("QLabel{color:%1;font:12px Consolas;padding:3px 8px;}").arg(attention?"#ffbd69":syncing?"#8dccff":"#69efc5");
@@ -476,7 +476,10 @@ int main(int argc,char** argv) {
     else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
     if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
    }
-   networkSummary->setToolTip(QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4").arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height));
+   const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
+      .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
+   const auto idleHint=QStringLiteral("Core is connected to a peer. The last verified block is older than the chain activity threshold.\n\n");
+   networkSummary->setToolTip(idleChain?idleHint+verifiedTip:verifiedTip);
   };
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
  walletButton->setToolTip("Native PGN wallet integrated here, with verified chain identity and protected local keys.");
@@ -1324,12 +1327,18 @@ int main(int argc,char** argv) {
     QObject::connect(stream,&QProcess::readyReadStandardOutput,&window,[stream,buffer,profile,cpuFleet,miningResults,records,testnetSummary,testnetProgress,pgn,miningToggle,networkMode,stopRequested,canvas,pendingCard,presentationSequence,ticketProgressRail,gapRates,connectionRecovery,status,toolsButton,processDiagnostics,miningStartupNotice]{
     const auto received=stream->readAllStandardOutput();canvas->setProperty("pgn_worker_stream_bytes",canvas->property("pgn_worker_stream_bytes").toLongLong()+received.size());buffer->append(received);if(buffer->size()>4194304){buffer->clear();testnetSummary->setText("Worker presentation exceeded its admitted size");return;}
     while(buffer->contains('\n')){const auto newline=buffer->indexOf('\n');const auto line=buffer->left(newline);buffer->remove(0,newline+1);auto packet=QJsonDocument::fromJson(line).object();if(pgn::ui::presentPublicProfileStatus(toolsButton,packet))continue;
-     pgn::ui::presentPublicMiningAccess(toolsButton,packet.value("network_admission").toObject());if(cpuFleet->packet(stream,packet))continue;processDiagnostics->packet(packet);cpuFleet->minerReady(stream);
-     canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);canvas->setProperty("pgn_worker_stream_phase",packet.value("phase").toString());canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
+     pgn::ui::presentPublicMiningAccess(toolsButton,packet.value("network_admission").toObject());if(cpuFleet->packet(stream,packet))continue;
+     const auto reportedPhase=packet.value("phase").toString();
+     const auto staleness=packet.value("source_stale");
+     const bool sourceFresh=packet.value("schema")=="PGN_HORIZON_MINING_VIEW_V1"&&staleness.isBool()&&!staleness.toBool();
+     connectionRecovery->phase(reportedPhase,sourceFresh);
+     canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);
+     cpuFleet->minerReady(stream);
+     const auto controlPhase=pgn::mining::networkControlPhase(reportedPhase.toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
+     if(connectionRecovery->waitingForLiveData()&&!sourceFresh&&!controlPhase.acknowledgeOff)continue;
+     processDiagnostics->packet(packet);
+     canvas->setProperty("pgn_worker_stream_phase",reportedPhase);canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
      {auto intents=canvas->property("pgn_update_gpu_intents").toJsonObject();const auto device=profile.value("gpu_uuid").toString();auto entry=intents.value(device).toObject();entry.insert("phase",packet.value("phase"));intents.insert(device,entry);canvas->setProperty("pgn_update_gpu_intents",intents);}
-     const bool sourceFresh=packet.value("source_stale").isBool()&&!packet.value("source_stale").toBool();
-     connectionRecovery->phase(packet.value("phase").toString(),sourceFresh);
-     const auto controlPhase=pgn::mining::networkControlPhase(packet.value("phase").toString().toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
      if(controlPhase.suppressPresentation)continue;
      const bool showTicket=ticketProgressRail->workSource()=="GPU";
      if(packet.value("schema")!="PGN_HORIZON_MINING_VIEW_V1"){auto phaseFrame=canvas->property("pgn_network_ticket_frame").toJsonObject();phaseFrame.insert("phase",packet.value("phase").toString("Starting"));phaseFrame.insert("message",packet.value("message"));phaseFrame=pgn::ui::currentAssignmentPresentation(phaseFrame);canvas->setProperty("pgn_network_ticket_frame",phaseFrame);ticketProgressRail->present(phaseFrame);if(controlPhase.acknowledgeOff){*stopRequested=false;const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);if(!pendingCard->isEmpty()&&pendingCard->at(2)=="off"){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),true,"GPU released after checkpoint");pendingCard->clear();}}if(showTicket)testnetSummary->setText(packet.value("message").toString("Starting · waiting for the first coherent worker checkpoint"));if(packet.value("phase")=="Needs attention"){const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);miningToggle->setText("Start mining");*stopRequested=false;if(!pendingCard->isEmpty()){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),false,packet.value("message").toString());pendingCard->clear();}}continue;}
