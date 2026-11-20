@@ -57,6 +57,6 @@ inline void probeCpuInventory(const CpuInventoryEndpoint& endpoint, QObject* own
             *done = true; accept(value); process->deleteLater();
         });
     process->setProgram(endpoint.program); process->setArguments(endpoint.arguments);
-    process->setProcessChannelMode(QProcess::SeparateChannels); deadline->start(8000); process->start();
+    process->setProcessChannelMode(QProcess::SeparateChannels); deadline->start(30000); process->start();
 }
 }

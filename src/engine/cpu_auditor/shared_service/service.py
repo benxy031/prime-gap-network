@@ -74,6 +74,7 @@ class Service:
   else:
    import fcntl;fcntl.flock(self.lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
   self.cp=self.workspace/'shared68-checkpoint.json';verify(args.engine,HASHES[os.name][0]);self.inv=inventory(args.inventory);self.events=queue.Queue(maxsize=64);self.commands=queue.Queue(maxsize=32);self.job=Job();self.load=Load();self.workers={};self.pending=None;self.generation=0;self.enabled=False;self.threads=1;self.affinity=[];self.state='IDLE';self.failure=None;self.budget_refused=False;self.request=None;self.parts=[];self.probe=False;self.total=0;self.committed=0;self.next_offset=0;self.counts=[];self.completed={};self.seq=0;self.result=None;self.compute_seconds=0.;self.run_start=None;self.running_seconds=0.;self.session=uuid.uuid4().hex;self.closed=False;self.max_buffered=0;self.completed_piece_count=0;self.rate_base=0;self.best=[];self.tests=0
+  self.keep_result_workers=False
   self.history={};self.budget_resume_since=None;self.budget_retry_after=0.;self.eof_requested=False;self.maximum_machine_load=0.;self.coordinator_cpu=None;self.own_cpu_start=sum(os.times()[:2])
   self.simd=bool(self.inv.get('features',{}).get('avx2_usable')) and not args.scalar
   self.threads=min(args.initial_threads,self.inv["maximum_workers"]);self.affinity=self.preferred(self.threads)
@@ -189,7 +190,8 @@ class Service:
   measured_rate=self.rate_window.observe(self.committed,computing)
   science_rates=self.science_rates.observe(digest(self.request)if self.request else None,elapsed,self.committed,self.tests,sum(self.counts),computing)
   metrics=self.metrics.sample(list(self.workers.values()),self.threads)
-  return dict(mining_rates=science_rates,memory_pages=self.memory_pages_status(),cpu_telemetry=metrics,session_rate_positions_per_second=rate,state=self.state,enabled=self.enabled,generation=self.generation,requested_threads=self.threads,threads_active=active,active_workers=active,resident_workers=len(self.workers),effective_affinity=[c for c,w in self.workers.items()if w.ready],coordinator_cpu=self.coordinator_cpu,coordinator_cpu_seconds=sum(os.times()[:2])-self.own_cpu_start,worker_statistics=[dict(cpu=c,**v)for c,v in self.history.items()]+[dict(cpu=c,positions=str(w.positions),native_seconds=w.native_seconds,pid=w.p.pid,resident=True)for c,w in self.workers.items()],worker_pids=[dict(pid=w.p.pid,cpu=c,busy=w.task is not None)for c,w in self.workers.items()],completed_positions=str(self.committed),durable_completed_positions=str(self.committed),total_positions=str(self.total),inflight_pieces=active,buffered_closed_pieces=len(self.completed),maximum_buffered_closed_pieces=self.max_buffered,completed_piece_count=self.completed_piece_count,rate_positions_per_second=measured_rate,positions_per_second=measured_rate,compute_seconds=self.compute_seconds,wall_active_seconds=elapsed,machine_load_percent=self.load.value,maximum_machine_load_percent=self.maximum_machine_load,total_load_limit_percent=75,budget_refused=self.budget_refused,error=self.failure,result_ready=self.result is not None,probe=self.probe,request_sha256=digest(self.request)if self.request else None,coverage_contract=COVERAGE,production_admitted=False,network_accepted=False,compute_started=computing,session=self.session)
+  return dict(resident_result_handoff=True,result_resident_policy=self.keep_result_workers,
+   mining_rates=science_rates,memory_pages=self.memory_pages_status(),cpu_telemetry=metrics,session_rate_positions_per_second=rate,state=self.state,enabled=self.enabled,generation=self.generation,requested_threads=self.threads,threads_active=active,active_workers=active,resident_workers=len(self.workers),effective_affinity=[c for c,w in self.workers.items()if w.ready],coordinator_cpu=self.coordinator_cpu,coordinator_cpu_seconds=sum(os.times()[:2])-self.own_cpu_start,worker_statistics=[dict(cpu=c,**v)for c,v in self.history.items()]+[dict(cpu=c,positions=str(w.positions),native_seconds=w.native_seconds,pid=w.p.pid,resident=True)for c,w in self.workers.items()],worker_pids=[dict(pid=w.p.pid,cpu=c,busy=w.task is not None)for c,w in self.workers.items()],completed_positions=str(self.committed),durable_completed_positions=str(self.committed),total_positions=str(self.total),inflight_pieces=active,buffered_closed_pieces=len(self.completed),maximum_buffered_closed_pieces=self.max_buffered,completed_piece_count=self.completed_piece_count,rate_positions_per_second=measured_rate,positions_per_second=measured_rate,compute_seconds=self.compute_seconds,wall_active_seconds=elapsed,machine_load_percent=self.load.value,maximum_machine_load_percent=self.maximum_machine_load,total_load_limit_percent=75,budget_refused=self.budget_refused,error=self.failure,result_ready=self.result is not None,probe=self.probe,request_sha256=digest(self.request)if self.request else None,coverage_contract=COVERAGE,production_admitted=False,network_accepted=False,compute_started=computing,session=self.session)
  def reply(self,c,ok=True,error=None,**extra):
   v=dict(id=c.get('id'),ok=ok,status=self.status(),**extra)
   if error:v['error']=dict(code='REFUSED',message=str(error)[:300])
@@ -225,7 +227,8 @@ class Service:
   if changed:
    if self.committed==self.total:
     self.result=self.computed_result()
-    self.state=self.result['state'];self.enabled=False
+    self.state=self.result['state']
+    if not self.keep_result_workers or self.budget_refused:self.enabled=False
    self.persist()
  def pump(self,timeout=.01):
   try:w,r=self.events.get(timeout=timeout);self.native_event(w,r)
@@ -256,6 +259,10 @@ class Service:
  def new_work(self,c,probe):
   if self.request is not None:raise ValueError('Existing assignment/result retained; explicit matching discard orack_result required')
   request=c.get('request');parts=cycle_work.partitions(request)if not probe else validate(request,True)
+  keep_resident=c.get('keep_resident',False)
+  if type(keep_resident)is not bool or (keep_resident and (probe or request['stage']!='search')):
+   raise ValueError('Resident handoff requires explicit normal search work')
+  self.keep_result_workers=keep_resident
   self.request=request;self.parts=parts;self.probe=probe;self.total=sum(integer(p['end'])-integer(p['start'])for p in parts);self.committed=0;self.next_offset=0;self.counts=[0]*len(parts);self.completed={};self.result=None;self.compute_seconds=0.;self.completed_piece_count=0;self.running_seconds=0.;self.run_start=None;self.state='PAUSED';self.rate_base=0;self.budget_refused=False;self.failure=None;self.best=[];self.tests=0;self.persist()
  def locate(self,offset):
   base=0
@@ -284,7 +291,9 @@ class Service:
  def finish_pending(self):
   if any(w.task for w in self.workers.values()):return
   if self.run_start is not None:self.running_seconds+=time.monotonic()-self.run_start;self.run_start=None
-  if self.result and self.pending is None:self.stop_workers();self.budget_refused=False;self.state=self.result['state'];return
+  if self.result and self.pending is None:
+   if not self.enabled or self.budget_refused or not self.keep_result_workers:self.stop_workers()
+   self.budget_refused=False;self.state=self.result['state'];return
   if self.budget_refused and self.pending is None:self.stop_workers();self.state='BUDGET_PAUSED';self.recover_budget();return
   if self.pending is None:return
   c=self.pending;self.pending=None;action=c['action']
@@ -305,6 +314,9 @@ class Service:
   if not isinstance(c,dict)or type(c.get('id'))not in(int,str)or 'action'not in c:raise ValueError('id/action object required')
   a=c['action']
   allowed={'inventory':set(),'status':set(),'execute':{'request'},'probe':{'request'},'evidence':set(),'configure':{'enabled','threads','affinity','generation'},'pause':{'generation'},'close':{'drain'},'ack_result':{'request_sha256'},'discard':{'request_sha256'},'result':set()}
+  if a=='execute' and 'keep_resident'in c:
+   if type(c['keep_resident'])is not bool:raise ValueError('Resident handoff requires a boolean')
+   allowed[a].add('keep_resident')
   if a not in allowed or set(c)!={'id','action'}|allowed[a]:raise ValueError('Exact command fields required; unexpected/expected answers forbidden')
   if a=='inventory':self.reply(c,inventory=self.load_inventory());return
   if a=='status':self.reply(c);return
@@ -330,10 +342,14 @@ class Service:
    self.pending=c;self.state='DRAINING_CLOSE';return
   if a in('ack_result','discard'):
    if c.get('request_sha256')!=(digest(self.request)if self.request else None)or self.request is None:raise ValueError('Explicit matching request digest required')
-   if self.workers or any(w.task for w in self.workers.values()):raise ValueError('Pause anddrain before clearing assignment')
    if a=='ack_result'and self.result is None:raise ValueError('No complete result toacknowledge')
    if a=='discard'and self.result is not None:raise ValueError('Unconsumed result requires ack_result')
-   self.request=None;self.parts=[];self.counts=[];self.best=[];self.tests=0;self.result=None;self.total=self.committed=self.next_offset=0;self.enabled=False;self.state='IDLE';self.persist();self.reply(c);return
+   keep_workers=a=='ack_result' and self.keep_result_workers and self.enabled and not self.budget_refused
+   if any(w.task for w in self.workers.values()) or (self.workers and not keep_workers):
+    raise ValueError('Pause anddrain before clearing assignment')
+   self.request=None;self.parts=[];self.counts=[];self.best=[];self.tests=0;self.result=None;self.total=self.committed=self.next_offset=0
+   self.keep_result_workers=False;self.enabled=keep_workers;self.state='WAITING_NORMAL_CYCLE'if keep_workers else 'IDLE'
+   self.persist();self.reply(c);return
   if a=='result':
    if self.result is None:raise ValueError('No complete result; partial prefix cannot become a normal report')
    self.reply(c,result=dict(self.result,evidence=self.evidence()));return
