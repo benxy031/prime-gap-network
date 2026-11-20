@@ -2,7 +2,7 @@ name: Build the qualified Windows recovery changes together
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/horizon-next-recovery-build]
+    branches: [qualification/ui196-core-memory]
 permissions:
   contents: read
 concurrency:
@@ -89,12 +89,16 @@ jobs:
 
       - name: Build the Windows application from the qualified sources
         run: |
+          set -euo pipefail
           cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-app --target PGN-Horizon --parallel 4
+          cmake --build build-app --target PGN-Horizon pgn-core-recovery-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure --no-tests=error -R '^core-recovery$'
           mkdir -p horizon-next-recovery
           cp build-app/PGN-Horizon.exe horizon-next-recovery/
           printf '%s\n' "$GITHUB_SHA" > horizon-next-recovery/SOURCE.txt
           qmake6 -query QT_VERSION > horizon-next-recovery/QT_VERSION.txt
+          g++ --version > horizon-next-recovery/TOOLCHAIN.txt
+          cp build-app/Testing/Temporary/LastTest.log horizon-next-recovery/CORE-RECOVERY-TEST.txt
           sha256sum horizon-next-recovery/*.exe > horizon-next-recovery/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: success()
