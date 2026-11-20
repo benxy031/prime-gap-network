@@ -10,14 +10,17 @@ public:
  explicit WalletManagementPanel(pgn::wallet::WalletManager*,QWidget* parent=nullptr,const QString& genesis={});
  void present(const QString& network,const QString& dataDirectory,bool configured,bool pending=false,const QString& pendingDirectory={},const QString& savedWallet={});
  void refresh();
+ void setChainBootstrapStatus(const QString&,bool);
  void showConnectionIssue(const QString& reason);
  void finishSetup(const QString& error={});
  QString setupError()const{return setupError_;}
  std::function<void(const pgn::wallet::WalletSetupSelection&)> onApplySetup;
  std::function<void()> onCancelChange;
  std::function<void()> onComponents;
+ std::function<void()> onChainBootstrap;
 private:
  pgn::wallet::WalletManager* manager_{};QLabel *location_{},*service_{},*message_{};
+ QPushButton* bootstrap_{};QLabel* bootstrapStatus_{};
  QComboBox* wallets_{};QPushButton *configure_{},*cancelChange_{},*reload_{},*create_{},*load_{},*select_{},*close_{};QToolButton* open_{};
  QWidget *setupFields_{},*walletControls_{};QLineEdit *directory_{},*setupWallet_{};QPushButton *applySetup_{},*existingSetup_{};
  QString setupError_;

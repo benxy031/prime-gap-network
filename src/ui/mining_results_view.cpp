@@ -1,3 +1,5 @@
+#include <QScopedValueRollback>
+#include <QFileInfo>
 #include "app/horizon_user_paths.h"
 #include "ui/mining_results_view.h"
 #include "ui/merit_palette.h"
@@ -176,6 +178,15 @@ class MiningResultsView final:public QWidget {
     }
     void refresh(){
         if(direct_){presentDirect();return;}
+        const auto archive=localArchive_.scope();
+        if(!archive.isEmpty()&&!QFileInfo(pgn::app::mutableDataRoot(root_)+"/runtime/scientific-history.sqlite").isFile()){
+            // Live testnet observations are persisted in the scoped archive.
+            // They remain usable before the next worker packet arrives.
+            QScopedValueRollback<bool> useArchive(direct_,true);
+            directPacket_.insert("scopes",QJsonObject{{"history",archive}});
+            presentDirect();
+            return;
+        }
         const auto scope=scopeKey();auto requests=scope=="session"?sessionRequests_:QStringList{request_};requests.removeAll(QString{});
         auto known=scope=="session"?sessionRuns_:QStringList{run_};known.removeAll(QString{});
         const bool whole=scope=="history";
@@ -231,7 +242,7 @@ public:
     void presentDirect(){
         const auto scope=scopeKey();const auto data=directPacket_.value("scopes").toObject().value(scope).toObject();
         sessionSummary_->present(directPacket_.value("scopes").toObject().value("session").toObject(),directPacket_.value("scopes").toObject().value("history").toObject(),directPacket_);auto ticketSummary=data;if(ticketArchive_.currentSource(directPacket_))ticketSummary=ticketArchive_.currentScope();else{for(const auto* key:{"positions","tests"})if(directPacket_.contains(key))ticketSummary.insert(key,directPacket_.value(key));}if(directPacket_.value("work_role")=="audit"){ticketSummary.remove("observed_golds");ticketSummary.remove("completed_tickets");}sessionSummary_->presentTicket(ticketSummary);presentStatisticsScope();
-        if(data.isEmpty()){presentedDirect_={};latest_={};fill(best_,{});fill(recent_,{});setProperty("pgn_results_best_rows",0);setProperty("pgn_results_recent_rows",0);presentStatisticsScope();setProperty("pgn_results_points",QVariant{});state_->setText("Awaiting "+scopeLabel().toLower()+" data");return;}
+        if(data.isEmpty()){presentedDirect_={};latest_={};fill(best_,{});fill(recent_,{});setProperty("pgn_results_error",QString{});state_->show();state_->setStyleSheet("color:#9ec7c1");setProperty("pgn_results_best_rows",0);setProperty("pgn_results_recent_rows",0);presentStatisticsScope();setProperty("pgn_results_points",QVariant{});state_->setText("Awaiting "+scopeLabel().toLower()+" data");return;}
         // Progress/rates still reach the summary on every input. The result
         // tables only need work when their data, identity or layout changes.
         const QJsonObject presentation{{"ticket",directPacket_.value("ticket_id")},{"scope",scopeKey()},

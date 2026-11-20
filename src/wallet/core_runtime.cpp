@@ -1,3 +1,4 @@
+#include "wallet/chain_bootstrap_import.h"
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
 #include "wallet/audit_activity_snapshot.h"
@@ -518,6 +519,46 @@ void CoreRuntime::launch(){
  if(launching_||verifier_.isRunning()){report("The owned Core preparation is still in progress");return;}
  recovery_.explicitStart();begin(true);
 }
+
+void CoreRuntime::applyChainBootstrap(std::function<void(qint64,const QString&,bool)> notify){
+ if(property("pgn_chain_bootstrap_running").toBool()||stopping_||!connected_||!processAlive()||profile_.genesisHash!=ChainBootstrapGenesis){
+  notify(0,"Connect the verified testnet Core before applying a bootstrap.",true);return;
+ }
+ setProperty("pgn_chain_bootstrap_running",true);
+ const auto owner=epoch();
+ const auto active=[this,owner]{return owner.matches(epoch())&&connected_&&!stopping_&&processAlive();};
+ auto job=new ChainBootstrapImport(this,
+  [this,active](const QString& method,const QJsonArray& params,ChainBootstrapImport::Reply reply){
+   if(!active()){reply({},"Core connection changed");return;}
+   rpc(method,params,[active,reply=std::move(reply)](QJsonValue value,QString error){
+    if(!active()){reply({},"Core connection changed");return;}
+    reply(value,error);
+   });
+  },
+  [this,active](const QJsonArray& requests,std::function<void(QJsonArray,QString)> done){
+   if(!active()){done({},"Core connection changed");return;}
+   QFile cookie(profile_.networkDataDirectory()+"/.cookie");
+   if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){done({},"Core credentials unavailable");return;}
+   QNetworkRequest request{QUrl("http://127.0.0.1:"+QString::number(profile_.rpcPort)+"/")};
+   request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
+   request.setRawHeader("Authorization","Basic "+cookie.readAll().trimmed().toBase64());
+   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
+   auto* reply=network_.post(request,QJsonDocument(requests).toJson(QJsonDocument::Compact),60000);
+   readBoundedCoreRpcReply(reply,this,65536,[reply,active,done=std::move(done)](QByteArray bytes,bool oversized){
+    const auto failed=reply->error()!=QNetworkReply::NoError;
+    reply->deleteLater();
+    const auto decoded=QJsonDocument::fromJson(bytes);
+    if(!active()||failed||oversized||!decoded.isArray()){done({},"Core submission unavailable");return;}
+    done(decoded.array(),{});
+   });
+  },
+  [this,notify=std::move(notify)](qint64 height,const QString& message,bool finished){
+   if(finished)setProperty("pgn_chain_bootstrap_running",false);
+   notify(height,message,finished);
+  });
+ job->start();
+}
+
 void CoreRuntime::reattach(){
  if(QFileInfo::exists(runtimeDirectory_+"/wallet-owned.json")){recovery_.explicitStart();begin(false);}
 }

@@ -28,6 +28,7 @@ public:
  ~CoreRuntime() override;
  void launch();
  void reattach();
+ void applyChainBootstrap(std::function<void(qint64,const QString&,bool)>);
  void stop();
  // Suspend background recovery before update code takes any early-return path.
  // This never stops or kills a process; stop() still uses verified native RPC.
