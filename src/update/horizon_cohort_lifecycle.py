@@ -39,9 +39,7 @@ class NativeCohortLifecycle:
         stage.require(store.context['platform']==self.platform, 'Activation platform differs from update context')
         self.store=store
         self.base=stage._plain_chain(base)
-        _, files, self.base_digest, _=inventory(self.base)
-        self.current=store.current()
-        stage.require(Path(self.current['cohort'])==self.base, 'Running code is not the selected cohort')
+        self.current,files=store.verified_running_base(self.base)
         self.root=stage._plain_chain(activation['application_root'])
         self.data=stage._plain_chain(activation['data_root'])
         stage.require(self.data not in (self.base,self.store.root) and not self.data.is_relative_to(self.base), 'User data must be separate from code')
