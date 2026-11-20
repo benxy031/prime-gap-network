@@ -1,3 +1,4 @@
+#include "ui/work_table_search.h"
 #pragma once
 #include "ui/audit_assignment_display.h"
 #include "ui/audit_status_presentation.h"
@@ -85,19 +86,58 @@ private:
         const int first=std::max(0,table_->rowAt(0)),last=std::min(table_->rowCount(),first+8);
         for(int row=first;row<last;++row){const auto id=table_->item(row,0)->data(Qt::UserRole).toString();if(id==selectedId_||!pageDetail(id).isEmpty())continue;const auto cached=detailCache_.value(id);if(!cached.isEmpty()&&cached.value("bestblockhash")==snapshot_.value("bestblockhash"))continue;prefetch_.append(id);}prefetchNext();
     }
+    DetailReader numberReader_;
+    QJsonObject exactSnapshot_;
+    QString exactSnapshotNumber_,exactError_;
+    quint64 numberSearchGeneration_{};
+    void searchChanged(){
+        exactSnapshot_={};exactSnapshotNumber_.clear();exactError_.clear();
+        const auto generation=++numberSearchGeneration_;
+        const auto number=exactWorkTicketNumber(search_->text());
+        render();
+        if(!numberReader_||number.isEmpty())return;
+        QTimer::singleShot(200,this,[this,number,generation]{
+            if(generation!=numberSearchGeneration_)return;
+            const QPointer<NetworkWorkView> guard(this);
+            numberReader_(number,[guard,number,generation](QJsonObject state,QString error){
+                if(!guard||generation!=guard->numberSearchGeneration_)return;
+                guard->exactSnapshot_=std::move(state);
+                guard->exactSnapshotNumber_=number;
+                guard->exactError_=std::move(error);
+                guard->render();
+            });
+        });
+    }
     void render(){
-        const QSignalBlocker selectionGuard(table_);table_->setUpdatesEnabled(false);const auto leases=snapshot_.value("leases").toArray();int renderedRows=0;const auto query=search_->text().trimmed();const int filter=filter_->currentIndex();
-        for(const auto& entry:leases){const auto lease=entry.toObject();QJsonObject auditState;for(const auto& check:snapshot_.value("audits").toArray())if(check.toObject().value("request_id")==lease.value("request")){auditState=check.toObject();break;}const bool submitted=lease.contains("report_root"),audited=lease.value("audited").toBool()||auditState.value("audited").toBool();if((filter==1&&submitted)||(filter==2&&!submitted)||(filter==3&&!audited))continue;
-            const auto id=lease.value("request").toString();if(!query.isEmpty()&&!id.contains(query,Qt::CaseInsensitive)&&!lease.value("ticket_number").toString().contains(query)&&!lease.value("start").toString().contains(query)&&!lease.value("end").toString().contains(query)&&!lease.value("miner_script").toString().contains(query,Qt::CaseInsensitive))continue;
+        const QSignalBlocker selectionGuard(table_);table_->setUpdatesEnabled(false);const bool sorting=table_->isSortingEnabled();table_->setSortingEnabled(false);
+        const auto query=search_->text().trimmed(),number=exactWorkTicketNumber(query);
+        const bool exactReady=!number.isEmpty()&&exactSnapshotNumber_==number;
+        const auto& display=exactReady?exactSnapshot_:snapshot_;
+        const auto leases=display.value("leases").toArray();int renderedRows=0;const int filter=filter_->currentIndex();
+        for(const auto& entry:leases){const auto lease=entry.toObject();QJsonObject auditState;for(const auto& check:display.value("audits").toArray())if(check.toObject().value("request_id")==lease.value("request")){auditState=check.toObject();break;}const bool submitted=lease.contains("report_root"),audited=lease.value("audited").toBool()||auditState.value("audited").toBool();if((filter==1&&submitted)||(filter==2&&!submitted)||(filter==3&&!audited))continue;
+            const auto id=lease.value("request").toString();const auto ticketNumber=lease.value("ticket_number").toString();
+            if(!number.isEmpty()&&ticketNumber!=number)continue;
+            if(number.isEmpty()&&!query.isEmpty()&&!id.contains(query,Qt::CaseInsensitive)&&
+               !(QString("Ticket ")+ticketNumber).contains(query,Qt::CaseInsensitive)&&
+               !lease.value("start").toString().contains(query)&&!lease.value("end").toString().contains(query)&&
+               !lease.value("miner_script").toString().contains(query,Qt::CaseInsensitive))continue;
             const int row=renderedRows++;if(row>=table_->rowCount())table_->insertRow(row);const auto label=lease.value("ticket_number").toString();const auto positions=positionFormats(pgn::booking::subtractUnsigned(lease.value("end").toString(),lease.value("start").toString()));const QStringList cells{label.isEmpty()?QString("Issued at %1").arg(lease.value("issued").toInteger()):"Ticket "+label,lease.value("start").toString()+" → "+lease.value("end").toString(),QString{},QString{},audited?"Audits passed":submitted?"Report submitted":"Assigned",QString::number(lease.value("issued").toInteger()),submitted?QString("Report retained"):computeLeaseDeadlineText(lease)};
-            for(int col=0;col<cells.size();++col){auto* item=table_->item(row,col);const bool changed=!item||item->text()!=cells[col];if(!item){item=new QTableWidgetItem;table_->setItem(row,col,item);}if(changed)item->setText(cells[col]);if(item->data(Qt::UserRole).toString()!=id)item->setData(Qt::UserRole,id);const auto tip="Exact request: "+id+"\nOwned lower-prime interval: ["+lease.value("start").toString()+", "+lease.value("end").toString()+")";if(item->toolTip()!=tip)item->setToolTip(tip);if(col==4){if(!auditState.isEmpty())presentAuditStatus(item,auditReportPresentation(auditState));else if(audited)presentAuditStatus(item,auditReportPresentation(QJsonObject{{"audited",true}}));else if(submitted)presentAuditStatus(item,{"Status unavailable","Audit state has not been loaded; no waiting verdict is inferred",QColor("#9aacb4")});else presentAuditStatus(item,ticketStagePresentation("assigned"));}}
+            for(int col=0;col<cells.size();++col){auto* item=table_->item(row,col);const bool changed=!item||item->text()!=cells[col];if(!item){item=new WorkTableItem;table_->setItem(row,col,item);}if(changed)item->setText(cells[col]);
+                auto* sortable=static_cast<WorkTableItem*>(item);
+                if(col==0)sortable->setNumber(ticketNumber);
+                if(col==1)sortable->setNumber(lease.value("start").toString());
+                if(col==5)sortable->setNumber(cells[col]);if(item->data(Qt::UserRole).toString()!=id)item->setData(Qt::UserRole,id);const auto tip="Exact request: "+id+"\nOwned lower-prime interval: ["+lease.value("start").toString()+", "+lease.value("end").toString()+")";if(item->toolTip()!=tip)item->setToolTip(tip);if(col==4){if(!auditState.isEmpty())presentAuditStatus(item,auditReportPresentation(auditState));else if(audited)presentAuditStatus(item,auditReportPresentation(QJsonObject{{"audited",true}}));else if(submitted)presentAuditStatus(item,{"Status unavailable","Audit state has not been loaded; no waiting verdict is inferred",QColor("#9aacb4")});else presentAuditStatus(item,ticketStagePresentation("assigned"));}}
             presentAuditSlot(table_->item(row,2),auditState,0,submitted);presentAuditSlot(table_->item(row,3),auditState,1,submitted);
         }
         table_->setRowCount(renderedRows);
+        table_->setSortingEnabled(sorting);
         compactRows();
         bool selectedVisible=false;for(int row=0;row<table_->rowCount();++row)if(table_->item(row,0)->data(Qt::UserRole).toString()==selectedId_){table_->selectRow(row);selectedVisible=true;break;}
         if(!selectedVisible)table_->clearSelection();
-        table_->setUpdatesEnabled(true);summary_->setText(QString("%1 shown · %2 tracked").arg(table_->rowCount()).arg(snapshot_.value("active_lease_count").toInteger(snapshot_.value("leases").toArray().size())));
+        table_->setUpdatesEnabled(true);
+        if(exactReady&&!exactError_.isEmpty())summary_->setText(exactError_);
+        else if(exactReady&&leases.isEmpty())summary_->setText(QString("Ticket %1 has no assignment on this branch").arg(number));
+        else summary_->setText(QString("%1 shown · %2 tracked").arg(table_->rowCount()).arg(snapshot_.value("active_lease_count").toInteger(snapshot_.value("leases").toArray().size())));
     }
     bool currentSelection(const QString& id,quint64 generation)const{
         return selectedId_==id&&selectionGeneration_==generation;
@@ -175,6 +215,7 @@ protected:
     void showEvent(QShowEvent* event)override{QWidget::showEvent(event);QTimer::singleShot(0,this,[this]{refresh();});}
 void presentStatus(const QString& text,bool error=false){status_->setText(status_->fontMetrics().elidedText(text,Qt::ElideRight,statusSlot_->width()));status_->setToolTip(text);statusSlot_->setCurrentWidget(summary_);if(table_)table_->setToolTip(text);}
 public:
+    void setTicketNumberReader(DetailReader reader){numberReader_=std::move(reader);}
     void prepareStartupMap(){if(atlas_)atlas_->prepareStartup();}
     QJsonObject auditProjection(const QJsonArray& audits,QWidget* surface)const{return atlas_?atlas_->auditProjection(audits,surface):QJsonObject{};}
     void resetAuditLayout(){if(!workspace_||workspace_->count()<2)return;QList<int> sizes;for(int i=0;i<workspace_->count();++i)sizes.append(0);sizes[0]=290;sizes.last()=std::max(1,workspace_->height()-290-(workspace_->count()-1)*workspace_->handleWidth());workspace_->setSizes(sizes);}
@@ -195,7 +236,13 @@ public:
         details_=new QTreeWidget;details_->setObjectName("pgn-network-ticket-evidence");details_->setHeaderLabels({"Evidence","Value"});details_->setColumnWidth(0,175);details_->setWordWrap(true);details_->setMinimumSize(280,140);details_->setStyleSheet("QTreeWidget{font:12px 'Segoe UI';} QTreeWidget::item{padding:3px 1px;}");content_->addWidget(details_);content_->setStretchFactor(0,2);content_->setStretchFactor(1,1);content_->setSizes({850,420});if(atlas_){workspace_->setStretchFactor(0,0);workspace_->setStretchFactor(1,1);workspace_->setSizes({200,650});}
         auto* actions=new QHBoxLayout;previous_=new QPushButton("Previous page");next_=new QPushButton("Next page");openBlock_=new QPushButton("Open block");openBlock_->setToolTip("Open the selected report's confirming block");copy_=new QPushButton("Copy evidence");auto* audits=new QPushButton("Audit explorer");for(auto* b:{previous_,next_,openBlock_,copy_,audits})actions->addWidget(b);box->addLayout(actions);previous_->setEnabled(false);next_->setEnabled(false);openBlock_->setEnabled(false);copy_->setEnabled(false);
         connect(table_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{prefetchVisible();});
-        connect(search_,&QLineEdit::textChanged,this,[this]{render();});connect(filter_,&QComboBox::currentIndexChanged,this,[this]{render();});connect(refreshButton,&QPushButton::clicked,this,[this]{refresh();});connect(table_,&QTableWidget::itemSelectionChanged,this,[this]{const auto rows=table_->selectionModel()->selectedRows();if(!rows.isEmpty())if(auto* item=table_->item(rows.first().row(),0))inspect(item->data(Qt::UserRole).toString());});connect(previous_,&QPushButton::clicked,this,[this]{offset_=std::max(0,offset_-100);refresh();});connect(next_,&QPushButton::clicked,this,[this]{offset_+=100;refresh();});connect(openBlock_,&QPushButton::clicked,this,[this]{if(onOpenBlock)onOpenBlock(block_);});connect(audits,&QPushButton::clicked,this,[this]{if(onOpenAudits)onOpenAudits();});connect(copy_,&QPushButton::clicked,this,[this]{QApplication::clipboard()->setText(QString::fromUtf8(QJsonDocument(selected_).toJson(QJsonDocument::Indented)));});timer_.setInterval(500);connect(&timer_,&QTimer::timeout,this,[this]{if(isVisible()||snapshot_.isEmpty())refresh();});timer_.start();QTimer::singleShot(0,this,[this]{refresh();});
+        table_->horizontalHeader()->setSectionsClickable(true);
+        connect(table_->horizontalHeader(),&QHeaderView::sectionClicked,this,[this](int column){
+            if(table_->isSortingEnabled())return;
+            table_->horizontalHeader()->setSortIndicator(column,Qt::AscendingOrder);
+            table_->setSortingEnabled(true);
+        });
+        connect(search_,&QLineEdit::textChanged,this,[this]{searchChanged();});connect(filter_,&QComboBox::currentIndexChanged,this,[this]{render();});connect(refreshButton,&QPushButton::clicked,this,[this]{refresh();});connect(table_,&QTableWidget::itemSelectionChanged,this,[this]{const auto rows=table_->selectionModel()->selectedRows();if(!rows.isEmpty())if(auto* item=table_->item(rows.first().row(),0))inspect(item->data(Qt::UserRole).toString());});connect(previous_,&QPushButton::clicked,this,[this]{offset_=std::max(0,offset_-100);refresh();});connect(next_,&QPushButton::clicked,this,[this]{offset_+=100;refresh();});connect(openBlock_,&QPushButton::clicked,this,[this]{if(onOpenBlock)onOpenBlock(block_);});connect(audits,&QPushButton::clicked,this,[this]{if(onOpenAudits)onOpenAudits();});connect(copy_,&QPushButton::clicked,this,[this]{QApplication::clipboard()->setText(QString::fromUtf8(QJsonDocument(selected_).toJson(QJsonDocument::Indented)));});timer_.setInterval(500);connect(&timer_,&QTimer::timeout,this,[this]{if(isVisible()||snapshot_.isEmpty())refresh();});timer_.start();QTimer::singleShot(0,this,[this]{refresh();});
     }
 };
 }

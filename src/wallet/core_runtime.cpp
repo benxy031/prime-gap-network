@@ -1,3 +1,4 @@
+#include <boost/multiprecision/cpp_int.hpp>
 #include "wallet/chain_bootstrap_import.h"
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
@@ -973,6 +974,39 @@ void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QStri
    rpc("getbestblockhash",{},[this,owner,state,consume=std::move(consume)](QJsonValue hash,QString error){
     if(!error.isEmpty()||!owner.matches(epoch())||!connected_||!processAlive()||hash!=state.value("bestblockhash")){consume({},error.isEmpty()?QString("Ticket audit page changed branch; retrying"):error);return;}
     consume(state,{});
+   });
+  });
+ });
+}
+void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJsonObject,QString)> consume){
+ if(number.isEmpty()||number.size()>80||number=="0"||number.startsWith('0')){
+  consume({},"Enter a ticket number greater than zero");return;
+ }
+ for(const auto digit:number)if(digit<'0'||digit>'9'){
+  consume({},"Enter a ticket number in decimal");return;
+ }
+ readTicketAtlas({},{},1,[this,number,consume=std::move(consume)](QJsonObject domain,QString error)mutable{
+  if(!error.isEmpty()){consume({},error);return;}
+  using Integer=boost::multiprecision::cpp_int;
+  QString start,end;
+  try{
+   const Integer origin(domain.value("range_origin").toString().toStdString()),
+      limit(domain.value("range_limit").toString().toStdString()),width(domain.value("ticket_width").toString().toStdString());
+   const Integer first=origin+(Integer(number.toStdString())-1)*width;
+   if(width<=0||first<origin||first>=limit){consume({},"Ticket number is outside this network’s search domain");return;}
+   const Integer last=first+width;
+   start=QString::fromStdString(first.str());end=QString::fromStdString((last<limit?last:limit).str());
+  }catch(const std::exception&){consume({},"Core ticket domain is invalid");return;}
+  readTicketAtlas(start,end,1,[this,number,consume=std::move(consume)](QJsonObject atlas,QString error)mutable{
+   if(!error.isEmpty()){consume({},error);return;}
+   const auto rows=atlas.value("details").toArray();
+   if(rows.isEmpty()&&!atlas.value("details_truncated").toBool()){consume({},{});return;}
+   const auto row=rows.isEmpty()?QJsonObject{}:rows.first().toObject();
+   if(rows.size()!=1||row.value("ticket_number").toString()!=number){consume({},"Core returned a different ticket");return;}
+   readTicketDetails(row.value("request").toString(),[number,consume=std::move(consume)](QJsonObject state,QString error)mutable{
+    if(error.isEmpty()&&state.value("leases").toArray().first().toObject().value("ticket_number").toString()!=number)
+     error="Ticket changed while searching";
+    consume(error.isEmpty()?state:QJsonObject{},error);
    });
   });
  });
