@@ -343,15 +343,15 @@ int main(int argc,char** argv) {
  const auto applicationDirectory=QCoreApplication::applicationDirPath();
  const auto startupArguments=QCoreApplication::arguments();
  const QString root=pgn::app::resolveHorizonApplicationRoot(startupArguments,applicationDirectory);
- QFile installedCore(root+"/Core/core-template.json");std::optional<QByteArray> installedTemplate;
- if(installedCore.exists())installedTemplate=installedCore.open(QIODevice::ReadOnly)?installedCore.read(32769):QByteArray{};
- const auto startup=pgn::app::resolveHorizonStartup(startupArguments,installedTemplate);installedCore.close();
+ const auto installedTemplate=pgn::wallet::readCoreBundleTemplate(root);
+ const auto startup=pgn::app::resolveHorizonStartup(startupArguments,installedTemplate);
  const bool testnetMode=startup.testnet;
+ const auto installedGenesis=installedTemplate?pgn::wallet::coreTemplateGenesis(*installedTemplate,testnetMode):QString{};
  const bool explicitLegacyRoot=startupArguments.size()>1&&!startupArguments[1].startsWith("--");
- if(!pgn::app::bindMutableDataRoot(root,pgn::wallet::installedCoreGenesis(root),explicitLegacyRoot)){std::cerr<<"User-data path binding unavailable\n";return 7;}
- const auto updateState=pgn::update::updateStateDirectory(pgn::wallet::installedCoreGenesis(root));
+ if(!pgn::app::bindMutableDataRoot(root,installedGenesis,explicitLegacyRoot,testnetMode)){std::cerr<<"User-data path binding unavailable\n";return 7;}
+ const auto updateState=pgn::update::updateStateDirectory(installedGenesis);
  markStartup(2,"Verifying the selected application components");
- const auto updateSelection=updateState.isEmpty()?pgn::app::SelectedCohort{}:pgn::app::selectedUpdateCohort(applicationDirectory,updateState+"/installation",testnetMode?"testnet":"main",pgn::wallet::installedCoreGenesis(root),startupArguments.contains("--update-healthcheck"));
+ const auto updateSelection=updateState.isEmpty()?pgn::app::SelectedCohort{}:pgn::app::selectedUpdateCohort(applicationDirectory,updateState+"/installation",testnetMode?"testnet":"main",installedGenesis,startupArguments.contains("--update-healthcheck"));
  if(!updateSelection.executable.isEmpty()){
   if(QProcess::startDetached(updateSelection.executable,startupArguments.mid(1),QFileInfo(updateSelection.executable).absolutePath()))return 0;
   std::cerr<<"Selected update could not be launched; opening the previous client\n";
@@ -359,9 +359,9 @@ int main(int argc,char** argv) {
  // The instance identity follows the user's data/network, not the replaceable
  // executable directory. Old shortcuts must never open a second wallet owner.
  QLocalServer scopeLifecycle;scopeLifecycle.setSocketOptions(QLocalServer::UserAccessOption);
- const auto scopeName="pgn-horizon-scope-"+QString::fromLatin1(QCryptographicHash::hash((pgn::app::mutableDataRoot(root)+"/"+pgn::wallet::installedCoreGenesis(root)).toUtf8(),QCryptographicHash::Sha256).toHex());
+ const auto scopeName="pgn-horizon-scope-"+QString::fromLatin1(QCryptographicHash::hash((pgn::app::mutableDataRoot(root)+"/"+installedGenesis).toUtf8(),QCryptographicHash::Sha256).toHex());
  QPointer<QWidget> scopeWindow;
- pgn::app::HorizonUiLease scopeLease(pgn::app::mutableDataRoot(root)+"/.horizon-ui-"+pgn::wallet::installedCoreGenesis(root)+".lock");
+ pgn::app::HorizonUiLease scopeLease(pgn::app::mutableDataRoot(root)+"/.horizon-ui-"+installedGenesis+".lock");
  if(!scopeLease.error().isEmpty()){std::cerr<<scopeLease.error().toStdString()<<"\n";return 8;}
  if(!scopeLease.owned()){
   QLocalSocket existing;existing.connectToServer(scopeName);
@@ -390,7 +390,7 @@ int main(int argc,char** argv) {
  window.setProperty("pgn_update_application_root",pgn::app::cleanApplicationRoot(root));
  window.setProperty("pgn_update_data_root",pgn::app::mutableDataRoot(root));
  window.setProperty("pgn_update_core_runtime_directory",pgn::wallet::coreRuntimeDirectory(root,testnetMode));
- window.setProperty("pgn_update_genesis",pgn::wallet::installedCoreGenesis(root));
+ window.setProperty("pgn_update_genesis",installedGenesis);
  window.setProperty("pgn_update_explicit_root",explicitLegacyRoot);
  struct CoreUpdateDrain {bool pending{},ready{};};
  const auto coreUpdate=std::make_shared<CoreUpdateDrain>();
@@ -557,16 +557,16 @@ int main(int argc,char** argv) {
  }
  cpuInventoryProfile.close();
  auto* cpuFleet=new pgn::mining::CpuNormalResources(&window);
- try{*pendingUpdateResume=pgn::update::takeMiningUpdateResume(pgn::app::mutableDataRoot(root),pgn::wallet::installedCoreGenesis(root),startupArguments.contains("--update-healthcheck"));}
+ try{*pendingUpdateResume=pgn::update::takeMiningUpdateResume(pgn::app::mutableDataRoot(root),installedGenesis,startupArguments.contains("--update-healthcheck"));}
  catch(const std::exception& error){window.setProperty("pgn_update_resume_error",QString::fromUtf8(error.what()));}
  captureMiningUpdate=[canvas,cpuFleet,pendingUpdateResume]{
   return pgn::ui::captureMiningUpdateChoices(*pendingUpdateResume,cpuFleet->updateResumeChoices(),
       canvas->property("pgn_update_gpu_intents").toJsonObject());
  };
  const bool localCpuOnly=!QFileInfo::exists(pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/cpu-controllers.json");
- const auto discoverCpus=[cpuEndpoints,canvas,pgn,cpuFleet,localCpuOnly,root,&window]{
+ const auto discoverCpus=[cpuEndpoints,canvas,pgn,cpuFleet,localCpuOnly,root,installedGenesis,&window]{
   for(const auto& endpoint:*cpuEndpoints)pgn::mining::probeCpuInventory(endpoint,&window,
-   [canvas,pgn,cpuFleet,localCpuOnly,root](const QJsonObject& inventory){
+   [canvas,pgn,cpuFleet,localCpuOnly,root,installedGenesis](const QJsonObject& inventory){
     pgn::ui::presentCpuInventory(canvas,inventory);pgn->present(pgn::ui::miningCardStates(canvas));
     if(localCpuOnly){
      const auto host=inventory.value("host").toString();
@@ -575,7 +575,7 @@ int main(int argc,char** argv) {
       ".exe"
 #endif
       ;
-     const auto engineState=pgn::wallet::normalEngineStateDirectory(root,pgn::wallet::installedCoreGenesis(root));
+     const auto engineState=pgn::wallet::normalEngineStateDirectory(root,installedGenesis);
      if(QFileInfo::exists(program)&&!engineState.isEmpty()){pgn::mining::CpuControlEndpoint control;control.program=program;control.host=host;control.deviceId="CPU/"+host.toUpper()+"/"+QString::number(inventory.value("processor_group").toInt());control.arguments={"--workspace",engineState+"/cpu-controller/"+QString::number(inventory.value("processor_group").toInt()),"--piece-positions","100000000"};cpuFleet->add(control);}
     }
    },
@@ -705,7 +705,7 @@ int main(int argc,char** argv) {
   // Legacy remote profiles already contain the selected mining identity.
   if(toolsButton->property("pgn_public_audit_address").toString().isEmpty()){
    QFile profile(pgn::app::mutableDataRoot(root)+"/testnet/ui-runtime/worker-stream.json");
-   const auto genesis=pgn::wallet::installedCoreGenesis(root);
+   const auto genesis=installedGenesis;
    if(profile.open(QIODevice::ReadOnly)&&profile.size()<=65536){
     const auto address=pgn::social::configuredMiningAddress(QJsonDocument::fromJson(profile.readAll()).object(),genesis);
     if(!address.isEmpty())attachAuditIdentity(QJsonObject{{"address",address},{"genesis",genesis}});
@@ -745,6 +745,8 @@ int main(int argc,char** argv) {
     for(const auto& entry:inspectWallet->property(property).toJsonArray()){
      const auto event=entry.toObject();const auto detail=event.value("detail").toString();
      QJsonObject safe{{"state",event.value("state")},{"observed_utc",event.value("observed_utc")}};
+     if(event.value("state")=="stopped"&&detail==pgn::wallet::coreDataDirectoryRefusedDetail)
+      safe.insert("startup_failure","data_directory_unavailable");
      const auto code=networkError.match(detail);if(code.hasMatch())safe.insert("rpc_transport_code",code.captured(1).toInt());
      if(detail.startsWith("getblockchaininfo:"))safe.insert("rpc_method","getblockchaininfo");
      else if(detail.startsWith("getblockhash(0):"))safe.insert("rpc_method","getblockhash");

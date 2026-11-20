@@ -2,6 +2,7 @@
 #include "wallet/chain_observation.h"
 
 namespace pgn::wallet {
+inline constexpr char coreDataDirectoryRefusedDetail[]="Core reported that it could not open its configured data folder.";
 enum class CoreLinkState { Starting, Ready, RpcUnavailable, Stopped, Rejected, WarmingUp };
 inline QString coreLinkKey(CoreLinkState state){
     switch(state){

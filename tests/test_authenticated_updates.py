@@ -25,6 +25,22 @@ class Transport(FetcherInterface):
   yield self.files[url]
 
 class UpdateTests(unittest.TestCase):
+ @unittest.skipUnless(os.name == 'nt', 'Windows cache behavior')
+ def test_writable_metadata_cache_does_not_require_symlinks(self):
+  client = self.client()
+  current = client.metadata / 'root.json'
+  replace = os.replace
+  def deny_replacing_existing_root(source, destination):
+   if Path(destination) == current and current.exists():
+    raise PermissionError('Windows share denies replacement of the current root alias')
+   return replace(source, destination)
+  with patch.object(os, 'symlink', side_effect=PermissionError('Windows share denies links')):
+   with patch.object(os, 'replace', side_effect=deny_replacing_existing_root):
+    for _ in range(2):
+     self.assertTrue(client.refresh(['cpu'])['publisher_authenticated'])
+  self.assertFalse(current.is_symlink())
+  self.assertEqual(current.read_bytes(), (client.metadata / 'root_history' / '1.root.json').read_bytes())
+
  def test_restart_recovers_a_cache_interrupted_before_ownership(self):
   cache = self.root / 'cache'
   cache.mkdir()

@@ -8,6 +8,7 @@
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);app.setApplicationName("PGN-paths-"+QUuid::createUuid().toString(QUuid::WithoutBraces));QStandardPaths::setTestModeEnabled(true);
  QTemporaryDir temporary;if(!temporary.isValid())return 1;const auto a=temporary.path()+"/code-a",b=temporary.path()+"/code-b";QDir().mkpath(a);QDir().mkpath(b);
+ if(pgn::app::resolvedMutableDataRoot(a,{},false,true)==pgn::app::resolvedMutableDataRoot(a,{},false,false))return 8;
  const QString genesis(64,'d'),other(64,'e');const auto expected=pgn::app::resolvedMutableDataRoot(a,genesis,false);
  if(expected.isEmpty()||expected.startsWith(a)||QFileInfo::exists(expected))return 2;
  if(expected!=pgn::app::resolvedMutableDataRoot(b,genesis,false)||expected==pgn::app::resolvedMutableDataRoot(a,other,false))return 3;

@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 #include <QImage>
 #include <QDir>
+#include <QJsonArray>
 #include <QEventLoop>
 #include <QPushButton>
 #include <QLineF>
@@ -45,8 +46,38 @@ static void resourceWorkSelection(){
  require(rail.selectWorkSource("GPU")&&selected.value("positions")=="110000000000000"&&selected.value("phase")=="Paused","GPU selection did not retain its updated snapshot");
  require(rail.selectWorkSource("CPU/ALEX/0")&&selected.value("ticket_id")==QString(64,'b'),"Switching mixed resource identities");
  require(!rail.selectWorkSource("CPU/UNKNOWN/0"),"Unknown resource borrowed another ticket");
- auto* selector=rail.findChild<QComboBox*>("pgn-work-source");require(selector&&selector->count()==2,"Work selector duplicated or lost resources");
- require(selector->geometry().bottom()<rail.height(),"Work selection added another header row");
+}
+
+static void concurrentWorkRows(const QString& output){
+ MiningTicketProgress view;
+ view.setStyleSheet("QWidget{background:#010b10;color:#c9eee7;}");
+ view.resize(1366,120);
+ auto gpu=frame();
+ auto cpu=frame();cpu["source_device"]="CPU/ALEX/0";cpu["title"]="Ticket 432";cpu["ticket_id"]=QString(64,'b');cpu["positions"]="1000";cpu["positions_total"]="10000";
+ view.present(gpu);view.show();view.grab();
+ require(view.height()==120,"GPU-only rail expanded");
+ view.present(cpu);view.grab();
+ const auto rows=[&]{return view.property("pgn_ticket_concurrent_work").toJsonArray();};
+ require(view.workSource()=="GPU"&&rows().size()==1,"Concurrent CPU ticket was not rendered next to the GPU");
+ auto shown=rows()[0].toObject();
+ require(shown["source"]=="CPU/ALEX/0"&&shown["title"]=="Ticket 432"&&shown["fraction"].toDouble()==0.1,
+         "CPU row borrowed GPU ticket, position count or progress");
+ require(view.height()>120,"CPU work overlapped the GPU header");
+ require(view.property("pgn_ticket_work_presentation").toJsonObject()["title"].toString().startsWith("GPU · Ticket 857"),
+         "Concurrent CPU changed or hid the primary GPU label");
+ require(!view.findChild<QObject*>("pgn-work-source"),"Rejected work dropdown reappeared");
+ for(const int width:{640,1366}){
+  view.resize(width,view.height());const auto image=view.grab();
+  require(!image.isNull()&&image.width()>=width&&rows().size()==1,"Responsive render lost the CPU row");
+  if(!output.isEmpty())require(image.save(output+QString("/gpu-cpu-work-%1.png").arg(width)),"Cannot save concurrent work render");
+ }
+ view.presentResourceActivity("CPU/ALEX/0",{},false);view.grab();
+ shown=rows()[0].toObject();
+ require(shown["phase"]=="Disconnected"&&shown["fraction"].toDouble()==0.1,"Disconnected worker displayed live progress or lost its last position");
+ view.presentResourceActivity("CPU/ALEX/0",{{"enabled",false}},true);view.grab();
+ require(rows()[0].toObject()["phase"]=="Paused","CPU OFF retained a live calculation label");
+ require(view.selectWorkSource("CPU/ALEX/0"),"CPU detail selection failed");view.grab();
+ require(rows()[0].toObject()["source"]=="GPU","Selecting a CPU removed GPU work");
 }
 static void storageWaitPresentation(){
  for(int kind:{0,1,2}){
@@ -94,7 +125,7 @@ static void storageWaitPresentation(){
  std::cout<<"PASS storage-wait actual renderer: search/regular audit/catch-up, retained fraction/segments/results/ON, hidden stale ETA and fresh resumption; no image files or GPU/Core\n";
 }
 int main(int argc,char** argv){
- QApplication app(argc,argv);try{storageWaitPresentation();resourceActivity();resourceWorkSelection();}catch(const std::exception& error){std::cerr<<"FAIL storage/resource presentation: "<<error.what()<<"\n";return 77;}GapFlowModel model;auto old=row(1,29.);auto gold=row(2,30.);
+ QApplication app(argc,argv);try{storageWaitPresentation();resourceActivity();resourceWorkSelection();concurrentWorkRows(argc>1?QString::fromLocal8Bit(argv[1]):QString{});}catch(const std::exception& error){std::cerr<<"FAIL storage/resource presentation: "<<error.what()<<"\n";return 77;}GapFlowModel model;auto old=row(1,29.);auto gold=row(2,30.);
  QJsonObject cycleMeta{{"schema","PGN_MINING_CYCLE_VIEW_V1"},{"request_id",QString(64,'f')},{"ticket_number","857"},{"search_positions","1800"},{"active_index",0},{"audits",QJsonArray{QJsonObject{{"state","assigned"},{"positions","100"}},QJsonObject{{"state","assigned"},{"positions","100"}}}}};
  auto cycleFrame=frame();cycleFrame.insert("work_role","audit");cycleFrame.insert("positions_total","100");cycleFrame.insert("positions","50");cycleFrame.insert("eta_rate",10);cycleFrame.insert("audit_service",QJsonObject{{"cycle",cycleMeta}});auto firstCycle=miningCycleProgress(cycleFrame);
  require(firstCycle.known&&std::abs(firstCycle.fraction-.025)<1e-12&&firstCycle.taskEta==5&&firstCycle.cycleEta==195,"First audit uses first5percent and complete measured ETA");

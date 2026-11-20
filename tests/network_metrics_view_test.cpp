@@ -45,10 +45,28 @@ int main(int argc,char** argv){
         require(merit.size()==4&&rate.size()==4&&merit[3].toDouble()>merit[2].toDouble()&&rate[3].toDouble()>0,"Valid data produces a blank or degenerate graph");
         require(merit[3].toDouble()-merit[2].toDouble()<1,"Merit scale flattened against an unrelated unit range");
         const auto charts=view->property("pgn_network_chart_geometry").toJsonArray();require(charts.size()==2,"Both chart axes must expose actual geometry");
+        const auto rateGeometry=charts[1].toObject();
+        const auto pixelsAt=[&](double value,bool primary){
+            const auto height=rateGeometry["height"].toDouble();
+            const int row=int(rateGeometry["y"].toDouble()+height*(1-value/rate[3].toDouble()));
+            const auto x=rateGeometry["x"].toDouble(), width=rateGeometry["width"].toDouble();
+            int hits=0;
+            for(int y=row-2;y<=row+2;++y){
+                for(int px=int(x+width*.20);px<=int(x+width*.80);++px){
+                    const auto c=image.pixelColor(px,y);
+                    if(primary?c.green()>160&&c.green()-c.red()>50&&c.green()>c.blue():
+                        c.blue()>160&&c.blue()-c.green()>25&&c.blue()-c.red()>70)++hits;
+                }
+            }
+            return hits;
+        };
+        require(pixelsAt(1e12,true)>12,"Measured curve disagrees with reported positions over chain time");
+        require(pixelsAt(2e14/600.,false)==0,"A second audited hashrate curve is still drawn");
         for(int chart=0;chart<2;++chart){const auto g=charts[chart].toObject();require(g.value("axis_font_px").toInt()>=11&&g.value("vertical_ticks").toInt()>=3&&g.value("horizontal_ticks").toInt()>=2,"Axes lack readable value/time graduations");require(g.value("samples").toInt()==points.size(),"Sample annotation fabricates precision");
             const QPointF at(g.value("x").toDouble()+g.value("width").toDouble()/2,g.value("y").toDouble()+g.value("height").toDouble()/2);
             QMouseEvent move(QEvent::MouseMove,at,view->mapToGlobal(at.toPoint()),Qt::NoButton,Qt::NoButton,Qt::NoModifier);QCoreApplication::sendEvent(view,&move);app.processEvents();
             const auto hover=view->property("pgn_network_chart_hover").toJsonObject();require(hover.value("chart").toInt()==chart&&hover.value("sample_index").toInt()==1&&hover.value("time")==points[1].toObject().value("time"),"Crosshair must select a real nearest sample, never interpolated data");require(hover.value("reported_positions")==points[1].toObject().value("reported_positions")&&hover.value("merit_target_q16")==points[1].toObject().value("merit_target_q16"),"Hover exact source values changed");
+            if(chart==1)require(view->toolTip().contains("Audited:"),"Audited value is missing from sample details");
             require(view->toolTip().contains("Exact target: "+QString::number(points[1].toObject().value("merit_target_q16").toInteger())+"/65536")&&view->toolTip().contains("Target merit: ≈ "),"Rounded merit lacks approximation or exact source ratio");
         }
         QEvent leave(QEvent::Leave);QCoreApplication::sendEvent(view,&leave);require(view->toolTip().isEmpty()&&view->property("pgn_network_chart_hover").toJsonObject().isEmpty(),"Stale hover remains outside chart");

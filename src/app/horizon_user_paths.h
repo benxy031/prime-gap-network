@@ -13,16 +13,16 @@ inline std::mutex mutablePathsMutex;
 inline std::optional<MutablePaths> mutablePaths;
 inline QString cleanApplicationRoot(const QString& root){return QDir::cleanPath(QFileInfo(root).absoluteFilePath());}
 // Pure resolution: inspecting/cancelling setup does not create a directory.
-inline QString resolvedMutableDataRoot(const QString& codeRoot,const QString& genesis,bool explicitLegacyRoot){
+inline QString resolvedMutableDataRoot(const QString& codeRoot,const QString& genesis,bool explicitLegacyRoot,bool testnet=true){
  if(explicitLegacyRoot)return QDir(cleanApplicationRoot(codeRoot)).filePath("data");
  const auto base=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
  if(base.isEmpty()||!QFileInfo(base).isAbsolute())return {};
- const auto scope=QRegularExpression("^[0-9a-f]{64}$").match(genesis).hasMatch()?genesis:QString("unconfigured");
+ const auto scope=QRegularExpression("^[0-9a-f]{64}$").match(genesis).hasMatch()?genesis:QString(testnet?"unconfigured":"unconfigured-main");
  return QDir(base).filePath("data/"+scope);
 }
-inline bool bindMutableDataRoot(const QString& codeRoot,const QString& genesis,bool explicitLegacyRoot){
+inline bool bindMutableDataRoot(const QString& codeRoot,const QString& genesis,bool explicitLegacyRoot,bool testnet=true){
  auto* app=QCoreApplication::instance();if(!app)return false;
- const auto data=resolvedMutableDataRoot(codeRoot,genesis,explicitLegacyRoot);if(data.isEmpty())return false;
+ const auto data=resolvedMutableDataRoot(codeRoot,genesis,explicitLegacyRoot,testnet);if(data.isEmpty())return false;
  const auto code=cleanApplicationRoot(codeRoot);std::scoped_lock lock(mutablePathsMutex);
  if(mutablePaths)return mutablePaths->codeRoot==code&&mutablePaths->dataRoot==data;
  mutablePaths=MutablePaths{code,data};return true;

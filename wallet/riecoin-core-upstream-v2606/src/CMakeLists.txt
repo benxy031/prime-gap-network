@@ -509,11 +509,18 @@ endif()
 # Isolated qualification fixtures only; production policy remains inactive.
 add_executable(pgn-native-audit-availability-test EXCLUDE_FROM_ALL pgn/native_audit_availability_test.cpp)
 target_link_libraries(pgn-native-audit-availability-test PRIVATE core_interface riecoin_node univalue)
-add_executable(pgn-native-audit-self-history-test EXCLUDE_FROM_ALL pgn/native_audit_self_history_test.cpp)
-target_link_libraries(pgn-native-audit-self-history-test PRIVATE core_interface riecoin_node univalue)
+add_library(pgn-native-audit-history-fixture OBJECT pgn/native_audit_history_test_fixture.cpp)
+set_target_properties(pgn-native-audit-history-fixture PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_link_libraries(pgn-native-audit-history-fixture PRIVATE core_interface riecoin_node univalue)
 
-add_executable(pgn-native-audit-retained-history-test EXCLUDE_FROM_ALL pgn/native_audit_retained_history_test.cpp)
-target_link_libraries(pgn-native-audit-retained-history-test PRIVATE core_interface riecoin_node univalue)
+foreach(history IN ITEMS retained self)
+  set(target pgn-native-audit-${history}-history-test)
+  add_executable(${target} EXCLUDE_FROM_ALL
+    pgn/native_audit_${history}_history_test.cpp
+    $<TARGET_OBJECTS:pgn-native-audit-history-fixture>
+  )
+  target_link_libraries(${target} PRIVATE core_interface riecoin_node univalue)
+endforeach()
 
 add_executable(pgn-native-hourly-complete-returns-test EXCLUDE_FROM_ALL pgn/native_hourly_complete_returns_test.cpp)
 target_link_libraries(pgn-native-hourly-complete-returns-test PRIVATE core_interface riecoin_node univalue)
