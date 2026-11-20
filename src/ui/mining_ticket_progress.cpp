@@ -352,9 +352,11 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
  // succeeded. Keep the complete current reason reachable when the row elides.
  const bool attention=frame.value("phase")=="Needs attention";
  const auto reason=frame.value("message").toString().trimmed().left(4096);
+ const auto auditCompletion=auditCompletionStatus(frame);
  setToolTip(attention?QString("<qt><b>Mining stopped</b><br>%1</qt>").arg(
-     (reason.isEmpty()?QString("Open Diagnostics for the failure details"):reason).toHtmlEscaped().replace("\n","<br>")):QString{});
- setAccessibleDescription(attention?miningAttentionStatus(reason):QString{});
+     (reason.isEmpty()?QString("Open Diagnostics for the failure details"):reason).toHtmlEscaped().replace("\n","<br>")):
+     auditCompletion.isEmpty()?QString{}:QString("<qt>%1</qt>").arg(auditCompletion.toHtmlEscaped()));
+ setAccessibleDescription(attention?miningAttentionStatus(reason):auditCompletion);
  setProperty("pgn_ticket_flow_received",QVariant::fromValue(flow_.received()));setProperty("pgn_ticket_flow_coalesced",QVariant::fromValue(flow_.coalesced()));
  ensureOverlay();update();if(overlay_){overlay_->synchronize();overlay_->update();}
 }
@@ -390,7 +392,9 @@ void MiningTicketProgress::paintConcurrentWork(QPainter& painter){
   const auto total=frame.value("positions_total").toString().toDouble(&totalOk);
   const bool measured=doneOk&&totalOk&&std::isfinite(done)&&std::isfinite(total)&&total>0&&done>=0&&done<=total;
   const double fraction=measured?done/total:0.;
-  const QString status=measured?phase+QString(" · %1%").arg(100*fraction,0,'f',2):phase;
+  const auto auditCompletion=disconnected?QString{}:auditCompletionStatus(frame);
+  const QString status=!auditCompletion.isEmpty()?auditCompletion:
+      measured?phase+QString(" · %1%").arg(100*fraction,0,'f',2):phase;
   const auto color=disconnected?QColor("#a7b8bf"):QColor("#8cb9ec");
   painter.fillRect(QRect(16,top,available,ConcurrentWorkRowHeight-2),QColor("#0b222b"));
   const int textWidth=std::max(1,available-16);
@@ -462,8 +466,9 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  if(height()>PrimaryWorkHeight)title=resourceLabel(workSource_)+" · "+title;
  const double rate=frame_.value("eta_rate").toDouble();const auto eta=active&&rate>0&&std::isfinite(rate)&&total>0?std::optional<double>(std::max(0.,total-done)/rate):std::nullopt;
  const bool attention=frame_.value("phase")=="Needs attention";
+ const auto auditCompletion=auditCompletionStatus(frame_);
  const QString status=attention?miningAttentionStatus(frame_.value("message").toString()):
-      displayPhase+(fraction?QString(" · ≈ %1%").arg(100* *fraction,0,'f',2):QString{});
+      !auditCompletion.isEmpty()?auditCompletion:displayPhase+(fraction?QString(" · ≈ %1%").arg(100* *fraction,0,'f',2):QString{});
  const QString positions=frame_.contains("positions_total")?(audit?QString("Complete audit · "):QString{})+positionFormats(frame_.value("positions_total").toString()).inlineText()+" positions":QString{};
  QString remaining;
  if(eta&&std::isfinite(*eta)&&*eta<365.*86400){const auto value=qint64(std::ceil(*eta));remaining=QString("ETA ≈ %1:%2:%3").arg(value/3600,2,10,QChar('0')).arg(value/60%60,2,10,QChar('0')).arg(value%60,2,10,QChar('0'));}

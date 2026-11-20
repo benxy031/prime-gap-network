@@ -466,15 +466,18 @@ int main(int argc,char** argv) {
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
    networkSummary->setBusy(syncing);
-   const bool localLedgerBehind=condition==Condition::NoPeers&&anchor->headerHeight&&*anchor->headerHeight>anchor->height;
-   if(localLedgerBehind){
-    networkSummary->setText(QString("%1 · LEDGER %2 / %3 · %4")
-      .arg(testnetMode?QStringLiteral("TESTNET"):QStringLiteral("NETWORK"))
-      .arg(anchor->height).arg(*anchor->headerHeight).arg(state));
+   const bool headersAhead=anchor->headerHeight&&*anchor->headerHeight>anchor->height;
+   const auto coordinationHeight=headersAhead
+     ?QString("%1 / %2").arg(anchor->height).arg(*anchor->headerHeight)
+     :QString::number(anchor->height);
+   if(testnetMode){
+    const auto gold=inspectWallet?inspectWallet->property("pgn_network_gold_blocks"):QVariant{};
+    const auto goldCount=gold.isValid()?QString::number(gold.toLongLong()):QStringLiteral("—");
+    networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
+      .arg(goldCount,coordinationHeight,peersLabel,state));
    }else{
-    if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
-    else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
-    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
+    networkSummary->setText(QString("NETWORK · COORDINATION BLOCKS %1 · %2 · %3")
+      .arg(coordinationHeight,peersLabel,state));
    }
    const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
       .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
@@ -721,9 +724,9 @@ int main(int argc,char** argv) {
    ".exe"
 #endif
    ;
-  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkObservation,&window]{
+  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkSummary,networkObservation,&window]{
    const auto select=[](const QJsonObject& source,std::initializer_list<const char*> keys){QJsonObject value;for(const auto* key:keys)if(source.contains(key))value.insert(key,source.value(key));return value;};
-   QJsonObject network{{"status",canvas->property("pgn_global_network_status").toString()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
+   QJsonObject network{{"status",networkSummary->text()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
    if(*networkObservation){
     const auto& observation=**networkObservation;
     network.insert("height",observation.height);network.insert("genesis",observation.genesis);
@@ -731,6 +734,8 @@ int main(int argc,char** argv) {
     network.insert("synchronizing",observation.synchronizing?QJsonValue(*observation.synchronizing):QJsonValue{});
     network.insert("verified_utc",observation.observedUtc.toString(Qt::ISODateWithMs));
     if(observation.headerHeight)network.insert("headers",*observation.headerHeight);
+    const auto peer=inspectWallet->property("pgn_core_native_peer_sync").toJsonObject();
+    if(!peer.isEmpty())network.insert("native_peer",peer);
     if(observation.coreInitialBlockDownload)network.insert("initial_block_download",*observation.coreInitialBlockDownload);
     if(observation.tipTime)network.insert("tip_unix_time",*observation.tipTime);
    }

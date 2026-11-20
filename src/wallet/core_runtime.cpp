@@ -942,7 +942,9 @@ void CoreRuntime::readTicketDetails(const QString& request,std::function<void(QJ
  });
 }
 void CoreRuntime::readBlockAtHeight(int height,std::function<void(QJsonObject,QString)> consume){
- if(height<0||!connected_||!processAlive()){consume({},"Valid current-chain height required");return;}const auto owner=epoch();rpc("getblockhash",{height},[this,owner,consume=std::move(consume)](QJsonValue hash,QString error){if(!error.isEmpty()||!owner.matches(epoch())){consume({},error.isEmpty()?QString("Core epoch changed"):error);return;}readBlockDetails(hash.toString(),std::move(consume));});
+ const auto owner=epoch();
+ readExplorerBlockAtHeight(height,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},
+  [this](const QString& method,const QJsonArray& params,TransactionReply done){rpc(method,params,std::move(done));},std::move(consume));
 }
 void CoreRuntime::readBlockPage(int height,std::function<void(QJsonObject,QString)> consume){
  if(!connected_||!processAlive()){consume({},"Verified Core connection required");return;}const auto owner=epoch();rpc("getpgnstate",{},[this,owner,height,consume=std::move(consume)](QJsonValue value,QString error){
@@ -1088,6 +1090,7 @@ void CoreRuntime::inspect(){
        report(QStringLiteral("PGN CORE")+
         (value.peers&&*value.peers==0?" · NO PEERS":!value.synchronizing?" · SYNC STATUS UNAVAILABLE":*value.synchronizing?" · SYNCHRONIZING":value.oldTipAt(QDateTime::currentDateTimeUtc())?" · CONNECTED · CHAIN IDLE":" · CONNECTED"));
       };
+      setProperty("pgn_core_native_peer_sync",QJsonObject{});
       if(!peerBootstrap_){publish(observation);return;}
       const auto endpoint=peerBootstrap_->localEndpoint();
       inspectRpc("getpeerinfo",{},[this,ownerEpoch,observation,endpoint,publish](CoreRpcResult reply)mutable{
@@ -1097,7 +1100,9 @@ void CoreRuntime::inspect(){
         observation.synchronizing.reset();publish(observation);return;
        }
        const auto peers=value.toArray();
-       const auto projected=projectNativeSynchronization(observation,peers,endpoint);
+       QJsonObject diagnostic;
+       const auto projected=projectNativeSynchronization(observation,peers,endpoint,&diagnostic);
+       setProperty("pgn_core_native_peer_sync",diagnostic);
        if(projected.synchronizing.has_value())peerBootstrap_->reconcileAttachment(peers);
        publish(projected);
       },3000);

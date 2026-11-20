@@ -217,6 +217,7 @@ public:
    else accountPanel_->setEnabled(runtime_->displayWalletReady()&&!runtime_->walletManager()->busy());
   };
   runtime_->onObservation=[this,observe=std::move(observe)](const auto& anchor){
+   setProperty("pgn_core_native_peer_sync",anchor?runtime_->property("pgn_core_native_peer_sync"):QVariant{});
    if(observe)observe(anchor);
    if(anchor&&anchor->tipHash!=networkDone_&&!networkBusy_)refreshNetwork();
    if(anchor&&anchor->tipHash!=metricsTip_){metricsTip_=anchor->tipHash;metrics_->refresh();}
