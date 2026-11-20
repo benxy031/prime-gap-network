@@ -8,6 +8,8 @@ import json,sys,unittest
 from unittest.mock import patch
 P=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(P/'tools'),str(P/'src/update')]
+import horizon_cohort_lifecycle as cohort
+import horizon_component_install as installer
 import horizon_windows_install as native
 from test_component_install import InstallTests
 
@@ -37,6 +39,23 @@ class WindowsProfileTests(unittest.TestCase):
   for p in self.patches:p.stop()
   self.fixture.tearDown()
  def lifecycle(self):return native.WindowsCohortLifecycle(self.fixture.store,self.fixture.base,self.activation)
+ def test_running_base_is_checked_once_and_mutated_code_is_still_refused(self):
+  with patch.object(installer,'inventory',wraps=installer.inventory) as scan, patch.object(cohort,'inventory',wraps=cohort.inventory) as duplicate:
+   lifecycle=self.lifecycle()
+   lifecycle.close()
+   scan.assert_called_once_with(self.fixture.base)
+   duplicate.assert_not_called()
+
+  exe=self.fixture.base/'PGN-Horizon.exe'
+  original=exe.read_bytes()
+  exe.write_bytes(original[:-1]+bytes([original[-1]^1]))
+  try:
+   with self.assertRaises(ValueError):
+    self.lifecycle()
+   self.assertEqual({p:p.read_bytes()for p in self.runtime.iterdir()},self.backup)
+  finally:
+   exe.write_bytes(original)
+
  def test_code_paths_rebind_and_user_data_remote_paths_remain_exact(self):
   lifecycle=self.lifecycle();candidate=Path(self.candidate['cohort'])
   try:

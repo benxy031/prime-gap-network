@@ -341,14 +341,25 @@ class CohortStore:
         self.retention=result
         return result
 
-    def current(self):
+    def _read_selection(self):
         self.repairable_selected=None
         value=stage._json(stage._read_plain(self.root/'current.json',stage.MAX_MANIFEST))
         stage.require(value.get('schema')=='PGN_ACTIVE_COHORT_V1'and value.get('network')==self.context['network']and value.get('genesis_hash')==self.context['genesis_hash'],'Selector context differs')
         stage.require(type(value.get('cohort'))is str and Path(value['cohort']).is_absolute()and
             type(value.get('inventory_sha256'))is str and stage.DIGEST.fullmatch(value['inventory_sha256'])and
             type(value.get('sequence'))is int and 0<=value['sequence']<2**63,'Invalid selected cohort identity')
-        selected=stage._plain_chain(value['cohort'])
+        return value,stage._plain_chain(value['cohort'])
+
+    def verified_running_base(self, base):
+        """Bind the exact selected base and the file identities from one scan."""
+        value,selected=self._read_selection()
+        stage.require(selected==base,'Running code is not the selected cohort')
+        _,files,digest,_=inventory(selected)
+        stage.require(digest==value['inventory_sha256'],'Selected cohort changed')
+        return value,files
+
+    def current(self):
+        value,selected=self._read_selection()
         if self.running_base is not None and self.running_base!=selected and not stage._plain_chain(selected/'components.json').exists():
             # A manual replacement may outlive its deleted former code folder.
             # This is a preparation view only: verify the complete actual base
