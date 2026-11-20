@@ -1,6 +1,7 @@
 #include "ui/work_table_search.h"
 #include <QLineEdit>
 #pragma once
+#include <algorithm>
 #include "ui/audit_assignment_display.h"
 #include "ui/audit_status_presentation.h"
 #include "ui/position_range_item.h"
@@ -65,8 +66,14 @@ private:
     }
 
     void inspect(int row) {
-        if (row < 0 || row >= reports_.size()) return;
-        const auto report = reports_[row].toObject();
+        const auto* item = row >= 0 ? table_->item(row, 0) : nullptr;
+        if (!item) return;
+        const auto request = item->data(Qt::UserRole).toString();
+        const auto found = std::find_if(reports_.cbegin(), reports_.cend(), [&request](const auto& value) {
+            return value.toObject().value("request_id") == request;
+        });
+        if (found == reports_.cend()) return;
+        const auto report = found->toObject();
         const auto checks = audit(report.value("request_id").toString());
         if (report == inspectedReport_ && checks == inspectedAudit_) return;
         const bool same = selectedRequest_ == report.value("request_id").toString();

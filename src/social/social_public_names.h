@@ -53,6 +53,7 @@ public:
         if(completed!=published_||publishedIdentity_!=requested_)++revision_;
         published_=std::move(completed);publishedIdentity_=requested_;publishedUtc_=observed_;collecting_=false;next_.clear();return {};
     }
+    void abandonRefresh(){collecting_=false;}
     QString nextCursor()const{return next_;}
     bool collecting()const{return collecting_;}
     int remaining()const{return MaximumRows-rows_;}

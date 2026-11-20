@@ -34,6 +34,12 @@ inline void run(QApplication& app,const QString& path){
     expect(directory.append(second,final).isEmpty()&&!directory.collecting(),"Complete pinned name registry failed");
     const auto nameA=directory.display(identity(),scriptA),nameB=directory.display(identity(),scriptB);
     expect(nameA==initial.miners[0].name&&nameB==final.miners[0].name&&nameA!=nameB,"Homonyms merged or names differ from Leaderboard");
+    directory.begin(identity());
+    expect(directory.append(first,initial).isEmpty()&&directory.collecting(),"Recent name refresh did not accept first page");
+    directory.abandonRefresh();
+    expect(!directory.collecting()&&directory.display(identity(),scriptA)==nameA&&directory.display(identity(),scriptB)==nameB,
+           "Interrupted refresh erased confirmed names");
+    directory.begin(identity());
     expect(directory.display({QString(64,'b'),scriptA},scriptA).isEmpty(),"Public name leaked into another genesis");
     expect(directory.display(identity(),"0014"+QString(40,'9')).isEmpty(),"Unknown Social key inherited an operator name");
     expect(directory.display(identity(),scriptA,initial.observedUtc.addSecs(301)).isEmpty(),"Expired registry provenance retained a name");

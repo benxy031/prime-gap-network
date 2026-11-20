@@ -1,11 +1,14 @@
 #pragma once
 #include "social/social_display_verifier.h"
 #include <QSet>
+#include <algorithm>
+#include <memory>
 namespace pgn::social {
 // Typed consumer of the isolated Native display registry. A name grants no
 // permissions; identity remains the complete Social signing script.
 class NativeDisplayResolver final:public QObject {
  PublicDisplayRpc rpc_;Identity identity_;QHash<QString,QString> remembered_;quint64 issued_{},applied_{};
+ bool revalidatingCached_{};
  void applyRemembered(Snapshot& snapshot)const{
   for(auto& entry:snapshot.entries)if(remembered_.contains(entry.authorId))entry.author=remembered_[entry.authorId];
   if(snapshot.participants)for(auto& member:*snapshot.participants)if(remembered_.contains(member.id))member.name=remembered_[member.id];
@@ -43,9 +46,22 @@ public:
   for(const auto& entry:snapshot.entries)add(entry.authorId);
   if(snapshot.participants)for(const auto& member:*snapshot.participants)add(member.id);
   if(targets.isEmpty()){done(std::move(snapshot),{});return;}
+  const bool fullyRemembered=std::all_of(selected.cbegin(),selected.cend(),[this](const QString& id){return remembered_.contains(id);});
+  Snapshot cached;
+  if(fullyRemembered){
+   if(revalidatingCached_){applyRemembered(snapshot);done(std::move(snapshot),{});return;}
+   cached=snapshot;
+   revalidatingCached_=true;
+  }
   const QPointer<NativeDisplayResolver> weak(this);
   const auto generation=++issued_;
-  rpc_("getsocialdisplaylinks",{QJsonValue(targets)},[weak,generation,selected,snapshot=std::move(snapshot),done](QJsonValue value,QString error)mutable{
+  auto reply=std::make_shared<std::function<void(Snapshot,QString)>>(std::move(done));
+  const auto complete=[reply](Snapshot page,QString error){if(*reply){auto deliver=std::move(*reply);*reply={};deliver(std::move(page),error);}};
+  const auto finish=[weak,complete,fullyRemembered](Snapshot page,QString error){
+   if(weak&&fullyRemembered)weak->revalidatingCached_=false;
+   complete(std::move(page),error);
+  };
+  rpc_("getsocialdisplaylinks",{QJsonValue(targets)},[weak,generation,selected,snapshot=std::move(snapshot),done=finish](QJsonValue value,QString error)mutable{
    if(!weak)return;const auto root=value.toObject();const auto anchor=root["bestblockhash"].toString();const auto rawHeight=root["height"].toDouble(-1);
    // Older Core remains a fully usable Chat backend; absence/loading of this
    // independent capability leaves its honest script fallback in place.
@@ -79,6 +95,7 @@ public:
     done(std::move(snapshot),{});
    });
   });
+  if(weak&&fullyRemembered&&*reply){weak->applyRemembered(cached);complete(std::move(cached),{});}
  }
 };
 }

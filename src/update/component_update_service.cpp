@@ -88,6 +88,8 @@ std::optional<int> componentVersionComparison(QString installed,QString availabl
 }
 QString componentUpdateFailureMessage(const QString& detail){
  const auto value=detail.left(512);
+ if(value.startsWith("Cannot reach the update server.")||
+    value.startsWith("GitHub update service is temporarily unavailable"))return value;
  const auto http=QRegularExpression("\\b(?:status|HTTP)\\D{0,32}(5[0-9]{2}|429)\\b",QRegularExpression::CaseInsensitiveOption).match(value);
  if(http.hasMatch())return "GitHub update service is temporarily unavailable (HTTP "+http.captured(1)+"). Version status could not be checked. Try again later.";
  if(QRegularExpression("getaddrinfo|name.?resolution|connection.*(?:failed|refused|reset)|timed? ?out|network.*unreachable|WinError (?:10060|10061|11001)",QRegularExpression::CaseInsensitiveOption).match(value).hasMatch())
