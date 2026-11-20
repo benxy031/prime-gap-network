@@ -111,6 +111,7 @@ int main(int argc,char** argv){
     test::v4::run(app,temp.path()+"/v4-contract");
     test::chat::run(temp.path()+"/send-contract/drafts.json");
     test::utc::run(app,temp.path()+"/utc-contract/drafts.json");
+    test::utc::runWarmPeriods(temp.path()+"/utc-cache/drafts.json");
     test::names::run(app,temp.path()+"/names-contract/outbox.json");
     social::DraftStore store(temp.path()+"/store/drafts.json");social::Drafts d,loaded;
     d.sections[0].body=QString::fromUtf8("Unicode café 🌌");check(store.save(A(),d).isEmpty()&&store.load(A(),loaded).isEmpty()&&loaded.sections[0].body==d.sections[0].body,"Unicode round-trip failed");

@@ -41,6 +41,13 @@ private:
     quint64 sendEpoch_{};
     QMap<QString,social::Drafts> pending_;
     std::array<std::optional<social::Snapshot>,5> leaderboardCache_;
+    std::array<QVector<social::Services::Reply>,5> leaderboardWaiters_;
+    std::array<qint64,5> leaderboardWarmAfter_{};
+    std::array<quint64,5> leaderboardRequestGeneration_{};
+    QVector<social::Window> leaderboardWindows_;
+    QTimer leaderboardWarmTimer_;
+    quint64 leaderboardIdentityGeneration_{};
+    bool leaderboardWarmInFlight_{};
     std::array<Page,4> pages_;QTabWidget* tabs_{};QLabel *account_{},*network_{},*status_{};QTimer autosave_;
     bool dirty_{},loadFailed_{},loadingDraft_{},chatPreedit_{};QString loadError_,replyId_,replyPostId_;
     int sortColumn_{1};bool sortDescending_{true};
@@ -57,6 +64,8 @@ private:
     void openRead(int index);void openComposer(int index,bool reply=false);void back(int index);void previewPublication(int index=1);
     void showDetail(int index,bool preserveScroll=false);void filter(int index);void renderMiners();void renderList(int index);
     void selectLeaderboardWindow(int window);
+    void fetchLeaderboard(const social::ReadRequest& request,social::Services::Reply reply);
+    void warmLeaderboard();
     void read(int index,bool more=false);void present(int index,const social::Snapshot& snapshot,bool append);
     void updateAccess();void updateStatus();void pageState(int index,QString state,QString message,QString detail={});
     bool eventFilter(QObject* object,QEvent* event)override;

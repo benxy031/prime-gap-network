@@ -86,6 +86,8 @@ void document(QTextBrowser* browser,const social::Entry& entry,bool local=false)
 }
 SocialView::SocialView(QString path,social::Services services,QWidget* parent)
     :QWidget(parent),services_(std::move(services)),store_(std::move(path)){
+    leaderboardWarmTimer_.setSingleShot(true);
+    connect(&leaderboardWarmTimer_,&QTimer::timeout,this,&SocialView::warmLeaderboard);
     setObjectName("pgn-social-workspace");
     setStyleSheet(SocialLightStyle()+SocialChatContrastStyle()+SocialReadableStyle()+SocialConversationStyle()+SocialWorkspaceRefinement());
     auto* box=vertical(this);box->setSpacing(0);tabs_=new QTabWidget;tabs_->setProperty("socialSurface",true);tabs_->setObjectName("pgn-social-sections");
@@ -317,6 +319,12 @@ void SocialView::setIdentity(social::Identity identity){
     for(auto& p:pages_){++p.generation;++p.threadGeneration;p.threadBusy=false;if(p.thread)p.thread->clear();p.loaded=p.busy=p.replyMode=false;p.entries.clear();p.miners.clear();p.selectedId.clear();p.nextCursor.clear();p.chatHistoryGeneration.clear();p.observedUtc={};p.leaderboardPeriod.reset();if(p.windowInfo){p.windowInfo->clear();p.windowInfo->setToolTip({});}
         if(p.list){QSignalBlocker block(p.list);p.list->clear();}if(p.detail)p.detail->clear();if(p.ranking)p.ranking->setRowCount(0);if(p.journey)p.journey->setCurrentIndex(0);}
     leaderboardCache_={};
+    leaderboardWaiters_={};
+    leaderboardWarmAfter_={};
+    leaderboardWindows_.clear();
+    leaderboardWarmTimer_.stop();
+    ++leaderboardIdentityGeneration_;
+    leaderboardWarmInFlight_=false;
     pages_[3].utcRefreshAttemptMs=0;static_cast<LeaderboardTable*>(pages_[3].ranking)->showLargestGap(false);
     {QSignalBlocker block(pages_[3].filter);if(pages_[3].filter->currentIndex()>1)pages_[3].filter->setCurrentIndex(0);}
     for(const auto* id:{"week","month","hour"})if(auto* button=findChild<QPushButton*>("pgn-social-period-"+QString::fromLatin1(id)))button->hide();
@@ -423,24 +431,108 @@ void SocialView::filter(int i){
     if(i==3&&p.loaded)p.count->setText(p.count->text()+" · Sorted by "+p.ranking->horizontalHeaderItem(sortColumn_)->text()+(sortDescending_?" (descending)":" (ascending)"));
     p.more->setEnabled(identity_.valid()&&bool(services_.read)&&!p.busy&&!p.nextCursor.isEmpty()&&total<LoadedLimit);
 }
+namespace {
+constexpr qint64 LeaderboardFreshSeconds = 30;
+bool leaderboardPeriodCurrent(const social::Snapshot& snapshot,qint64 now){
+    if(snapshot.window==social::Window::AllTime)return true;
+    if(!snapshot.leaderboardPeriod||!snapshot.leaderboardPeriod->utcStart)return false;
+    const auto start=*snapshot.leaderboardPeriod->utcStart;
+    const auto end=social::leaderboardWindowEnd(snapshot.window,start);
+    return end&&now>=start&&now<*end;
+}
+bool leaderboardFresh(const social::Snapshot& snapshot,qint64 now){
+    const auto observed=snapshot.observedUtc.toSecsSinceEpoch();
+    return snapshot.observedUtc.isValid()&&now>=observed&&now-observed<=LeaderboardFreshSeconds&&
+           leaderboardPeriodCurrent(snapshot,now);
+}
+}
+
 void SocialView::selectLeaderboardWindow(int index){
     if(index<0||static_cast<size_t>(index)>=leaderboardCache_.size())return;
     auto& page=pages_[3];
-    ++page.generation;page.busy=page.loaded=false;page.nextCursor.clear();page.miners.clear();page.leaderboardPeriod.reset();
-    page.windowInfo->clear();page.windowInfo->setToolTip({});
+    ++page.generation;
+    page.busy=page.loaded=false;
+    page.nextCursor.clear();
+    page.miners.clear();
+    page.leaderboardPeriod.reset();
+    page.windowInfo->clear();
+    page.windowInfo->setToolTip({});
     const auto window=static_cast<social::Window>(index);
     const auto& cached=leaderboardCache_.at(index);
     const auto now=QDateTime::currentSecsSinceEpoch();
-    const auto end=cached&&cached->leaderboardPeriod&&cached->leaderboardPeriod->utcStart?
-        social::leaderboardWindowEnd(window,*cached->leaderboardPeriod->utcStart):std::nullopt;
-    if(cached&&(window==social::Window::AllTime||(end&&now<*end))){
+    if(cached&&leaderboardPeriodCurrent(*cached,now)){
         present(3,*cached,false);
+        updateAccess();
+        if(leaderboardFresh(*cached,now)){
+            if(!leaderboardWarmTimer_.isActive())leaderboardWarmTimer_.start(150);
+            return;
+        }
     }else{
         if(window!=social::Window::AllTime)page.windowInfo->setText("UTC interval loading…");
         renderMiners();
+        updateAccess();
     }
-    updateAccess();read(3);
+    read(3);
 }
+
+void SocialView::fetchLeaderboard(const social::ReadRequest& request,social::Services::Reply reply){
+    const auto index=static_cast<int>(request.window);
+    auto& waiting=leaderboardWaiters_.at(index);
+    const bool active=!waiting.isEmpty();
+    waiting.append(std::move(reply));
+    if(active)return;
+    const auto identityGeneration=leaderboardIdentityGeneration_;
+    const auto requestGeneration=++leaderboardRequestGeneration_.at(index);
+    const QPointer<SocialView> weak(this);
+    services_.read(request,[weak,request,index,identityGeneration,requestGeneration](social::Snapshot snapshot,QString error){
+        if(!weak||weak->leaderboardIdentityGeneration_!=identityGeneration||weak->identity_!=request.identity||
+           weak->leaderboardRequestGeneration_.at(index)!=requestGeneration)return;
+        auto replies=std::move(weak->leaderboardWaiters_.at(index));
+        weak->leaderboardWaiters_.at(index).clear();
+        if(replies.isEmpty())return;
+        if(error.isEmpty())error=social::validate(snapshot,request);
+        if(error.isEmpty()){
+            auto& cache=weak->leaderboardCache_.at(index);
+            cache=snapshot;
+            cache->access.reset();
+            if(!snapshot.leaderboardWindows.isEmpty())weak->leaderboardWindows_=snapshot.leaderboardWindows;
+            else if(weak->leaderboardWindows_.isEmpty())
+                weak->leaderboardWindows_={social::Window::AllTime,social::Window::Day};
+        }
+        for(auto& completion:replies){
+            if(!weak||weak->leaderboardIdentityGeneration_!=identityGeneration)return;
+            completion(snapshot,error);
+        }
+        if(weak&&weak->leaderboardIdentityGeneration_==identityGeneration&&
+           !weak->leaderboardWarmTimer_.isActive())weak->leaderboardWarmTimer_.start(150);
+    });
+}
+
+void SocialView::warmLeaderboard(){
+    if(!isVisible()||tabs_->currentIndex()!=3||pages_[3].busy||leaderboardWarmInFlight_||
+       !services_.read||!identity_.valid())return;
+    const auto now=QDateTime::currentSecsSinceEpoch();
+    const auto active=static_cast<social::Window>(pages_[3].filter->currentIndex());
+    for(const auto window:{social::Window::Day,social::Window::Hour,social::Window::Week,
+                          social::Window::Month,social::Window::AllTime}){
+        const auto index=static_cast<int>(window);
+        const auto& cached=leaderboardCache_.at(index);
+        if(window==active||!leaderboardWindows_.contains(window)||
+           !leaderboardWaiters_.at(index).isEmpty()||now<leaderboardWarmAfter_.at(index)||
+           (cached&&leaderboardFresh(*cached,now)))continue;
+        leaderboardWarmAfter_.at(index)=now+60;
+        leaderboardWarmInFlight_=true;
+        const QPointer<SocialView> weak(this);
+        const auto identityGeneration=leaderboardIdentityGeneration_;
+        fetchLeaderboard({social::Section::Miners,identity_,window,{},100,{}},
+            [weak,identityGeneration](social::Snapshot,QString){
+                if(weak&&weak->leaderboardIdentityGeneration_==identityGeneration)
+                    weak->leaderboardWarmInFlight_=false;
+            });
+        return;
+    }
+}
+
 void SocialView::refresh(){read(tabs_->currentIndex());}
 void SocialView::refreshExpiredLeaderboardWindow(){
     auto& p=pages_[3];if(!isVisible()||tabs_->currentIndex()!=3||p.busy||!p.loaded||!p.leaderboardPeriod||!p.leaderboardPeriod->utcStart)return;
@@ -456,9 +548,9 @@ void SocialView::read(int i,bool more){
     p.busy=true;const auto generation=++p.generation;p.refresh->setEnabled(false);p.more->setEnabled(false);pageState(i,"loading",more?"Loading more "+QString(nouns[i])+"…":i==3&&p.loaded?"Updating ranking…":"Loading "+QString(nouns[i])+"…");
     const social::ReadRequest request{static_cast<social::Section>(i),identity_,i==3?static_cast<social::Window>(p.filter->currentIndex()):social::Window::AllTime,more?p.nextCursor:QString{},more?qMin(100,LoadedLimit-total):100,i==0?channel_:QString{}};
     const QPointer<SocialView> weak(this);
-    services_.read(request,[weak,i,generation,request,more](social::Snapshot data,QString error){
+    const auto receive=[weak,i,generation,request,more](social::Snapshot data,QString error){
         if(!weak)return;auto& p=weak->pages_[i];if(p.generation!=generation||!p.busy||weak->identity_!=request.identity)return;
-        p.busy=false;p.refresh->setEnabled(true);if(error.isEmpty())error=social::validate(data,request);
+        p.busy=false;p.refresh->setEnabled(true);if(error.isEmpty()&&(i!=3||more))error=social::validate(data,request);
         if(error.isEmpty()&&i==0&&!data.chatHistoryGeneration.isEmpty()){
             if(more&&p.chatHistoryGeneration!=data.chatHistoryGeneration)error="Chat history source changed; refresh before loading older messages.";
             if(p.chatHistoryGeneration==data.chatHistoryGeneration){QMap<QString,const social::Entry*> prior;for(const auto& entry:p.entries)prior.insert(entry.id,&entry);
@@ -470,12 +562,10 @@ void SocialView::read(int i,bool more){
             if((i==3?p.miners.size()+data.miners.size():p.entries.size()+data.entries.size())>LoadedLimit)error="Loaded data limit reached. Refine the filter or refresh.";}
         if(!error.isEmpty()){if(i==0){p.canSend=false;p.sendWhy=error;weak->access_.reset();weak->updateChatSend();}weak->pageState(i,"error","Unable to load "+QString(nouns[i])+" · "+error.left(130)+(p.loaded?" · previous snapshot retained":" · retry available"),error);
             if(!p.loaded){p.empty->setText("Unable to load "+QString(nouns[i])+". Use Refresh to retry.");p.dataSlot->setCurrentIndex(1);}weak->filter(i);return;}
-        if(i==3&&!more){
-            auto& cached=weak->leaderboardCache_.at(static_cast<int>(request.window));
-            cached=data;cached->access.reset();
-        }
         weak->present(i,data,more);
-    });
+    };
+    if(i==3&&!more)fetchLeaderboard(request,receive);
+    else services_.read(request,receive);
 }
 void SocialView::present(int i,const social::Snapshot& data,bool append){
     if(data.access){const auto error=social::validateAccess(*data.access,identity_);

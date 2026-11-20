@@ -4,6 +4,8 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QPushButton>
 #include <QTableWidget>
 #include <stdexcept>
@@ -94,6 +96,7 @@ inline void run(QApplication& app,const QString& path){
         value.insert("supported_periods", QJsonArray{"today_utc", "month_utc", "week_utc", "hour_utc"});
         return value;
     };
+    view.refresh();
     answer(pending.last(),advertised(freshDay));
     auto* totalButton=control<QPushButton>(view,"pgn-social-period-total");
     auto* todayButton=control<QPushButton>(view,"pgn-social-period-today");
@@ -125,4 +128,134 @@ inline void run(QApplication& app,const QString& path){
     expect(table->rowCount()==0&&interval->text().isEmpty(),"Identity change retained old rows/UTC interval or accepted stale callback");
     view.close();
 }
+
+inline void runWarmPeriods(const QString& path){
+    using namespace social;
+    struct Pending{ReadRequest request;Services::Reply done;};
+    QVector<Pending> pending;
+    Services service;
+    service.read=[&](ReadRequest request,Services::Reply done){
+        if(request.section==Section::Miners)pending.append({request,std::move(done)});
+    };
+    ui::SocialView view(path,service);
+    view.resize(1366,900);
+    view.show();
+    const Identity identity{QString(64,'a'),"SYNTHETIC-PERIOD-CACHE"};
+    view.setIdentity(identity);
+    view.selectSection(Section::Miners);
+    auto* table=control<QTableWidget>(view,"pgn-social-miners");
+    auto* interval=control<QLabel>(view,"pgn-social-miner-interval");
+    auto* totalButton=control<QPushButton>(view,"pgn-social-period-total");
+    auto* todayButton=control<QPushButton>(view,"pgn-social-period-today");
+    auto* hourButton=control<QPushButton>(view,"pgn-social-period-hour");
+    auto* weekButton=control<QPushButton>(view,"pgn-social-period-week");
+    auto* monthButton=control<QPushButton>(view,"pgn-social-period-month");
+    const auto wait=[&](qsizetype count){
+        QElapsedTimer deadline;
+        deadline.start();
+        while(pending.size()<count&&deadline.elapsed()<2500){
+            QEventLoop loop;
+            QTimer::singleShot(25,&loop,&QEventLoop::quit);
+            loop.exec();
+        }
+        expect(pending.size()==count,"Expected one background request before answering Core");
+    };
+    const auto answer=[&](const Pending& call,bool all=true){
+        auto value=page(0,false);
+        if(all)value.insert("supported_periods", QJsonArray{"today_utc","month_utc","week_utc","hour_utc"});
+        const auto window=call.request.window;
+        const auto now=QDateTime::currentDateTimeUtc();
+        const auto day=now.toSecsSinceEpoch()/86400*86400;
+        qint64 start=day;
+        switch(window){
+        case Window::Hour:start=now.toSecsSinceEpoch()/3600*3600;break;
+        case Window::Week:start=day-(now.date().dayOfWeek()-1)*86400;break;
+        case Window::Month:start=day-(now.date().day()-1)*86400;break;
+        default:break;
+        }
+        if(window!=Window::AllTime){
+            value=today(value,start);
+            value.insert("period",leaderboardPeriodName(window));
+            value.insert("utc_end",*leaderboardWindowEnd(window,start));
+        }
+        auto row=value.value("rows").toArray().first().toObject();
+        row.insert("display_name",QString("Period %1").arg(static_cast<int>(window)));
+        value.insert("rows",QJsonArray{row});
+        Snapshot result;
+        const auto error=decodeLeaderboard(call.request,value,result);
+        expect(error.isEmpty(),"Clock-aligned period fixture is invalid");
+        call.done(std::move(result),error);
+    };
+    const auto shows=[&](Window window){
+        return table->rowCount()==1&&table->item(0,0)&&
+            table->item(0,0)->text().contains(QString("Period %1").arg(static_cast<int>(window)));
+    };
+    wait(1);
+    expect(pending[0].request.window==Window::AllTime,"Expected foreground Total before warmup");
+    answer(pending[0]);
+    expect(shows(Window::AllTime)&&interval->text().isEmpty(),"Expected authenticated first Total");
+    wait(2);
+    const auto warmDay=pending[1];
+    expect(warmDay.request.window==Window::Day,"Today was not the first background period");
+    todayButton->click();
+    expect(pending.size()==2&&table->rowCount()==0,"Click sent a duplicate Today query or showed Total");
+    answer(warmDay);
+    expect(shows(Window::Day)&&!interval->text().isEmpty(),"First background response did not reach the selected period");
+
+    wait(3);
+    const auto warmHour=pending[2];
+    expect(warmHour.request.window==Window::Hour,"Hour did not warm next");
+    answer(warmHour);
+    wait(4);
+    const auto warmWeek=pending[3];
+    expect(warmWeek.request.window==Window::Week,"Week did not warm next");
+    answer(warmWeek);
+    wait(5);
+    const auto warmMonth=pending[4];
+    expect(warmMonth.request.window==Window::Month,"Month did not warm next");
+    answer(warmMonth);
+
+    QElapsedTimer switches;
+    switches.start();
+    for(int round=0;round<5;++round){
+        totalButton->click();expect(shows(Window::AllTime),"Total did not switch synchronously");
+        monthButton->click();expect(shows(Window::Month),"Month did not switch synchronously");
+        weekButton->click();expect(shows(Window::Week),"Week did not switch synchronously");
+        hourButton->click();expect(shows(Window::Hour),"Hour did not switch synchronously");
+        todayButton->click();expect(shows(Window::Day),"Today did not switch synchronously");
+    }
+    const auto switchNanos=switches.nsecsElapsed();
+    expect(pending.size()==5,"A warm switch generated another backend request");
+    view.refresh();
+    wait(6);
+    const auto manualToday=pending[5];
+    warmDay.done({},"Repeated obsolete provider response");
+    expect(shows(Window::Day)&&view.property("pgn_social_state_3")=="loading",
+           "An older duplicate completion stole a newer refresh");
+    answer(manualToday);
+    expect(shows(Window::Day),"Explicit refresh failed after an old completion");
+    view.refresh();
+    wait(7);
+    const auto stale=pending[6];
+    view.setIdentity({identity.genesis,"SYNTHETIC-PERIOD-CACHE-OTHER"});
+    answer(stale);
+    expect(table->rowCount()==0&&interval->text().isEmpty(),"Old identity restored cached rows");
+
+    const auto current=pending.last();
+    expect(current.request.identity!=identity,"New identity did not request its ranking");
+    answer(current,false);
+    totalButton->click();
+    if(pending.last().request.window==Window::AllTime)answer(pending.last(),false);
+    const auto beforeUnsupported=pending.size();
+    QEventLoop quiet;
+    QTimer::singleShot(350,&quiet,&QEventLoop::quit);
+    quiet.exec();
+    expect(!monthButton->isVisible()&&!weekButton->isVisible()&&!hourButton->isVisible()&&
+           pending.size()<=beforeUnsupported+1&&
+           (pending.size()==beforeUnsupported||pending.last().request.window==Window::Day),
+           "Warmup requested a period this Core did not advertise");
+    qInfo("Verified 25 synchronous warm period switches in %.3f ms; zero extra backend requests.",
+          double(switchNanos)/1e6);
+}
+
 }
