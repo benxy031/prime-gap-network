@@ -29,11 +29,15 @@ class AuditExplorerView final : public QWidget {
 public:
     using Result = std::function<void(QJsonObject, QString)>;
     using PageReader = std::function<void(int, Result)>;
+    using TicketNumberReader = std::function<void(const QString&, Result)>;
 
 private:
     PageReader reader_, participantReader_;
-    std::function<void(const QString&,Result)> numberReader_;
+    TicketNumberReader numberReader_;
     QLineEdit* ticketSearch_{};
+    WorkSearchIndicator* ticketSearchIndicator_{};
+    QTimer ticketSearchDelay_;
+    quint64 ticketSearchGeneration_{};
     QLabel* registrySummary_;
     QWidget* registryPanel_;
     QTreeWidget* registry_;
@@ -240,17 +244,21 @@ private:
     }
 
     void refresh() {
-        if (busy_) return;
-        busy_ = true;
-        const int page = offset_;
+        if(busy_||ticketSearchDelay_.isActive())return;
+        const int page=offset_;
+        const auto input=ticketSearch_->text().trimmed();
+        const auto query=exactWorkTicketNumber(input);
+        if(!input.isEmpty()&&query.isEmpty())return;
+        busy_=true;
+        const auto generation=ticketSearchGeneration_;
         const QPointer<AuditExplorerView> guard(this);
-        const auto query=exactWorkTicketNumber(ticketSearch_->text());
         const bool exact=numberReader_&&!query.isEmpty();
-        auto consume=[guard,page,query,exact](QJsonObject snapshot,QString error){
+        auto consume=[guard,page,query,exact,generation](QJsonObject snapshot,QString error){
             if (!guard) return;
             guard->busy_ = false;
             // A delayed reply must never relabel a different page's reports.
-            if(page!=guard->offset_||query!=exactWorkTicketNumber(guard->ticketSearch_->text())){guard->refresh();return;}
+            if(page!=guard->offset_||generation!=guard->ticketSearchGeneration_){guard->refresh();return;}
+            guard->ticketSearchIndicator_->setActive(false);
             if (!error.isEmpty()) {
                 guard->status_->setText("Audit state unavailable · " + error);
                 guard->status_->setStyleSheet("color:#ffbd69");
@@ -373,15 +381,28 @@ public:
         ticketSearch_->setPlaceholderText("Find an audit by ticket number");
         ticketSearch_->setClearButtonEnabled(true);
         ticketSearch_->hide();
-        box->addWidget(ticketSearch_);
-        box->addWidget(table_, 1);
+        auto* searchRow=new QHBoxLayout;
+        ticketSearchIndicator_=new WorkSearchIndicator(this);
+        ticketSearchIndicator_->setObjectName("pgn-audit-ticket-search-indicator");
+        searchRow->addWidget(ticketSearch_,1);
+        searchRow->addWidget(ticketSearchIndicator_);
+        box->addLayout(searchRow);
+        box->addWidget(table_,1);
+        ticketSearchDelay_.setSingleShot(true);
+        connect(&ticketSearchDelay_,&QTimer::timeout,this,[this]{refresh();});
         connect(ticketSearch_,&QLineEdit::textChanged,this,[this](const QString& text){
+            ++ticketSearchGeneration_;
+            ticketSearchDelay_.stop();
             const auto number=exactWorkTicketNumber(text);
             if(!text.trimmed().isEmpty()&&number.isEmpty()){
+                ticketSearchIndicator_->setActive(false);
                 status_->setText("Enter a ticket number, for example 123");
                 return;
             }
-            QTimer::singleShot(200,this,[this,text]{if(ticketSearch_->text()==text)refresh();});
+            const bool searching=numberReader_&&!number.isEmpty();
+            ticketSearchIndicator_->setActive(searching);
+            status_->setText(searching?QString("Searching for audits of ticket %1…").arg(number):QString("Loading audit reports…"));
+            ticketSearchDelay_.start(WorkTicketSearchDelayMs);
         });
         detail_ = new QTreeWidget;
         detail_->setObjectName("pgn-audit-report-details");
@@ -411,6 +432,10 @@ public:
         timer_.start();
     }
 
+    void setTicketNumberReader(TicketNumberReader reader){
+        numberReader_=std::move(reader);
+        ticketSearch_->setVisible(bool(numberReader_));
+    }
     explicit AuditExplorerView(pgn::wallet::CoreRuntime* runtime, QWidget* parent = nullptr)
         : AuditExplorerView([runtime](int offset, Result consume) {
             if (!runtime->connected()) { consume({}, "Verified Core connection required"); return; }
@@ -418,10 +443,9 @@ public:
         }, [runtime](int offset, Result consume) {
             runtime->readParticipantPage(offset, std::move(consume));
         }, parent) {
-            numberReader_=[runtime](const QString& number,Result consume){
+            setTicketNumberReader([runtime](const QString& number,Result consume){
                 runtime->readTicketNumber(number,std::move(consume));
-            };
-            ticketSearch_->show();
+            });
         }
 };
 }

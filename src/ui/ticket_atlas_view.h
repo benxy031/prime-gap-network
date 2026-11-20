@@ -49,6 +49,7 @@ private:
     QTimer debounce_,poll_;QLabel *status_,*domain_;QVector<QPair<QRectF,QJsonObject>> hits_;
     QPoint pressed_;Int pressedFirst_{},pressedLast_{};bool dragging_{},busy_{},pending_{},autoFocused_{},bitScale_{},pressedBitScale_{},embedded_{};
     bool startupWarm_{};
+    int embeddedPanSequence_{};
     bool readable()const{return startupWarm_||isVisible()||(embedded_&&parentWidget()&&parentWidget()->isVisible());}
     static QColor color(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).color;}
     static QString stageTitle(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).text;}
@@ -269,6 +270,7 @@ public:
         else if(action=="zoom")zoom(std::clamp(command.value("steps").toInt(),-4,4),plot().left()+plot().width()*std::clamp(command.value("x_ppm").toInt(500000),0,1000000)/1000000.);
         else if(action=="shift"&&!snapshot_.isEmpty()){
             const int delta=std::clamp(command.value("delta_ppm").toInt(),-1000000,1000000);
+            embeddedPanSequence_=command.value("pan_sequence").toInt();
             if(bitScale_){const auto a=atlasBitCoordinate(first()),b=atlasBitCoordinate(last()),d=(Int(b-a)*delta/1000000).convert_to<qint64>();viewport(atlasBitInteger(a+d),atlasBitInteger(b+d));}
             else{const Int d=(last()-first())*delta/1000000;viewport(first()+d,last()+d);}requestSoon();
         }else if(action=="inspect"){
@@ -282,7 +284,7 @@ public:
     QJsonObject auditProjection(const QJsonArray& audits,QWidget* surface)const{
         QJsonObject result;if(!surface||first_.isEmpty()||surface->width()<1||surface->height()<1)return result;
         if(startupWarm_&&(!autoFocused_||snapshot_.value("start")!=first_||snapshot_.value("end")!=last_))return result;
-        if(embedded_){auto map=snapshot_;map.insert("start",first_);map.insert("end",last_);map.insert("bit_scale",bitScale_);map.insert("selected",selected_);result.insert("__atlas",map);}
+        if(embedded_){auto map=snapshot_;map.insert("start",first_);map.insert("end",last_);map.insert("bit_scale",bitScale_);map.insert("pan_sequence",embeddedPanSequence_);map.insert("selected",selected_);result.insert("__atlas",map);}
         auto rows=audits;if(rows.isEmpty()){const auto details=snapshot_.value("details").toArray();for(int i=0;i<4&&!details.isEmpty();++i){auto row=details[std::min(details.size()-1,qsizetype(i)*details.size()/4)].toObject();row.insert("request_id",row.value("request"));rows.append(row);}}
         for(const auto& entry:rows){const auto row=entry.toObject();if(!row.value("start").isString()||!row.value("end").isString())continue;
             const Int a=pgn::wallet::atlasInteger(row.value("start")),b=pgn::wallet::atlasInteger(row.value("end"));if(b<=a)continue;const Int midpoint=a+(b-a)/2;

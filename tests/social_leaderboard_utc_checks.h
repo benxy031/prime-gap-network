@@ -1,5 +1,9 @@
 #pragma once
 #include "social/social_leaderboard.h"
+#include "social/social_leaderboard_cache.h"
+#include <QStackedWidget>
+#include <QUuid>
+#include <QThreadPool>
 #include "ui/social_view.h"
 #include <QApplication>
 #include <QComboBox>
@@ -258,4 +262,113 @@ inline void runWarmPeriods(const QString& path){
           double(switchNanos)/1e6);
 }
 
+
+inline void runStartupCache(const QString& scratch)
+{
+    using namespace social;
+    const auto dir = QDir(scratch).filePath("startup-cache-" + QUuid::createUuid().toString(QUuid::Id128));
+    expect(QDir().mkpath(dir), "Cannot create isolated cache fixture");
+    const Identity oldIdentity{QString(64, 'a'), "OLD-WALLET-SUBJECT"};
+    const Identity liveIdentity{oldIdentity.genesis, "LIVE-WALLET-SUBJECT"};
+    const auto modified = [](QString name, int height) {
+        auto source = page();
+        auto row = source.value("rows").toArray().first().toObject();
+        row.insert("display_name", name);
+        source.insert("rows", QJsonArray{row});
+        source.insert("height", height);
+        return source;
+    };
+    const auto seedRequest=ReadRequest{Section::Miners, oldIdentity};
+    Snapshot seed;
+    expect(decodeLeaderboard(seedRequest, modified("Saved Miner", 101), seed).isEmpty(), "Leaderboard seed decoding failed");
+    seed.observedUtc = QDateTime::currentDateTimeUtc().addSecs(-600);
+    seed.miners[0].socialMemberId = "PRIVATE-UI-MEMBER-BINDING";
+    leaderboard_cache::save(dir, oldIdentity.genesis, seed);
+    const auto file = leaderboard_cache::path(dir, oldIdentity.genesis, Window::AllTime);
+    QFile data(file);
+    expect(data.open(QIODevice::ReadOnly), "Cache file not stored");
+    const auto bytes = data.readAll();
+    expect(!bytes.contains("OLD-WALLET-SUBJECT")&&!bytes.contains("PRIVATE-UI-MEMBER-BINDING"), "Cache retained account metadata");
+    data.close();
+    const auto restored = leaderboard_cache::load(dir, oldIdentity.genesis, Window::AllTime);
+    expect(restored && !restored->authenticated && restored->identity.subject.isEmpty() &&
+        restored->observedUtc == seed.observedUtc && restored->nextCursor.isEmpty(), "Saved page acquired a fresh timestamp or authorization");
+    expect(!leaderboard_cache::load(dir, QString(64, 'b'), Window::AllTime), "Other genesis reused ranking");
+    const auto wrongFile = leaderboard_cache::path(dir, QString(64, 'b'), Window::AllTime);
+    expect(QDir().mkpath(QFileInfo(wrongFile).absolutePath())&&QFile::copy(file,wrongFile), "Cannot stage wrong-genesis snapshot");
+    expect(!leaderboard_cache::load(dir, QString(64, 'b'), Window::AllTime), "Wrong-genesis payload passed cache validation");
+
+    Snapshot expired;
+    auto oldDay = ReadRequest{Section::Miners, oldIdentity, Window::Day};
+    expect(decodeLeaderboard(oldDay, today(page(),86400),expired).isEmpty(), "Prior-day fixture malformed");
+    expired.observedUtc = QDateTime::fromSecsSinceEpoch(86410,QTimeZone::utc());
+    leaderboard_cache::save(dir, oldIdentity.genesis, expired);
+    expect(!leaderboard_cache::load(dir, oldIdentity.genesis, Window::Day), "Yesterday appeared as Today");
+    const auto dayStart = QDateTime(QDateTime::currentDateTimeUtc().date(),QTime(0,0),QTimeZone::utc()).toSecsSinceEpoch();
+    Snapshot todayPage;
+    expect(decodeLeaderboard(oldDay, today(modified("Today Miner",103),dayStart),todayPage).isEmpty(), "Current-day fixture malformed");
+    leaderboard_cache::save(dir, oldIdentity.genesis,todayPage);
+
+    struct Pending { ReadRequest request; Services::Reply reply; };
+    QVector<Pending> calls;
+    Services service;
+    service.read = [&calls](ReadRequest req, Services::Reply reply){calls.append({std::move(req),std::move(reply)});};
+    ui::SocialView view(dir+"/drafts.json", service);
+    view.setLeaderboardCacheScope(dir, oldIdentity.genesis);
+    view.selectSection(Section::Miners);
+    view.resize(1366,900);
+    view.show();
+    auto* table=control<QTableWidget>(view,"pgn-social-miners");
+    auto* stack=control<QStackedWidget>(view,"pgn-social-data-slot-3");
+    auto* status=control<QLabel>(view,"pgn-social-status");
+    auto* more=control<QPushButton>(view,"pgn-social-more-3");
+    expect(table->rowCount()==1 && stack->currentIndex()==0 && table->item(0,0)->text().startsWith("Saved Miner · ") &&
+        calls.isEmpty() && !more->isEnabled(), "Startup cache did not render before Wallet/Core");
+    expect(status->text().contains("Saved ranking") && status->text().contains(seed.observedUtc.toUTC().toString("yyyy-MM-dd")),
+        "Saved row lacked the original provenance display");
+    auto* selector=control<QComboBox>(view,"pgn-social-miner-window");
+    selector->setCurrentIndex(1);
+    expect(table->rowCount()==1 && table->item(0,0)->text().startsWith("Today Miner · ") && calls.isEmpty(),
+        "A cached current-day first page required a Wallet/Core request");
+    selector->setCurrentIndex(0);
+    expect(table->rowCount()==1 && table->item(0,0)->text().startsWith("Saved Miner · ") && calls.isEmpty(),
+        "Offline period switching lost its cached Total page");
+    view.setIdentity(liveIdentity);
+    expect(calls.size()==1 && calls.last().request.identity==liveIdentity && table->rowCount()==1 && stack->currentIndex()==0,
+        "Verified identity startup blanked an already displayed cache");
+    const auto apply = [](const auto& call, QJsonObject raw) {
+        Snapshot view;
+        const auto failure=decodeLeaderboard(call.request,raw,view);
+        call.reply(std::move(view),failure);
+    };
+    auto first = calls.last();
+    first.reply({},"Transient timeout");
+    expect(table->rowCount()==1 && stack->currentIndex()==0 && status->text().contains("Saved ranking"),
+        "Transient read failure hid the startup cache");
+    view.refresh();
+    auto next = calls.last();
+    apply(next, modified("Live Miner", 102));
+    expect(table->rowCount()==1 && table->item(0,0)->text().startsWith("Live Miner · ") && stack->currentIndex()==0 &&
+        status->text().startsWith("Updated") && more->isEnabled(), "Verified refresh did not replace stale data");
+    expect(QThreadPool::globalInstance()->waitForDone(5000), "Cache writer did not finish");
+
+    // Reopen in a separate widget with no identity and a disabled service.
+    ui::SocialView reopened(dir+"/reopen.json");
+    reopened.setLeaderboardCacheScope(dir,oldIdentity.genesis);
+    reopened.selectSection(Section::Miners);
+    auto* reopenedTable=control<QTableWidget>(reopened,"pgn-social-miners");
+    expect(reopenedTable->rowCount()==1 && reopenedTable->item(0,0)->text().startsWith("Live Miner · "), "Next process did not see freshly verified saved page");
+    reopened.setIdentity({QString(64, 'b'),"OTHER-GENESIS-SUBJECT"});
+    expect(reopenedTable->rowCount()==0,"Changing verified genesis retained the previous network ranking");
+    auto broken=leaderboard_cache::read(file);
+    broken.insert("observed_ms",QDateTime::currentMSecsSinceEpoch()+5000);
+    QSaveFile corrupt(file);
+    expect(corrupt.open(QIODevice::WriteOnly) && corrupt.write(QJsonDocument(broken).toJson())>0 && corrupt.commit(),
+        "Cannot stage malformed cache");
+    expect(!leaderboard_cache::load(dir,oldIdentity.genesis,Window::AllTime), "Future timestamp accepted");
+    ui::SocialView cold(dir+"/cold.json");
+    cold.setLeaderboardCacheScope(dir, oldIdentity.genesis);
+    cold.selectSection(Section::Miners);
+    expect(control<QTableWidget>(cold,"pgn-social-miners")->rowCount()==0, "Bad cache showed invented rows");
+}
 }

@@ -47,6 +47,18 @@ QProcess process;bool allowed=true;std::vector<bool> launches;int disconnected=0
  while(staleOnly.elapsed()<110){silence.phase("Searching",false);app.processEvents();QThread::msleep(2);}
  need(silences==1&&silence.waitingForLiveData(),"Stale frames cleared or repeatedly rearmed the connection warning");
  need(starts==1&&silent.state()==QProcess::Running&&silence.wanted(),"Silence duplicated or killed a worker / lost ON");
+ silence.phase("Completing audits",false,true);
+ need(!silence.waitingForLiveData(),"A current audit notice was mistaken for a dead connection");
+ QElapsedTimer auditNotices;auditNotices.start();
+ while(auditNotices.elapsed()<125){
+  silence.phase("Completing audits",false,true);
+  app.processEvents();QThread::msleep(12);
+ }
+ need(silences==1&&starts==1&&silence.wanted(),"Continuous audit activity reported connection loss");
+ silence.phase("Needs attention",false,true);
+ silence.phase("Completing audits",false,true);
+ need(silence.needsAttention(),"A phase notice cleared a terminal fault");
+ silence.intent(true);
  silence.phase("Paused",true);need(!silence.waitingForLiveData(),"Fresh data did not clear the waiting state");
  silence.intent(false);wait([&]{return silences==2;});need(!silence.wanted()&&starts==1,"Silence overrode manual OFF");
  silence.close();silent.write("quit\n");wait([&]{return silent.state()==QProcess::NotRunning;});

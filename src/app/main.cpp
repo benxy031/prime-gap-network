@@ -644,7 +644,10 @@ int main(int argc,char** argv) {
   pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection,target](QJsonValue value,QString error){if(!target||*displayConnection!=target)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)target->open(object["scriptPubKey"].toString());else target->open();});
  };
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
- auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
+ const auto socialRoot=pgn::app::mutableDataRoot(root)+"/social";
+ auto* social=new pgn::ui::SocialView(socialRoot+"/drafts.json",std::move(socialServices));
+ social->setLeaderboardCacheScope(socialRoot+"/leaderboard",installedGenesis);
+ major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
  *syncSocial=[socialConnection,displayConnection,accessConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{
@@ -1336,11 +1339,13 @@ int main(int argc,char** argv) {
      const auto reportedPhase=packet.value("phase").toString();
      const auto staleness=packet.value("source_stale");
      const bool sourceFresh=packet.value("schema")=="PGN_HORIZON_MINING_VIEW_V1"&&staleness.isBool()&&!staleness.toBool();
-     connectionRecovery->phase(reportedPhase,sourceFresh);
+     const bool currentNotice=packet.value("schema")=="PGN_HORIZON_MINING_VIEW_UNAVAILABLE_V1"&&
+        packet.value("message").isString()&&!packet.value("message").toString().isEmpty();
+     connectionRecovery->phase(reportedPhase,sourceFresh,currentNotice);
      canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);
      cpuFleet->minerReady(stream);
      const auto controlPhase=pgn::mining::networkControlPhase(reportedPhase.toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
-     if(connectionRecovery->waitingForLiveData()&&!sourceFresh&&!controlPhase.acknowledgeOff)continue;
+     if(connectionRecovery->waitingForLiveData()&&!sourceFresh&&!currentNotice&&!controlPhase.acknowledgeOff)continue;
      processDiagnostics->packet(packet);
      canvas->setProperty("pgn_worker_stream_phase",reportedPhase);canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
      {auto intents=canvas->property("pgn_update_gpu_intents").toJsonObject();const auto device=profile.value("gpu_uuid").toString();auto entry=intents.value(device).toObject();entry.insert("phase",packet.value("phase"));intents.insert(device,entry);canvas->setProperty("pgn_update_gpu_intents",intents);}

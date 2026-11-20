@@ -7,10 +7,59 @@ const colors=['#70badb','#e6bd64','#ba9aee','#63dfb3','#f37b7e'];
 const titles=['Assigned','Awaiting audits','Audits assigned','Audits passed','Failed'];
 let atlas=null,jobs=[],previewGeneration=0;
 let verifiedActivity=null,supplemental=[];
+let movingLayer=null,renderedViewport=null,pressed=null,panFrame=0,panSequence=0,pendingMoves=[];
 const send=value=>window.chrome?.webview?.postMessage(JSON.stringify({event:'atlas',...value}));
 const U=1n<<40n;
-function bit(n){let k=BigInt(n.toString(2).length-1),base=1n<<k;return k*U+(n-base)*U/base}
-function unit(n){const a=BigInt(atlas.start),b=BigInt(atlas.end);return Number((atlas.bit_scale?(bit(n)-bit(a))*1000000n/(bit(b)-bit(a)):(n-a)*1000000n/(b-a)))/1000000}
+function bit(n){if(n<=0n)return 0n;let k=BigInt(n.toString(2).length-1),base=1n<<k;return k*U+(n-base)*U/base}
+function integerAtBit(coordinate){
+ const value=coordinate<0n?0n:coordinate;
+ const base=1n<<(value/U);
+ return base+base*(value%U)/U;
+}
+const clamp=(number,low,high)=>Math.max(low,Math.min(high,number));
+const viewportOf=map=>({start:BigInt(map.start),end:BigInt(map.end),bitScale:map.bit_scale});
+const axisPosition=(n,bitScale)=>bitScale?bit(n):n;
+function unit(n,view=viewportOf(atlas)){
+ const a=axisPosition(view.start,view.bitScale),b=axisPosition(view.end,view.bitScale);
+ return b>a?Number((axisPosition(n,view.bitScale)-a)*1000000n/(b-a))/1000000:0;
+}
+function pan(view,delta){
+ const origin=BigInt(atlas.range_origin),limit=BigInt(atlas.range_limit);
+ const move=BigInt(delta);
+ let {start,end,bitScale}=view;
+ if(bitScale){
+  const a=bit(start),b=bit(end),shift=(b-a)*move/1000000n;
+  start=integerAtBit(a+shift);end=integerAtBit(b+shift);
+ }else{
+  const shift=(end-start)*move/1000000n;
+  start+=shift;end+=shift;
+ }
+ const span=end-start<1n?1n:end-start>limit-origin?limit-origin:end-start;
+ start=start<origin?origin:start+span>limit?limit-span:start;
+ end=start+span;
+ return {start,end,bitScale:(end-1n).toString(2).length-start.toString(2).length>1};
+}
+function settledViewport(){return pendingMoves.reduce((view,entry)=>pan(view,entry.delta),viewportOf(atlas))}
+function visualViewport(){
+ const view=settledViewport();
+ return pressed?.dragging?pan(view,pressed.delta):view;
+}
+function reprojectPan(){
+ if(!atlas||!movingLayer)return;
+ const base=renderedViewport,view=visualViewport(),width=rail.clientWidth;
+ if(base.bitScale!==view.bitScale){redraw(view);return}
+ const shift=unit(base.start,view)*width,scale=unit(base.end,view)-unit(base.start,view);
+ // Preserve the verified SVG. A single horizontal transform follows the
+ // pointer each frame while Core prepares the new range after release.
+ if(shift||scale!==1)movingLayer.setAttribute('transform','translate('+shift+' 0) scale('+scale+' 1)');
+ else movingLayer.removeAttribute('transform');
+}
+function schedulePan(){
+ if(panFrame)return;
+ panFrame=requestAnimationFrame(()=>{
+  panFrame=0;reprojectPan();if(atlas)project(endpoints({}));
+ });
+}
 function lanes(){return states.filter(s=>atlas.totals[s]?.tickets>0||s==='audits_assigned'||s==='audits_passed')}
 function y(state){const list=lanes();return 4+(Math.max(0,list.indexOf(state))+.5)*27/list.length}
 function make(name,attrs,parent){const n=document.createElementNS(NS,name);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,String(v));parent?.append(n);return n}
@@ -20,69 +69,78 @@ function ticketLabel(n){
  if(typeof origin!=='string'||typeof width!=='string'||BigInt(width)<=0n)return '';
  return '#'+((n-BigInt(origin))/BigInt(width)+1n).toString();
 }
-function redraw(){
- rail.replaceChildren();if(!atlas||!atlas.start||!atlas.end)return;
+function redraw(view=atlas&&visualViewport()){
+ rail.replaceChildren();movingLayer=null;if(!atlas||!atlas.start||!atlas.end||!rail.clientWidth)return;renderedViewport=view;
  const width=rail.clientWidth,svg=make('svg',{width:'100%',height:'100%',viewBox:`0 0 ${width} 58`},rail);
  for(const state of lanes())make('path',{d:`M0 ${y(state)}H${width}`,stroke:'#23424a','stroke-width':1},svg);
+ movingLayer=make('g',{},svg);
  // Bins describe coverage, not unique ticket identities. Their state color
  // stays opaque across the whole rail; the detailed-page cutoff must never
  // look like a disappearance or loss of validation. Bin clicks inspect their exact ticket candidates; only the wheel changes zoom.
  if(atlas.details_truncated)for(let i=0;i<atlas.bins.length;i++){
-  const bin=atlas.bins[i],x=unit((BigInt(bin.start)+BigInt(bin.end))/2n)*width;
+  const bin=atlas.bins[i],x=unit((BigInt(bin.start)+BigInt(bin.end))/2n,view)*width;
   for(let s=0;s<states.length;s++)if(BigInt(bin.stages?.[states[s]]?.positions??0)>0n){
-   const node=make('circle',{cx:x,cy:y(states[s]),r:2.5,fill:colors[s],'data-bin':i,'data-stage':states[s]},svg);node.style.cursor='pointer';
+   const node=make('circle',{cx:x,cy:y(states[s]),r:2.5,fill:colors[s],'data-bin':i,'data-stage':states[s]},movingLayer);node.style.cursor='pointer';
   }
  }
  supplemental=verifiedLandingMarkers(atlas,verifiedActivity);
- for(const item of [...(atlas.details??[]),...supplemental]){const x=unit((BigInt(item.start)+BigInt(item.end))/2n)*width;if(x<0||x>width)continue;
+ for(const item of [...(atlas.details??[]),...supplemental]){const x=unit((BigInt(item.start)+BigInt(item.end))/2n,view)*width;if(x<0||x>width)continue;
   const s=states.indexOf(item.stage),selected=item.request===atlas.selected;
-  const node=make('circle',{cx:x,cy:y(item.stage),r:selected?4.1:3.2,fill:colors[s]??colors[0],stroke:selected?'#f4fff9':'none','stroke-width':1.4,'data-request':item.request},svg);
+  const node=make('circle',{cx:x,cy:y(item.stage),r:selected?4.1:3.2,fill:colors[s]??colors[0],stroke:selected?'#f4fff9':'none','stroke-width':1.4,'data-request':item.request},movingLayer);
   node.style.cursor='pointer';
  }
- const a=BigInt(atlas.start),b=BigInt(atlas.end);
+ const {start:a,end:b,bitScale}=view;
  const firstTicket=ticketLabel(a),lastTicket=ticketLabel(b-1n);
- if(atlas.bit_scale){const lo=a.toString(2).length-1,hi=(b-1n).toString(2).length-1;
+ if(bitScale){const lo=a.toString(2).length-1,hi=(b-1n).toString(2).length-1;
   const spacing=Math.max(1,Math.ceil((hi-lo+1)*32/width));
   let nextLabelX=0;
-  for(let k=lo;k<=hi;k++){const n=(1n<<BigInt(k))<a?a:1n<<BigInt(k),x=unit(n)*width;
-   make('path',{d:`M${x} 0V31`,stroke:'#27505a','stroke-width':.6},svg);
+  for(let k=lo;k<=hi;k++){const n=(1n<<BigInt(k))<a?a:1n<<BigInt(k),x=unit(n,view)*width;
+   make('path',{d:`M${x} 0V31`,stroke:'#27505a','stroke-width':.6},movingLayer);
    if((k-lo)%spacing)continue;
    const caption=(k+1)+'b',minSpacing=caption.length*7+3;
    const labelX=Math.max(0,Math.min(x,width-minSpacing));
    if(labelX<nextLabelX)continue;
    nextLabelX=labelX+minSpacing;
-   const text=make('text',{x:labelX,y:42,'text-anchor':'start',class:'atlas-axis'},svg);
+   const text=make('text',{x:labelX,y:42,'text-anchor':'start',class:'atlas-axis'},movingLayer);
    text.textContent=caption;
    make('title',{},text).textContent=label(n)+' '+ticketLabel(n);
   }
-  if(firstTicket)make('text',{x:0,y:55,class:'atlas-axis','data-ticket-tick':firstTicket},svg).textContent=firstTicket;
-  if(lastTicket&&lastTicket!==firstTicket)make('text',{x:width,y:55,'text-anchor':'end',class:'atlas-axis','data-ticket-tick':lastTicket},svg).textContent=lastTicket;
+  if(firstTicket)make('text',{x:0,y:55,class:'atlas-axis','data-ticket-tick':firstTicket},movingLayer).textContent=firstTicket;
+  if(lastTicket&&lastTicket!==firstTicket)make('text',{x:width,y:55,'text-anchor':'end',class:'atlas-axis','data-ticket-tick':lastTicket},movingLayer).textContent=lastTicket;
  }else{
   const divisions=width>=480?4:width>=240?2:1;
   const oneTicket=firstTicket&&firstTicket===lastTicket;
-  if(oneTicket)make('text',{x:width/2,y:37,'text-anchor':'middle',class:'atlas-axis','data-ticket-tick':firstTicket},svg).textContent=firstTicket;
+  if(oneTicket)make('text',{x:width/2,y:37,'text-anchor':'middle',class:'atlas-axis','data-ticket-tick':firstTicket},movingLayer).textContent=firstTicket;
   let previousTicket='';
   for(let i=0;i<=divisions;i++){
    const x=width*i/divisions,n=a+(b-a)*BigInt(i)/BigInt(divisions),s=n.toString();
    const anchor=i===0?'start':i===divisions?'end':'middle';
    const ticket=i===divisions?lastTicket:ticketLabel(n);
-   make('path',{d:`M${x} 0V32`,stroke:'#27505a','stroke-width':.6},svg);
+   make('path',{d:`M${x} 0V32`,stroke:'#27505a','stroke-width':.6},movingLayer);
    if(!oneTicket&&ticket&&ticket!==previousTicket&&(i===divisions||ticket!==lastTicket))
-    make('text',{x,y:37,'text-anchor':anchor,class:'atlas-axis','data-ticket-tick':ticket},svg).textContent=ticket;
+    make('text',{x,y:37,'text-anchor':anchor,class:'atlas-axis','data-ticket-tick':ticket},movingLayer).textContent=ticket;
    previousTicket=ticket;
-   const text=make('text',{x,y:firstTicket?55:45,'text-anchor':anchor,class:'atlas-axis'},svg);
+   const text=make('text',{x,y:firstTicket?55:45,'text-anchor':anchor,class:'atlas-axis'},movingLayer);
    text.textContent='≈ '+s[0]+'.'+s.slice(1,5)+' × 10';make('tspan',{'baseline-shift':'super','font-size':8},text).textContent=String(s.length-1);
   }
  }
+ reprojectPan();
  rail.dataset.detailCount=String(atlas.details?.length??0);rail.dataset.totalVisible=String(atlas.visible_assignments??0);
 }
 function endpoints(value){
- if(value?.__atlas){atlas=value.__atlas;redraw();window.pgnAuditRailReady=!!atlas.start&&!!atlas.end}
+ if(value?.__atlas){
+  if(atlas&&value.__atlas.genesis!==atlas.genesis){pendingMoves=[];pressed=null;rail.style.cursor='grab'}
+  atlas=value.__atlas;
+  const acknowledged=atlas.pan_sequence??0;
+  panSequence=Math.max(panSequence,acknowledged);
+  pendingMoves=pendingMoves.filter(entry=>entry.sequence>acknowledged);
+  redraw();window.pgnAuditRailReady=!!atlas.start&&!!atlas.end;
+ }
  const result={...value};delete result.__atlas;if(!atlas)return result;
- const a=rail.getBoundingClientRect(),b=actor.getBoundingClientRect();
+ const a=rail.getBoundingClientRect(),b=actor.getBoundingClientRect(),view=visualViewport();
  for(const row of [...(atlas.details??[]).map(r=>({...r,request_id:r.request})),...jobs]){
   if(!row.start||!row.end)continue;
-  const u=unit((BigInt(row.start)+BigInt(row.end))/2n),x=(a.left-b.left+Math.max(0,Math.min(1,u))*a.width)/b.width;
+  const u=unit((BigInt(row.start)+BigInt(row.end))/2n,view),x=(a.left-b.left+Math.max(0,Math.min(1,u))*a.width)/b.width;
   const point=state=>({x,y:(a.top-b.top+y(state))/b.height});
   result[row.request_id]={source:point('pending_audits'),target:point('audits_passed'),outside:u<0||u>1};
  }
@@ -118,15 +176,53 @@ window.pgnAuditPreview=value=>{
 };
 const suspend=window.pgnAuditSuspend;window.pgnAuditSuspend=()=>{previewGeneration++;suspend()};
 new ResizeObserver(()=>{redraw();if(atlas)project(endpoints({}))}).observe(rail);
-let pressed=null;rail.onpointerdown=e=>{pressed={x:e.clientX,request:e.target.dataset?.request,bin:e.target.dataset?.bin,stage:e.target.dataset?.stage};rail.setPointerCapture(e.pointerId)};
-rail.onpointerup=e=>{
- if(!pressed)return;
- if(Math.abs(e.clientX-pressed.x)>6)send({action:'shift',delta_ppm:Math.round((pressed.x-e.clientX)/rail.clientWidth*1000000)});
- else if(pressed.request)send({action:'inspect',request:pressed.request});
- else if(pressed.bin!==undefined)send({action:'bin',index:Number(pressed.bin),stage:pressed.stage});
- pressed=null;
+rail.style.cursor='grab';
+rail.style.touchAction='none';
+rail.oncontextmenu=event=>event.preventDefault();
+rail.onpointerdown=event=>{
+ if(pressed||!atlas||(event.button!==0&&event.button!==2)||!rail.clientWidth)return;
+ const {request,bin,stage}=event.target.dataset??{};
+ pressed={id:event.pointerId,button:event.button,x:event.clientX,delta:0,dragging:false,request,bin,stage};
+ rail.setPointerCapture(event.pointerId);
 };
-rail.onpointercancel=()=>{pressed=null};rail.onwheel=e=>{e.preventDefault();const r=rail.getBoundingClientRect();send({action:'zoom',steps:e.deltaY<0?1:-1,x_ppm:Math.round((e.clientX-r.left)/r.width*1000000)})};
+function samplePan(event){
+ const distance=pressed.x-event.clientX;
+ if(Math.abs(distance)>4)pressed.dragging=true;
+ pressed.delta=Math.round(clamp(distance/rail.clientWidth,-1,1)*1000000);
+}
+rail.onpointermove=event=>{
+ if(pressed?.id!==event.pointerId)return;
+ samplePan(event);
+ if(pressed.dragging){rail.style.cursor='grabbing';schedulePan()}
+};
+rail.onpointerup=event=>{
+ if(pressed?.id!==event.pointerId||pressed.button!==event.button)return;
+ samplePan(event);
+ const gesture=pressed;
+ pressed=null;rail.style.cursor='grab';
+ if(gesture.dragging){
+  const view=settledViewport(),next=pan(view,gesture.delta);
+  if(next.start!==view.start||next.end!==view.end){
+   const sequence=++panSequence;
+   pendingMoves.push({sequence,delta:gesture.delta});
+   send({action:'shift',delta_ppm:gesture.delta,pan_sequence:sequence});
+  }
+  schedulePan();
+ }else if(gesture.button===0){
+  if(gesture.request)send({action:'inspect',request:gesture.request});
+  else if(gesture.bin!==undefined)send({action:'bin',index:Number(gesture.bin),stage:gesture.stage});
+ }
+};
+rail.onlostpointercapture=rail.onpointercancel=event=>{
+ if(pressed?.id!==event.pointerId)return;
+ pressed=null;rail.style.cursor='grab';schedulePan();
+};
+rail.onwheel=event=>{
+ event.preventDefault();if(pressed||!atlas)return;
+ const bounds=rail.getBoundingClientRect();
+ if(!bounds.width||!event.deltaY)return;
+ send({action:'zoom',steps:event.deltaY<0?1:-1,x_ppm:Math.round(clamp((event.clientX-bounds.left)/bounds.width,0,1)*1000000)});
+};
 for(const button of document.querySelectorAll('.atlas-tools button'))button.onclick=()=>{
  if(button.dataset.action==='preview'){window.chrome?.webview?.postMessage(JSON.stringify({event:'preview'}));return}
  send({action:button.dataset.action,steps:Number(button.dataset.steps??0)});
