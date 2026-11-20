@@ -116,7 +116,8 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
     candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),verify_running_base=verify_running_base,retain_download=action=='prepare_install')
     if action=='install':
         stage.require(context['platform'] in ('windows-x86_64','linux-x86_64'),'Native installation platform is unsupported')
-        if lifecycle_factory is None:
+        native_install=lifecycle_factory is None
+        if native_install:
             from horizon_runtime_preflight import candidate_runtime_preflight
             candidate_runtime_preflight(Path(candidate['cohort']))
             if context['platform']=='windows-x86_64':
@@ -135,6 +136,8 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             return lifecycle.drain()
         def start(path):
             progress.report('startup',force=True)
+            if native_install:
+                return lifecycle.start_and_verify(path,expected_inventory_sha256=candidate['inventory_sha256'])
             return lifecycle.start_and_verify(path)
         def restore(*args):
             if lifecycle is not None:return lifecycle.restore_previous(*args)
