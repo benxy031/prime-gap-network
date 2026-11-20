@@ -1,4 +1,5 @@
 // Public known-key synthetic native history. No live wallet/network.
+#include <pgn/native_test_bip322.h>
 #include <pgn/native_audit_replay_test_helpers.h>
 #include <pgn/native_work_duty.h>
 #include <pgn/native_hourly_complete_returns.h>
@@ -6,18 +7,14 @@
 #include <pgn/chain_science_policy.h>
 #include <pgn/chain_monetary_policy.h>
 #include <pgn/candidate_reserved_science.h>
-#include <common/signmessage.h>
 #include <consensus/merkle.h>
 #include <key.h>
-#include <script/sign.h>
-#include <script/signingprovider.h>
 #include <script/solver.h>
 #include <streams.h>
 #include <txdb.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
 #include <array>
-#include <cstring>
 #include <iostream>
 #include <stdexcept>
 extern const TranslateFn G_TRANSLATION_FUN=[](const char* text){ return std::string(text); };
@@ -30,23 +27,9 @@ std::optional<NativeAuditOperatorRules> pgn::core::ConfiguredNativeAuditOperator
 }
 
 
-static void need(bool value, const char* text) { if (!value) throw std::runtime_error(text); }
-static CKey known(unsigned scalar) {
-    std::array<unsigned char,32> bytes{}; bytes.back()=scalar;
-    CKey key; key.Set(bytes.begin(),bytes.end(),true); return key;
-}
-static Bytes sign(const std::string& message, const CKey& key) {
-    auto status=MessageVerificationResult::ERR_INVALID;
-    const auto pair=BIP322Txs::Create(WitnessV0KeyHash(key.GetPubKey()),message,status);
-    need(pair.has_value(),"Native BIP322 challenge could not be prepared");
-    CMutableTransaction tx{pair->m_to_sign}; FillableSigningProvider provider; provider.AddKey(key);
-    SignatureData data;
-    need(ProduceSignature(provider,MutableTransactionSignatureCreator(tx,0,pair->m_to_spend.vout[0].nValue,SignOptions{SIGHASH_ALL}),
-                          pair->m_to_spend.vout[0].scriptPubKey,data),"Actual fixture key did not sign");
-    UpdateInput(tx.vin[0],data);
-    DataStream wire; wire<<tx.vin[0].scriptWitness.stack;
-    Bytes signature(wire.size()); std::memcpy(signature.data(),wire.data(),wire.size()); return signature;
-}
+using pgn::core::test::need;
+using pgn::core::test::known;
+using pgn::core::test::sign;
 int main(int argc,char** argv){
   try{
     need(argc==2,"Explicit private test folder required");
