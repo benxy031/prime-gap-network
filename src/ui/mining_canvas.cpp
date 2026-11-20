@@ -982,7 +982,9 @@ public:
     {
         auto iterator = m_deviceControls.find(deviceId);
         if (iterator == m_deviceControls.end() || iterator->requestId != requestId) return;
+        iterator->rejectedToggleTarget.reset();
         if (!applied && iterator->toggleRequestPending) {
+            iterator->rejectedToggleTarget = iterator->enabled;
             iterator->enabled = iterator->enabledBeforeRequest;
         }
         iterator->toggleRequestPending = false;
@@ -1824,6 +1826,8 @@ private:
         qint64 observationSequence{-1};
         QDateTime observationUtc;
         bool toggleRequestPending{false};
+        std::optional<bool> rejectedToggleTarget;
+        QDateTime requestUtc;
         int budgetPercent{100};
         FrontierDeviceControlStatus status{FrontierDeviceControlStatus::Idle};
         QString requestId;
@@ -1848,8 +1852,16 @@ private:
         control.observationSeen=true;control.observationSequence=lane.sequence;
         control.observationUtc=lane.observedUtc;control.observedEnabled=enabled;
         control.enabled=enabled;control.known=true;
-        if(control.status!=FrontierDeviceControlStatus::Rejected)
-            control.status=enabled?FrontierDeviceControlStatus::Applied:FrontierDeviceControlStatus::Idle;
+        const bool confirmedToggle = control.rejectedToggleTarget == enabled &&
+            lane.authoritative && !lane.stale && lane.observedUtc.isValid() &&
+            lane.observedUtc >= control.requestUtc && (!enabled || minerLaneLive(lane));
+        if (control.status != FrontierDeviceControlStatus::Rejected || confirmedToggle) {
+            control.status = enabled ? FrontierDeviceControlStatus::Applied : FrontierDeviceControlStatus::Idle;
+            if (confirmedToggle) {
+                control.detail.clear();
+                control.rejectedToggleTarget.reset();
+            }
+        }
     }
 
     static QString deviceControlCaption(const DeviceControlState& control) {
@@ -2221,6 +2233,8 @@ private:
         command.enabled = state.enabled;
         command.budgetPercent = state.budgetPercent;
         command.requestedUtc = QDateTime::currentDateTimeUtc();
+        state.requestUtc = command.requestedUtc;
+        state.rejectedToggleTarget.reset();
         m_deviceControlHandler(command);
         update();
     }

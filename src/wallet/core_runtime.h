@@ -68,6 +68,7 @@ public:
  void readAuditDetails(const QString&,std::function<void(QJsonObject,QString)>);
  void readAuditSnapshot(int offset,std::function<void(QJsonObject,QString)>);
  void readParticipantPage(int offset,std::function<void(QJsonObject,QString)>);
+ void readNativeBlockStorage(const ChainObservation&,const QJsonObject&,std::function<void(QJsonObject,QString)>);
  void readNetworkMetrics(int spanSeconds,std::function<void(QJsonObject,QString)>);
  void readBlockDetails(const QString&,std::function<void(QJsonObject,QString)>);
  void readTransactionDetails(const QString& txid,const QString& blockHash,std::function<void(QJsonObject,QString)>);
@@ -132,6 +133,8 @@ private:
  void failStart(const QString&);
  bool recoverOwned();
  bool persistOwned();
+ struct NativeStorageRead;
+ void continueNativeBlockStorage(const std::shared_ptr<NativeStorageRead>&);
  void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={},CoreRpcChannel channel=CoreRpcChannel::General);
  void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel=CoreRpcChannel::General);
  void inspectRpc(const QString&,const QJsonArray&,std::function<void(CoreRpcResult)>,int timeoutMs=CoreInspectionTimeoutMs);

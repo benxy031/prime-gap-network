@@ -478,13 +478,18 @@ class NetworkAudits:
         if anchor is None:
             self.owner_poll_more = True
             return
-        page = self.owner_reports.deferred_publication_turn()
-        if page:
+        deferred = dict(self.owner_reports.deferred_publication_turn())
+        if deferred:
             self.owner_poll_more = True
+            pending = dict(deferred)
+            remaining = 64 - len(deferred)
+            if remaining:
+                fresh, _ = self.owner_reports.next_on_anchor(anchor, limit=min(16, remaining))
+                pending.update(fresh)
         else:
             self.owner_reports.retain_publication_turn([])
             page, self.owner_poll_more = self.owner_reports.next_on_anchor(anchor)
-        pending = dict(page)
+            pending = dict(page)
         if not pending:
             return
         states = self.states(pending)
@@ -522,10 +527,11 @@ class NetworkAudits:
             except Exception as error:
                 if first_error is None:
                     first_error = error
-        # Preserve the durable round-robin page: high-merit reports get the
-        # first publication within it, without starving later bounded pages.
+        # Open reports release auditors for their next job. Gold publication
+        # from already-audited reports only uses the remaining turn budget.
+        # Within each category preserve deferred work and use merit as before.
         began, attempts = time.monotonic(), 0
-        ready.sort(key=lambda row: -row[0])
+        ready.sort(key=lambda row: (row[4].get("audited") is True, row[1] not in deferred, -row[0]))
         for position, (_, request, item, sealed, state) in enumerate(ready):
             if attempts >= 4 or attempts and time.monotonic()-began >= 5.0:
                 # Scheduling never acknowledges a report. Unvisited rows stay
