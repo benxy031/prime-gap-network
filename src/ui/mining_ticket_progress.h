@@ -9,6 +9,8 @@
 #include <QMouseEvent>
 #include <QComboBox>
 #include <functional>
+
+class QPainter;
 namespace pgn::ui {
 class GapFlowOverlay;
 class MiningTicketProgress final:public QWidget {
@@ -36,6 +38,8 @@ private:
  struct WorkView {QJsonObject frame;GapFlowModel flow;MiningCycleHistory cycle;};
  QMap<QString,WorkView> workViews_;QString workSource_{"GPU"};QComboBox* workSelector_{};
  void applyFrame(const QJsonObject&);
+ void updateWorkHeight();
+ void paintConcurrentWork(QPainter&);
  ResourceFlowActivity resourceActivity_;
  MiningCycleHistory cycleHistory_;
  QPointer<QWidget> canvas_,results_;QPointer<GapFlowOverlay> overlay_;
