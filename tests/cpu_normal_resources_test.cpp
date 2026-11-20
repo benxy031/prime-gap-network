@@ -12,6 +12,25 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
  check(argc==4,"python/fixture/workspace arguments required");const QString python=QString::fromLocal8Bit(argv[1]),fixture=QString::fromLocal8Bit(argv[2]),root=QString::fromLocal8Bit(argv[3]);
  QCoreApplication::setOrganizationName("PGN-Synthetic-Tests");QCoreApplication::setApplicationName("cpu-normal-resources");
  QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,root+"/settings");
+ {
+  CpuNormalResources idle;
+  bool inventoryReady = false;
+  idle.onTelemetry = [&](auto, auto, auto, bool connected) { inventoryReady |= connected; };
+  check(idle.requestClose(), "empty CPU fleet did not close");
+  CpuControlEndpoint discovered;
+  discovered.deviceId = "CPU/DEFERRED/0";
+  discovered.host = "DEFERRED";
+  discovered.program = python;
+  discovered.arguments = {"-I", "-X", "utf8", fixture, "--host", discovered.host,
+                          "--workspace", root + "/deferred"};
+  idle.add(discovered);
+  const bool launchedWhileClosing = !idle.allStopped() || inventoryReady;
+  check(idle.reopenAfterAbortedUpdate(), "idle CPU fleet would not reopen");
+  check(until([&] { return inventoryReady; }), "deferred CPU discovery was lost after abort");
+  check(idle.requestClose() || until([&] { return idle.allStopped(); }),
+        "reopened late CPU controller did not drain");
+  check(!launchedWhileClosing, "late CPU discovery launched a process after an idle close");
+ }
  CpuNormalResources resources;QHash<QString,QJsonObject> statuses;int controls=0;
  resources.onTelemetry=[&](auto device,auto inventory,auto state,bool connected){if(connected){check(inventory.value("host").toString()==state.value("fixture_host").toString(),"CPU host identity crossed");statuses[device]=state;}};
  resources.onControl=[&](auto,auto,bool okay,auto){check(okay,"resource control refused");++controls;};
@@ -52,9 +71,23 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
   check(automatic.updateResumeChoices().size()==1&&automatic.updateResumeChoices().first().toObject().value("threads")==4,"CPU update snapshot lost its exact selected budget");
   check(automatic.restoreAfterUpdate(endpoint.deviceId,3),"CPU update restore was not dispatched");
   check(until([&]{return latest.value("requested_threads")==3;}),"CPU update restore rounded the saved budget back to the 100-percent value");
-  check(automatic.requestClose()||until([&]{return automatic.allStopped();}),"CPU host and endpoints did not close together");
+  check(!automatic.requestClose(), "close proceeded while the active CPU miner was still running");
+  CpuControlEndpoint late = endpoint;
+  late.deviceId = "CPU/LATE/0";
+  late.host = "LATE";
+  late.arguments = {"-I", "-X", "utf8", fixture, "--host", late.host,
+                    "--workspace", root + "/late"};
+  bool lateReady = false;
+  automatic.onTelemetry = [&](auto device, auto, QJsonObject value, bool connected) {
+   if (connected && device == late.deviceId) lateReady = true;
+   if (connected && device == endpoint.deviceId) latest = value;
+  };
+  automatic.add(late);
+  check(until([&]{return automatic.allStopped();}), "CPU host and endpoints did not close together");
+  check(!lateReady, "CPU discovery reopened a controller while an active miner was draining");
   check(!automatic.restoreAfterUpdate(endpoint.deviceId,3),"closed CPU fleet consumed a pending resume choice");
   check(automatic.reopenAfterAbortedUpdate(),"drained CPU channels did not reopen after aborted update");
+  check(until([&] { return lateReady; }), "deferred CPU controller did not reconnect after a cancelled update");
   check(until([&]{return automatic.restoreAfterUpdate(endpoint.deviceId,3);}),"reopened CPU inventory never accepted saved choice");
   check(until([&]{return latest.value("enabled")==true&&latest.value("requested_threads")==3;}),"saved CPU budget did not resume after update abort");
   check(automatic.control(endpoint.deviceId,"after-abort-off",false,75),"manual OFF after abort was not routed");

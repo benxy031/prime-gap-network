@@ -95,7 +95,10 @@ public:
             if(!r->control.isEmpty()&&onControl)onControl(r->endpoint.deviceId,r->control,false,error);r->control.clear();present(r);
             if(r->queued){if(onControl)onControl(r->endpoint.deviceId,r->queued->request,false,error);r->queued.reset();}
         };
-        r->client->onClosed=[this]{if(closing_&&allStopped()&&onCloseReady)onCloseReady();};r->client->start();
+        r->client->onClosed = [this] { if (closing_ && allStopped() && onCloseReady) onCloseReady(); };
+        // A discovery already in flight may finish during shutdown.
+        // Keep its endpoint for an aborted update without opening another process.
+        if (!closing_) r->client->start();
     }
     void attachMiner(QProcess* miner){if(!miner_||miner_->state()!=QProcess::Running||miner_==miner){miner_=miner;restored_=false;}}
     void minerReady(QProcess* miner){
@@ -187,6 +190,16 @@ public:
         for(const auto& r:resources_)r->client->start();
         return true;
     }
-    bool requestClose(){if(allStopped())return true;if(!closing_){closing_=true;if(cpuMiner_&&cpuMiner_->state()!=QProcess::NotRunning)cpuMiner_->write("{\"action\":\"quit\"}\n");else for(const auto& r:resources_)r->client->close();}return allStopped();}
+    bool requestClose() {
+        if (!closing_) {
+            closing_ = true;
+            if (cpuMiner_ && cpuMiner_->state() != QProcess::NotRunning) {
+                cpuMiner_->write("{\"action\":\"quit\"}\n");
+            } else {
+                for (const auto& resource : resources_) resource->client->close();
+            }
+        }
+        return allStopped();
+    }
 };
 }
