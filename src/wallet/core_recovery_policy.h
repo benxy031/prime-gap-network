@@ -62,6 +62,22 @@ private:
 
 enum class CoreDatabaseFailure { None, Chainstate, BlockIndex };
 
+// A terminal startup message written by Core. The caller supplies only
+// bytes appended during the observed run; the path itself is never displayed.
+inline bool coreRefusedDataDirectory(std::string_view output){
+ constexpr std::string_view prefix="Error: Specified data directory \"";
+ constexpr std::string_view suffix="\" does not exist.";
+ while(!output.empty()){
+  const auto newline=output.find('\n');
+  auto line=output.substr(0,newline);
+  if(!line.empty()&&line.back()=='\r')line.remove_suffix(1);
+  if(line.size()>prefix.size()+suffix.size()&&line.starts_with(prefix)&&line.ends_with(suffix))return true;
+  if(newline==std::string_view::npos)break;
+  output.remove_prefix(newline+1);
+ }
+ return false;
+}
+
 // Bounded incremental evidence from this owned run only. The caller binds the
 // file identity/offset and invalidates evidence on rotation, truncation or loss.
 class CoreFaultEvidence {

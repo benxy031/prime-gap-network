@@ -372,7 +372,13 @@ bool CoreRuntime::processAlive(){
   const auto databaseFailure=confirmedExit&&exitKindAllowed&&same?faultEvidence_.databaseFailure():CoreDatabaseFailure::None;
   ++identityGeneration_;pid_=0;processBirth_.clear();clock_.stop();connected_=false;checking_=false;stopping_=false;walletChecking_=walletReady_=false;
   peerBootstrap_.reset();walletManager_->invalidate();
-  setLinkState(CoreLinkState::Stopped,"The owned Core process exited");
+  const auto startupError=confirmedExit&&exitKindAllowed?readCapturedLog(startupErrorLog_,4096):std::nullopt;
+  const bool dataDirectoryRefused=startupError&&coreRefusedDataDirectory(
+      std::string_view(startupError->constData(),std::size_t(startupError->size())));
+  const QString exitDetail=dataDirectoryRefused
+      ?"Core reported that it could not open its configured data folder."
+      :"The owned Core process exited";
+  setLinkState(CoreLinkState::Stopped,exitDetail);
   if(onObservation)onObservation(std::nullopt);
   if(ownershipLock_)ownershipLock_->unlock();
   if(onStopped)onStopped();
@@ -393,9 +399,12 @@ bool CoreRuntime::processAlive(){
    report(reason);
   }else{
    recoveryClock_.stop();
-   report(recovery_.state()==CoreRecoveryPolicy::State::Suppressed?
-    "CORE STOPPED BY REQUEST · automatic restart is suspended":
-    "CORE STOPPED · cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
+   if(recovery_.state()==CoreRecoveryPolicy::State::Suppressed)
+    report("CORE STOPPED BY REQUEST · automatic restart is suspended");
+   else if(dataDirectoryRefused)
+    report(exitDetail);
+   else
+    report("CORE STOPPED · cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
   }
  }
  return false;
@@ -424,10 +433,8 @@ void CoreRuntime::captureRecoveryBinding(){
  recoveryStorage_=readRecoveryStorage(profile_,runtimeDirectory_);
  recoveryBindingValid_=!recoveryProfileDigest_.isEmpty()&&recoveryStorage_.layoutKnown&&!recoveryStorage_.dataId.isEmpty()&&
   !recoveryStorage_.runtimeId.isEmpty()&&!recoveryStorage_.blocksId.isEmpty();
- recoveryLog_.path=profile_.networkDataDirectory()+"/debug.log";
- recoveryLog_.identity=nativeFileIdentity(recoveryLog_.path,false);
- recoveryLog_.offset=QFileInfo(recoveryLog_.path).size();
- recoveryLog_.awaitingCreation=launching_&&!QFileInfo::exists(recoveryLog_.path);
+ recoveryLog_=captureLog(profile_.networkDataDirectory()+"/debug.log",launching_);
+ startupErrorLog_=captureLog(profile_.dataDirectory+"/core.stderr",launching_);
  faultEvidence_=CoreFaultEvidence{};
  if(recoveryLog_.identity.isEmpty()&&!recoveryLog_.awaitingCreation)faultEvidence_.invalidate();
 }
@@ -436,22 +443,32 @@ bool CoreRuntime::recoveryBindingMatches(const RecoveryStorage& sample)const{
  return recoveryBindingValid_&&!bytes.isEmpty()&&recoveryStorage_.sameIdentity(sample)&&
   QCryptographicHash::hash(bytes,QCryptographicHash::Sha256)==recoveryProfileDigest_;
 }
+CoreRuntime::RecoveryLog CoreRuntime::captureLog(const QString& path,bool allowCreation){
+ const QFileInfo file(path);
+ return {path,nativeFileIdentity(path,false),file.size(),allowCreation&&!file.exists()};
+}
+std::optional<QByteArray> CoreRuntime::readCapturedLog(RecoveryLog& log,qint64 limit){
+ const auto identity=nativeFileIdentity(log.path,false);
+ if(log.awaitingCreation&&!identity.isEmpty()){
+  log.identity=identity;log.offset=0;log.awaitingCreation=false;
+ }
+ QFile file(log.path);
+ if(identity.isEmpty()||identity!=log.identity||!file.open(QIODevice::ReadOnly)||file.size()<log.offset||
+    file.size()-log.offset>limit||!file.seek(log.offset))return std::nullopt;
+ const auto wanted=file.size()-log.offset;
+ const auto bytes=file.read(wanted);
+ if(bytes.size()!=wanted)return std::nullopt;
+ log.offset+=bytes.size();
+ return bytes;
+}
 void CoreRuntime::readRecoveryLog(bool final){
  if(!faultEvidence_.usable())return;
- const auto identity=nativeFileIdentity(recoveryLog_.path,false);
- if(recoveryLog_.awaitingCreation){
-  if(identity.isEmpty()){if(final)faultEvidence_.invalidate();return;}
-  recoveryLog_.identity=identity;recoveryLog_.offset=0;recoveryLog_.awaitingCreation=false;
+ const auto bytes=readCapturedLog(recoveryLog_,65536);
+ if(!bytes){
+  if(!recoveryLog_.awaitingCreation||final)faultEvidence_.invalidate();
+  return;
  }
- QFile file(recoveryLog_.path);
- if(identity.isEmpty()||identity!=recoveryLog_.identity||!file.open(QIODevice::ReadOnly)||file.size()<recoveryLog_.offset||
-    file.size()-recoveryLog_.offset>65536||!file.seek(recoveryLog_.offset)){
-  faultEvidence_.invalidate();return;
- }
- const auto wanted=file.size()-recoveryLog_.offset;const auto bytes=file.read(wanted);
- if(bytes.size()!=wanted){faultEvidence_.invalidate();return;}
- recoveryLog_.offset+=bytes.size();
- faultEvidence_.feed(std::string_view(bytes.constData(),std::size_t(bytes.size())),final);
+ faultEvidence_.feed(std::string_view(bytes->constData(),std::size_t(bytes->size())),final);
 }
 bool CoreRuntime::departedOwnerAbsent()const{
  bool valid{};const auto oldPid=departedOwner_.value("pid").toString().toLongLong(&valid);

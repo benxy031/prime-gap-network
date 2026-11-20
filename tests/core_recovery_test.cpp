@@ -64,6 +64,10 @@ void policyCases(){
  need(stable.starts()==0,"stable healthy Core did not reset incident budget");
 }
 void evidenceCases(){
+ const auto missing=pgn::wallet::coreRefusedDataDirectory;
+ need(missing("startup\nError: Specified data directory \"D:/PGN data\" does not exist.\r\n"),"owned data directory refusal was lost");
+ need(!missing("Cached text: Error: Specified data directory \"D:/PGN data\" does not exist.\n"),"quoted startup error was taken as a refusal");
+ need(!missing("Error: Specified data directory \"D:/PGN data\""),"incomplete startup error was taken as a refusal");
  using Evidence=pgn::wallet::CoreFaultEvidence;
  using Database=pgn::wallet::CoreDatabaseFailure;
  const std::string corruption="2026-11-19T17:55:57Z [error] Fatal LevelDB error: Corruption: CURRENT points to a non-existent file\n";

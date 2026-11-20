@@ -99,6 +99,8 @@ private:
  };
  struct RecoveryLog {QString path;QByteArray identity;qint64 offset{};bool awaitingCreation{};};
  static RecoveryStorage readRecoveryStorage(const CoreProfile&,const QString&);
+ static RecoveryLog captureLog(const QString& path,bool allowCreation);
+ static std::optional<QByteArray> readCapturedLog(RecoveryLog&,qint64 limit);
  void captureRecoveryBinding();
  bool recoveryBindingMatches(const RecoveryStorage&)const;
  void readRecoveryLog(bool final);
@@ -107,7 +109,7 @@ private:
  void stopOwned();
  CoreRecoveryPolicy recovery_;
  QElapsedTimer recoveryTime_;QTimer recoveryClock_;
- RecoveryStorage recoveryStorage_;RecoveryLog recoveryLog_;
+ RecoveryStorage recoveryStorage_;RecoveryLog recoveryLog_,startupErrorLog_;
  CoreFaultEvidence faultEvidence_;
  QByteArray recoveryProfileDigest_;QJsonObject departedOwner_;
  bool recoveryBindingValid_{},automaticRun_{},preparationAutomatic_{};
