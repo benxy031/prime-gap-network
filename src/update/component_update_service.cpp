@@ -18,7 +18,9 @@
 #include <QDateTime>
 #include <QMutex>
 #include <QSet>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -284,7 +286,91 @@ QJsonObject currentUpdateActivation(const QString& applicationRoot,const QString
 #endif
 }
 
-QString startDetachedComponentInstall(const ComponentUpdateDeployment& deployment,const QJsonObject& request){
+#ifdef Q_OS_WIN
+static HANDLE startWindowsInstall(const QString& program,const QString& requestPath,const QString& resultPath)
+{
+    SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES),nullptr,TRUE};
+    auto open=[&](const std::wstring& path,DWORD access,DWORD share,DWORD creation){
+        HANDLE handle=CreateFileW(path.c_str(),access,share,&inheritable,creation,FILE_ATTRIBUTE_NORMAL,nullptr);
+        return std::unique_ptr<void,decltype(&CloseHandle)>(handle==INVALID_HANDLE_VALUE?nullptr:handle,&CloseHandle);
+    };
+    const auto null=open(L"NUL",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,OPEN_EXISTING);
+    auto outputPath=QDir::toNativeSeparators(QFileInfo(detachedResultOutputPath(resultPath)).absoluteFilePath());
+    if(!outputPath.startsWith("\\\\?\\"))outputPath=outputPath.startsWith("\\\\")
+        ?"\\\\?\\UNC\\"+outputPath.mid(2):"\\\\?\\"+outputPath;
+    const auto output=open(outputPath.toStdWString(),GENERIC_WRITE,FILE_SHARE_READ,CREATE_NEW);
+    require(null&&output,"Cannot open the updater's owned status streams");
+
+    SIZE_T size=0;
+    InitializeProcThreadAttributeList(nullptr,1,0,&size);
+    require(size>0,"Cannot size the installer startup attributes");
+    QByteArray storage(size,0);
+    auto* attributes=reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+    require(InitializeProcThreadAttributeList(attributes,1,0,&size),"Cannot initialize the installer startup attributes");
+    const std::unique_ptr<_PROC_THREAD_ATTRIBUTE_LIST,decltype(&DeleteProcThreadAttributeList)>
+        attributesOwner(attributes,&DeleteProcThreadAttributeList);
+    HANDLE inherited[]{null.get(),output.get()};
+    require(UpdateProcThreadAttribute(attributes,0,PROC_THREAD_ATTRIBUTE_HANDLE_LIST,inherited,sizeof(inherited),nullptr,nullptr),
+            "Cannot isolate the installer status streams");
+    STARTUPINFOEXW startup{};
+    startup.StartupInfo.cb=sizeof(startup);
+    startup.StartupInfo.dwFlags=STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput=null.get();
+    startup.StartupInfo.hStdError=null.get();
+    startup.StartupInfo.hStdOutput=output.get();
+    startup.lpAttributeList=attributes;
+    const auto quote=[](const QString& path){return (QStringLiteral("\"")+QDir::toNativeSeparators(path)+QStringLiteral("\"")).toStdWString();};
+    const auto application=QDir::toNativeSeparators(program).toStdWString();
+    const auto directory=QDir::toNativeSeparators(QFileInfo(program).absolutePath()).toStdWString();
+    auto command=quote(program)+L" --request-file "+quote(requestPath)+L" --result-file "+quote(resultPath);
+    PROCESS_INFORMATION process{};
+    require(CreateProcessW(application.c_str(),command.data(),nullptr,nullptr,TRUE,
+                EXTENDED_STARTUPINFO_PRESENT|CREATE_NO_WINDOW|BELOW_NORMAL_PRIORITY_CLASS,
+                nullptr,directory.c_str(),&startup.StartupInfo,&process),
+            "The installation helper could not start; installed components are unchanged");
+    CloseHandle(process.hThread);
+    return process.hProcess;
+}
+#endif
+
+void DetachedComponentInstall::closeProcess() noexcept
+{
+#ifdef Q_OS_WIN
+    if(process_)CloseHandle(process_);
+#endif
+    process_=nullptr;
+}
+
+DetachedComponentInstall::~DetachedComponentInstall()
+{
+    closeProcess();
+}
+
+DetachedComponentInstall::DetachedComponentInstall(DetachedComponentInstall&& other) noexcept
+    :resultPath(std::move(other.resultPath)),process_(std::exchange(other.process_,nullptr))
+{
+}
+
+DetachedComponentInstall& DetachedComponentInstall::operator=(DetachedComponentInstall&& other) noexcept
+{
+    if(this!=&other){
+        closeProcess();
+        resultPath=std::move(other.resultPath);
+        process_=std::exchange(other.process_,nullptr);
+    }
+    return *this;
+}
+
+bool DetachedComponentInstall::hasExited() const
+{
+#ifdef Q_OS_WIN
+    return process_&&WaitForSingleObject(process_,0)==WAIT_OBJECT_0;
+#else
+    return false;
+#endif
+}
+
+DetachedComponentInstall startDetachedComponentInstall(const ComponentUpdateDeployment& deployment,const QJsonObject& request){
     require(request.value("schema")=="PGN_UPDATE_REQUEST_V1"&&(request.value("action")=="install"||request.value("action")=="recover"),"Explicit installation or recovery request required");
     require(deployment.context.value("owned_update_protocol").toInt()==1,"Installed client has no ordered update protocol");
     const auto encoded=QJsonDocument(request).toJson(QJsonDocument::Compact);
@@ -293,16 +379,21 @@ QString startDetachedComponentInstall(const ComponentUpdateDeployment& deploymen
     const auto session=cache+"/sessions/"+QUuid::createUuid().toString(QUuid::Id128);
     require(QDir().mkpath(session),"Cannot create the owned update session");
     QSaveFile file(session+"/request.json");require(file.open(QIODevice::WriteOnly)&&file.write(encoded)==encoded.size()&&file.commit(),"Cannot persist the installation request");
-    QProcess helper;helper.setProgram(deployment.helper);helper.setArguments({"--request-file",session+"/request.json","--result-file",session+"/result.json"});
+    DetachedComponentInstall install;
+    install.resultPath=session+"/result.json";
+#ifdef Q_OS_WIN
+    install.process_=startWindowsInstall(deployment.helper,session+"/request.json",install.resultPath);
+#else
+    QProcess helper;
+    helper.setProgram(deployment.helper);
+    helper.setArguments({"--request-file",session+"/request.json","--result-file",install.resultPath});
     helper.setWorkingDirectory(QFileInfo(deployment.helper).absolutePath());
     helper.setStandardInputFile(QProcess::nullDevice());
-    helper.setStandardOutputFile(detachedResultOutputPath(session+"/result.json"));
+    helper.setStandardOutputFile(detachedResultOutputPath(install.resultPath));
     helper.setStandardErrorFile(QProcess::nullDevice());
-#ifdef Q_OS_WIN
-    helper.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args){args->flags|=CREATE_NO_WINDOW|BELOW_NORMAL_PRIORITY_CLASS;});
-#endif
     require(helper.startDetached(),"The installation helper could not start; installed components are unchanged");
-    return session+"/result.json";
+#endif
+    return install;
 }
 
 QJsonObject readDetachedComponentInstallResult(const QString& resultPath)

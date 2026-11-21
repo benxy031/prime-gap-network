@@ -1,6 +1,7 @@
 #pragma once
 #include "update/component_update_service.h"
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QJsonObject>
 #include <QMap>
@@ -37,6 +38,8 @@ public:
 protected:
  void closeEvent(QCloseEvent*)override;
 private:
+ friend struct ComponentVersionsDialogTest;
+ void followDetachedInstall(pgn::update::DetachedComponentInstall,bool recovering);
  void updateRows();void prepareSelected();void installPrepared();void setBusy(bool);void updateRecovery();
  QStringList selected()const;QJsonObject request(const QString&,const QStringList&)const;bool ensureService();
  ComponentVersionsContext context_;QLabel* localSummary_{};QLabel* status_{};QTableWidget* components_{};
@@ -46,6 +49,8 @@ private:
  pgn::update::ComponentUpdateService* service_{};pgn::update::ComponentUpdateDeployment deployment_;
  QJsonObject localSnapshot_,published_,preparedRequest_;QTimer* resultPoll_{};
  QByteArray inventoryProfileIdentity_,preparedProfileIdentity_;
+ pgn::update::DetachedComponentInstall detachedInstall_;
+ QElapsedTimer installerExitObserved_;
  bool localBusy_{},busy_{},closing_{},installStarted_{},publishedFresh_{};
  QPointer<QFutureWatcher<QJsonObject>> preparationInventory_;
  void startPreparation(const QStringList& selected);

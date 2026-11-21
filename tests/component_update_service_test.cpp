@@ -29,7 +29,18 @@ int main(int argc,char** argv){
   const auto args=app.arguments();
   if(args.size()==5&&args.at(1)=="--request-file"&&args.at(3)=="--result-file"){
    QFile input(args.at(2));
-   if(!input.open(QIODevice::ReadOnly)||QJsonDocument::fromJson(input.readAll()).object().value("fixture")!="detached-result")return 5;
+   if(!input.open(QIODevice::ReadOnly))return 5;
+   const auto mode=QJsonDocument::fromJson(input.readAll()).object().value("fixture").toString();
+   if(mode=="detached-silent"){
+    const auto root=QFileInfo(args.at(4)).absolutePath();
+    QFile ready(root+"/ready");
+    if(!ready.open(QIODevice::WriteOnly))return 9;
+    ready.close();
+    QElapsedTimer wait;wait.start();
+    while(wait.elapsed()<3000&&!QFile::exists(root+"/finish"))QThread::msleep(10);
+    return 9;
+   }
+   if(mode!="detached-result")return 5;
    QFile result(args.at(4));
    if(!result.open(QIODevice::WriteOnly))return 6;
    result.write(R"({"schema":"PGN_UPDATE_PROGRESS_V1","stage":"startup","completed":0,"total":0,"component":""})");
@@ -108,11 +119,11 @@ int main(int argc,char** argv){
   QJsonObject receipt;
   do {
    QThread::msleep(10);
-   receipt=pgn::update::readDetachedComponentInstallResult(detached);
+   receipt=pgn::update::readDetachedComponentInstallResult(detached.resultPath);
   } while(detachedClock.elapsed()<3000&&receipt.value("schema")!="PGN_UPDATE_HELPER_ERROR_V1");
   require(receipt.value("schema")=="PGN_UPDATE_HELPER_ERROR_V1"
       &&receipt.value("result_file_written")==QJsonValue(false),"Detached stdout result did not supersede stale progress");
-  QFile primary(detached);
+  QFile primary(detached.resultPath);
   require(primary.open(QIODevice::ReadOnly)&&QJsonDocument::fromJson(primary.readAll()).object().value("schema")=="PGN_UPDATE_PROGRESS_V1",
       "Detached fixture overwrote the primary progress result");
   primary.close();
@@ -138,6 +149,37 @@ int main(int argc,char** argv){
   seed(secondaryPath,R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1",)");
   require(pgn::update::readDetachedComponentInstallResult(primaryPath).value("stage")=="startup",
       "Partial stdout hid the last valid progress");
+#ifdef Q_OS_WIN
+  QElapsedTimer exitClock;exitClock.start();
+  while(exitClock.elapsed()<2500&&!detached.hasExited())QThread::msleep(10);
+  require(detached.hasExited(),"The Windows helper's exit was not observed");
+  const auto outputPath=QDir::toNativeSeparators(QFileInfo(detached.resultPath).absolutePath()+"/result-stdout.json").toStdWString();
+  const auto blocked=CreateFileW(outputPath.c_str(),GENERIC_READ,0,nullptr,OPEN_EXISTING,0,nullptr);
+  require(blocked!=INVALID_HANDLE_VALUE,"Cannot simulate a temporarily unreadable verdict");
+  const auto temporarilyUnreadable=pgn::update::readDetachedComponentInstallResult(detached.resultPath);
+  CloseHandle(blocked);
+  require(temporarilyUnreadable.value("stage")=="startup","The progress receipt was lost while stdout was locked");
+  require(pgn::update::readDetachedComponentInstallResult(detached.resultPath).value("schema")=="PGN_UPDATE_HELPER_ERROR_V1",
+      "The terminal verdict was not readable after releasing the lock");
+
+  const auto segment=QString("cache with spaces ")+QChar(0x00e9)+QString(72,'x');
+  const auto longCache=temp.path()+"/"+segment+"/"+segment+"/"+segment;
+  const auto silent=pgn::update::startDetachedComponentInstall(launcher,{{"schema","PGN_UPDATE_REQUEST_V1"},
+      {"action","install"},{"fixture","detached-silent"},{"cache",longCache}});
+  require(silent.resultPath.size()>260,"Long paths are not covered by the fixture");
+  const auto silentSession=QFileInfo(silent.resultPath).absolutePath();
+  QElapsedTimer silentClock;silentClock.start();
+  while(silentClock.elapsed()<2500&&!QFile::exists(silentSession+"/ready"))QThread::msleep(10);
+  require(QFile::exists(silentSession+"/ready")&&!silent.hasExited(),
+      "The exact Windows helper was reported as ended while waiting");
+  QFile finish(silentSession+"/finish");
+  require(finish.open(QIODevice::WriteOnly),"Cannot complete the silent helper fixture");
+  finish.close();
+  silentClock.restart();
+  while(silentClock.elapsed()<2500&&!silent.hasExited())QThread::msleep(10);
+  require(silent.hasExited()&&pgn::update::readDetachedComponentInstallResult(silent.resultPath).isEmpty(),
+      "The exact Windows helper exited without a receipt, but no exit was observed");
+#endif
   const auto activation=pgn::update::currentUpdateActivation(temp.path(),temp.path()+"/user-data");
   require(activation.value("ui_pid").toInteger()==app.applicationPid(),"Activation process identity differs");
   require(activation.value("application_root")==temp.path()&&activation.value("data_root")==temp.path()+"/user-data","Activation changed the application/data scope");

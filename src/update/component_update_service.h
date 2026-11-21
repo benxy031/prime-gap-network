@@ -24,7 +24,22 @@ bool validComponentUpdateProgress(const QJsonObject&);
 QString componentUpdateFailureMessage(const QString& detail);
 QJsonArray componentUpdateDiagnosticHistory(const QString& genesis={});
 QJsonObject currentUpdateActivation(const QString& applicationRoot,const QString& mutableDataRoot);
-QString startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject& request);
+class DetachedComponentInstall {
+public:
+    DetachedComponentInstall()=default;
+    ~DetachedComponentInstall();
+    DetachedComponentInstall(const DetachedComponentInstall&)=delete;
+    DetachedComponentInstall& operator=(const DetachedComponentInstall&)=delete;
+    DetachedComponentInstall(DetachedComponentInstall&&)noexcept;
+    DetachedComponentInstall& operator=(DetachedComponentInstall&&)noexcept;
+    QString resultPath;
+    bool hasExited() const;
+private:
+    void closeProcess() noexcept;
+    void* process_{};
+    friend DetachedComponentInstall startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject&);
+};
+DetachedComponentInstall startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject& request);
 QJsonObject readDetachedComponentInstallResult(const QString& resultPath);
 
 // One bounded helper at a time. This class never controls a mining process or

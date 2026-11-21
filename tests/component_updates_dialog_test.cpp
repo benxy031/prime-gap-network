@@ -18,8 +18,22 @@
 #include "wallet/installed_core_binding.h"
 #include <iostream>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+namespace pgn::ui {
+struct ComponentVersionsDialogTest {
+ static void follow(ComponentVersionsDialog& dialog,update::DetachedComponentInstall install,update::ComponentUpdateDeployment deployment){
+  dialog.deployment_=std::move(deployment);
+  dialog.followDetachedInstall(std::move(install),false);
+ }
+};
+}
+#endif
 int main(int argc,char** argv){
- QApplication app(argc,argv);int checks=0;const auto check=[&](bool ok){++checks;if(!ok)throw std::runtime_error("Update dialog check "+std::to_string(checks));};
+ QApplication app(argc,argv);
+#ifdef Q_OS_WIN
+ if(app.arguments().size()==5&&app.arguments().at(1)=="--request-file"&&app.arguments().at(3)=="--result-file")return 9;
+#endif
+ int checks=0;const auto check=[&](bool ok){++checks;if(!ok)throw std::runtime_error("Update dialog check "+std::to_string(checks));};
  QStandardPaths::setTestModeEnabled(true);app.setApplicationName("PGN-Recovery-QA-"+QUuid::createUuid().toString(QUuid::Id128));
  pgn::ui::ComponentVersionsContext context;context.testnet=true;context.fetchOnOpen=false;
  pgn::ui::ComponentVersionsDialog dialog(context);dialog.show();
@@ -153,8 +167,45 @@ int main(int argc,char** argv){
  const auto* recoveryStatus=recovery.findChild<QLabel*>("pgn-components-status");
  check(recoveryStatus&&recoveryStatus->text().contains("Restore the previous version before installing another update."));
  check(restore->isVisible()&&restore->isEnabled()&&!blockedDownload->isEnabled());
+#ifdef Q_OS_WIN
+ auto noProfile=context;
+ noProfile.genesisHash.clear();
+ pgn::ui::ComponentVersionsDialog recoveryWithoutProfile(noProfile);
+ recoveryWithoutProfile.show();
+ auto* restoreWithoutProfile=recoveryWithoutProfile.findChild<QPushButton*>("pgn-components-recover");
+ auto* prepareWithoutProfile=recoveryWithoutProfile.findChild<QPushButton*>("pgn-components-prepare");
+ auto* statusWithoutProfile=recoveryWithoutProfile.findChild<QLabel*>("pgn-components-status");
+ check(restoreWithoutProfile&&prepareWithoutProfile&&statusWithoutProfile);
+ const pgn::update::ComponentUpdateDeployment launcher{app.applicationFilePath(),
+     {{"owned_update_protocol",1},{"genesis_hash",context.genesisHash}}};
+ auto silent=pgn::update::startDetachedComponentInstall(launcher,{{"schema","PGN_UPDATE_REQUEST_V1"},
+      {"action","install"},{"cache",receipts.filePath("silent-cache")}});
+ QElapsedTimer silence;silence.start();
+ pgn::ui::ComponentVersionsDialogTest::follow(recoveryWithoutProfile,std::move(silent),launcher);
+ check(!restoreWithoutProfile->isEnabled()&&!prepareWithoutProfile->isEnabled());
+ while(!restoreWithoutProfile->isEnabled()&&silence.elapsed()<4200){
+  QEventLoop step;
+  QTimer::singleShot(30,&step,&QEventLoop::quit);
+  step.exec();
+ }
+ check(silence.elapsed()>=1500);
+ check(restoreWithoutProfile->isEnabled()&&restoreWithoutProfile->isVisible()&&!prepareWithoutProfile->isEnabled());
+ check(statusWithoutProfile->text().contains("Restore the previous version before installing another update."));
+#endif
  auto* choices=recovery.findChild<QTableWidget*>("pgn-components-table");choices->item(0,0)->setCheckState(Qt::Unchecked);check(!blockedDownload->isEnabled());
  check(journal.remove());recovery.presentLocal({{"manifest_state","valid"},{"components",installed}});check(!restore->isVisible());
  QDir().rmdir(store);QDir().rmdir(QFileInfo(store).absolutePath());
+ auto completeSuccess=completeFailure;
+ completeSuccess["installation_performed"]=true;
+ completeSuccess["installation_committed"]=true;
+ deliver(dialog,completeSuccess);
+ check(status->text().contains("Installation completed")&&!install->isVisible()&&!download->isEnabled());
+ check(!dialog.findChild<QPushButton*>("pgn-components-check")->isEnabled());
+ pgn::ui::ComponentVersionsDialog reopened(context);
+ reopened.show();
+ reopened.refreshLocal();
+ check(!reopened.findChild<QPushButton*>("pgn-components-prepare")->isEnabled());
+ check(!reopened.findChild<QPushButton*>("pgn-components-check")->isEnabled());
+ check(!reopened.findChild<QPushButton*>("pgn-components-recover")->isVisible());
  std::cout<<"PASS "<<checks<<" optional component selection/layout checks; no download or process control\n";
 }
