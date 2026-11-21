@@ -215,7 +215,7 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         group->button(1)->hide();group->button(2)->hide();
         group->button(3)->setText("02  LEADERBOARD\nVERIFIED ACTIVITY");
     }
-    nav->setStyleSheet(nav->styleSheet()+"QPushButton{font:600 12px 'Segoe UI';}QPushButton:focus{border:2px solid #7eafb8;}");box->addWidget(nav);
+    box->addWidget(nav);
     auto* context=new QWidget;context->setProperty("socialSurface",true);context->setProperty("socialChrome",true);context->setFixedHeight(30);auto* contextBox=new QHBoxLayout(context);contextBox->setContentsMargins(14,2,14,2);contextBox->setSpacing(12);
     account_=text({});account_->setObjectName("pgn-social-account");account_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);contextBox->addWidget(account_,1);
     account_->setFocusPolicy(Qt::StrongFocus);account_->setAccessibleDescription("Public Social identity; Shift+F10 opens identity and name-link actions.");account_->setContextMenuPolicy(Qt::CustomContextMenu);connect(account_,&QLabel::customContextMenuRequested,this,[this](QPoint pos){if(identity_.subject.isEmpty())return;auto* menu=new QMenu(this);auto* copy=menu->addAction("Copy full identity");connect(copy,&QAction::triggered,this,[this]{QApplication::clipboard()->setText(identity_.subject);});auto* link=menu->addAction("Link / withdraw public mining name...");link->setEnabled(bool(services_.publicNameLink));connect(link,&QAction::triggered,this,[this]{if(services_.publicNameLink)services_.publicNameLink(identity_,{});});connect(menu,&QMenu::aboutToHide,menu,&QObject::deleteLater);menu->popup(account_->mapToGlobal(pos));});

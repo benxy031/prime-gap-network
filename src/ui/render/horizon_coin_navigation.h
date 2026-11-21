@@ -44,7 +44,9 @@ inline QFrame* HorizonCoinNavigation(QTabWidget* tabs,
         "font-family:monospace;font-size:9px;font-weight:600;}"
         "QPushButton:hover{background:#08252d;color:#e5fffb;border-color:#31808a;}"
         "QPushButton:checked{background:#0a3535;color:#69efc5;"
-        "border:1px solid #69efc5;border-left:5px solid #ffad4a;}"));
+        "border:1px solid #69efc5;border-left:5px solid #ffad4a;}"
+        "QPushButton:focus{border-color:#7eafb8;}"
+        "QPushButton:checked:focus{border-left-color:#ffad4a;}"));
     navigation->ensurePolished();
     for(auto* button:group->buttons()) { button->ensurePolished(); button->setFixedHeight(45); }
     return navigation;

@@ -5,6 +5,7 @@
 #include <QToolTip>
 #include <QHelpEvent>
 #include <QVariant>
+#include "horizon_primary_navigation.h"
 
 // Ordered projection of the cards, never a second hardware inventory.
 inline QVariant MiningCardState(const QString& id,const QString& name,bool active) {
@@ -25,6 +26,9 @@ public:
         const int reserve=16+12*m_states.size();
         setProperty("miningStatusReserve",reserve);
         setStyleSheet(QStringLiteral("padding-right:%1px;").arg(reserve));
+        int labelWidth=0;
+        for(const auto& line:text().split('\n'))labelWidth=qMax(labelWidth,fontMetrics().horizontalAdvance(line));
+        setMinimumWidth(qMax(HorizonPrimaryTabWidth,labelWidth+reserve+22));
         QStringList labels;
         for(const auto& state:m_states){const auto s=state.toMap();labels.append(s["name"].toString()+": "+(s["active"].toBool()?"MINING":"INACTIVE"));}
         setAccessibleDescription(labels.join("; "));setToolTip(labels.join('\n'));

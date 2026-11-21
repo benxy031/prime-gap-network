@@ -424,9 +424,9 @@ int main(int argc,char** argv) {
  auto* shell=new QWidget;auto* box=new QVBoxLayout(shell);box->setContentsMargins(0,0,0,0);box->setSpacing(0);
   new HorizonNativeFrameTheme(&window);
   auto* top=new QFrame;top->setObjectName("horizonCoinNavigation");top->setStyleSheet(HorizonPrimaryNavigationStyle());auto* topBox=new QHBoxLayout(top);topBox->setContentsMargins(14,5,14,5);topBox->setSpacing(8);top->setFixedHeight(43);
- auto* pgn=new MiningStatusButton("PGN\nPRIME GAP SEARCH");pgn->setFixedWidth(260);pgn->setCheckable(true);pgn->setChecked(true);
+ auto* pgn=new MiningStatusButton("PGN\nPRIME GAP SEARCH",top);pgn->setMinimumWidth(HorizonPrimaryTabWidth);pgn->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Fixed);pgn->setCursor(Qt::PointingHandCursor);pgn->setCheckable(true);pgn->setChecked(true);
   pgn->setObjectName("pgn-primary-mining-tab");pgn->setFixedHeight(33);topBox->addWidget(pgn);
- auto* walletButton=new QPushButton("WALLET\nPGN CORE CLIENT",top);walletButton->setObjectName("pgn-primary-wallet-tab");walletButton->setCheckable(true);walletButton->setFixedWidth(210);walletButton->setCursor(Qt::PointingHandCursor);
+ auto* walletButton=new QPushButton("WALLET\nPGN CORE CLIENT",top);walletButton->setObjectName("pgn-primary-wallet-tab");walletButton->setCheckable(true);walletButton->setFixedWidth(HorizonPrimaryTabWidth);walletButton->setCursor(Qt::PointingHandCursor);
   auto* networkSummary=new pgn::ui::NetworkStatusLabel("NETWORK · CONNECTING");networkSummary->setObjectName("pgn-global-network-status");networkSummary->setStyleSheet("font:9px monospace;color:#f6c566;padding:3px 12px;");
   auto networkObservation=std::make_shared<std::optional<pgn::wallet::ChainObservation>>();
   const auto displayNetwork=[walletButton,networkSummary,networkObservation,testnetMode,&inspectWallet]{
@@ -493,7 +493,7 @@ int main(int argc,char** argv) {
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
  walletButton->setToolTip("Native PGN wallet integrated here, with verified chain identity and protected local keys.");
   walletButton->setFixedHeight(33);topBox->addWidget(walletButton);
- auto* socialButton=new QPushButton("SOCIAL\nCOMMUNITY SPACE",top);socialButton->setObjectName("pgn-primary-social-tab");socialButton->setCheckable(true);socialButton->setFixedSize(180,33);socialButton->setCursor(Qt::PointingHandCursor);socialButton->setShortcut(QKeySequence("Alt+S"));socialButton->setToolTip("Chat and miner ranking. Alt+S opens Social.");topBox->addWidget(socialButton);
+ auto* socialButton=new QPushButton("SOCIAL\nCOMMUNITY SPACE",top);socialButton->setObjectName("pgn-primary-social-tab");socialButton->setCheckable(true);socialButton->setFixedSize(HorizonPrimaryTabWidth,33);socialButton->setCursor(Qt::PointingHandCursor);socialButton->setShortcut(QKeySequence("Alt+S"));socialButton->setToolTip("Chat and miner ranking. Alt+S opens Social.");topBox->addWidget(socialButton);
  auto* identity=new QLabel("PRIME GAP NETWORK · GPU SOURCE / INDEPENDENT PROOF · WALLET SERVICE NOT CONNECTED");identity->setStyleSheet("color:#7dacb5;font:8px monospace;");identity->setWordWrap(true);identity->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);topBox->addWidget(identity,1);
   auto* tabs=new QTabWidget;auto* canvas=pgn::ui::createMiningCanvas();
   auto* miningPage=new QWidget;miningPage->setObjectName("pgn-mining-page");auto* miningLayout=new QVBoxLayout(miningPage);miningLayout->setContentsMargins(0,0,0,0);miningLayout->setSpacing(0);

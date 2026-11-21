@@ -3,7 +3,7 @@
 #include "wallet/setup_selection.h"
 #include <QWidget>
 #include <functional>
-class QLabel;class QComboBox;class QPushButton;class QToolButton;class QLineEdit;
+class QBoxLayout;class QGroupBox;class QLabel;class QComboBox;class QPushButton;class QToolButton;class QLineEdit;
 namespace pgn::ui {
 class WalletManagementPanel final:public QWidget {
 public:
@@ -18,7 +18,11 @@ public:
  std::function<void()> onCancelChange;
  std::function<void()> onComponents;
  std::function<void()> onChainBootstrap;
+protected:
+ void resizeEvent(QResizeEvent*) override;
 private:
+ QBoxLayout* maintenance_{};
+ QGroupBox *bootstrapGroup_{},*walletGroup_{};
  pgn::wallet::WalletManager* manager_{};QLabel *location_{},*service_{},*message_{};
  QPushButton* bootstrap_{};QLabel* bootstrapStatus_{};
  QComboBox* wallets_{};QPushButton *configure_{},*cancelChange_{},*reload_{},*create_{},*load_{},*select_{},*close_{};QToolButton* open_{};

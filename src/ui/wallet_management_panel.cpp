@@ -10,6 +10,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QToolButton>
 #include <QVBoxLayout>
 namespace pgn::ui {
@@ -20,25 +21,34 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
 #endif
  textFont.setPointSize(10);setFont(textFont);
  setStyleSheet("QLabel,QComboBox,QGroupBox{font-size:10pt;font-weight:400;font-family:'"+textFont.family()+"';}QGroupBox{border:1px solid #285662;border-radius:8px;margin-top:12px;padding:10px;}QGroupBox::title{subcontrol-origin:margin;left:12px;}QPushButton,QToolButton{font-size:10pt;font-weight:400;font-family:'"+textFont.family()+"';min-height:32px;padding:0 10px;}QToolButton{background:#0b3939;color:#69efc5;border:1px solid #4bc9b0;border-radius:7px;}QToolButton:disabled{color:#52757d;border-color:#23424a;background:#06171e;}");
- auto* outer=new QVBoxLayout(this);outer->setContentsMargins(20,8,20,4);
- auto* group=new QGroupBox("Core setup and wallets");outer->addWidget(group);auto* box=new QVBoxLayout(group);box->setSpacing(8);
- auto* note=new QLabel("One PGN Core node shares the blockchain across your wallets. Choose which wallet to display below.");note->setWordWrap(true);box->addWidget(note);
+ auto* outer=new QVBoxLayout(this);outer->setContentsMargins(0,0,0,4);outer->setSpacing(12);
+ walletGroup_=new QGroupBox("Wallets");walletGroup_->setObjectName("pgn-wallet-management-wallets");outer->addWidget(walletGroup_);
+ auto* walletGroupBox=new QVBoxLayout(walletGroup_);walletGroupBox->setSpacing(8);
+ maintenance_=new QBoxLayout(QBoxLayout::TopToBottom);maintenance_->setSpacing(12);outer->addLayout(maintenance_);
+ auto* group=new QGroupBox("Core settings");group->setObjectName("pgn-wallet-management-core");maintenance_->addWidget(group,1,Qt::AlignTop);
+ auto* box=new QVBoxLayout(group);box->setSpacing(8);
+ auto* note=new QLabel("This Core node stores one copy of the blockchain for all your wallets.");note->setWordWrap(true);box->addWidget(note);
  location_=new QLabel;location_->setObjectName("pgn-wallet-core-location");location_->setTextFormat(Qt::PlainText);location_->setWordWrap(true);location_->setTextInteractionFlags(Qt::TextSelectableByMouse);box->addWidget(location_);
- auto* configuration=new QHBoxLayout;configure_=new QPushButton("Set up Core…");configure_->setObjectName("pgn-wallet-setup");configuration->addWidget(configure_);cancelChange_=new QPushButton("Cancel folder change");cancelChange_->setObjectName("pgn-wallet-cancel-folder-change");cancelChange_->hide();configuration->addWidget(cancelChange_);reload_=new QPushButton("Refresh wallets");reload_->setObjectName("pgn-wallet-list-refresh");configuration->addWidget(reload_);configuration->addStretch();box->addLayout(configuration);
+ auto* configuration=new QHBoxLayout;configure_=new QPushButton("Set up Core…");configure_->setObjectName("pgn-wallet-setup");configuration->addWidget(configure_);cancelChange_=new QPushButton("Cancel folder change");cancelChange_->setObjectName("pgn-wallet-cancel-folder-change");cancelChange_->hide();configuration->addWidget(cancelChange_);reload_=new QPushButton("Refresh wallets");reload_->setObjectName("pgn-wallet-list-refresh");configuration->addStretch();box->addLayout(configuration);
  setupFields_=new QWidget;setupFields_->setObjectName("pgn-wallet-location-fields");auto* setupBox=new QVBoxLayout(setupFields_);setupBox->setContentsMargins(0,0,0,0);auto* setupForm=new QFormLayout;
  directory_=new QLineEdit(pgn::wallet::defaultCoreDataDirectory(genesis));directory_->setObjectName("pgn-wallet-data-directory");auto* pathRow=new QHBoxLayout;pathRow->addWidget(directory_,1);auto* browse=new QPushButton("Browse…");pathRow->addWidget(browse);setupForm->addRow("Core data folder",pathRow);
  setupWallet_=new QLineEdit("PGN");setupWallet_->setObjectName("pgn-wallet-name");setupWallet_->setMaxLength(64);setupForm->addRow("Wallet name",setupWallet_);setupBox->addLayout(setupForm);
  auto* setupActions=new QHBoxLayout;applySetup_=new QPushButton("Create node and wallet");applySetup_->setObjectName("pgn-wallet-create-initial");existingSetup_=new QPushButton("Open existing Core folder…");existingSetup_->setObjectName("pgn-wallet-open-core");setupActions->addWidget(applySetup_);setupActions->addWidget(existingSetup_);setupActions->addStretch();setupBox->addLayout(setupActions);box->addWidget(setupFields_);
- walletControls_=new QWidget;auto* walletBox=new QVBoxLayout(walletControls_);walletBox->setContentsMargins(0,0,0,0);box->addWidget(walletControls_);
- auto* choice=new QHBoxLayout;auto* label=new QLabel("Displayed wallet");wallets_=new QComboBox;wallets_->setObjectName("pgn-wallet-selector");wallets_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);wallets_->setMinimumContentsLength(14);wallets_->setMinimumWidth(80);label->setBuddy(wallets_);choice->addWidget(label);choice->addWidget(wallets_,1);select_=new QPushButton("Select");select_->setObjectName("pgn-wallet-select");choice->addWidget(select_);walletBox->addLayout(choice);
- auto* actions=new QHBoxLayout;create_=new QPushButton("Create wallet…");create_->setObjectName("pgn-wallet-create");open_=new QToolButton;open_->setText("Open wallet…");open_->setObjectName("pgn-wallet-open");open_->setPopupMode(QToolButton::InstantPopup);auto* menu=new QMenu(open_);auto* folder=menu->addAction("Open wallet folder…");auto* file=menu->addAction("Open wallet .dat file…");open_->setMenu(menu);load_=new QPushButton("Load");load_->setObjectName("pgn-wallet-load");close_=new QPushButton("Close wallet");close_->setObjectName("pgn-wallet-close");for(auto* button:{create_,load_,close_})actions->addWidget(button);actions->insertWidget(1,open_);actions->addStretch();walletBox->addLayout(actions);
- service_=new QLabel;service_->setObjectName("pgn-wallet-service-binding");service_->setTextFormat(Qt::PlainText);service_->setWordWrap(true);box->addWidget(service_);
+ walletControls_=new QWidget;auto* walletBox=new QVBoxLayout(walletControls_);walletBox->setContentsMargins(0,0,0,0);walletGroupBox->addWidget(walletControls_);
+ auto* choice=new QHBoxLayout;auto* label=new QLabel("Displayed wallet");wallets_=new QComboBox;wallets_->setObjectName("pgn-wallet-selector");wallets_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);wallets_->setMinimumContentsLength(14);wallets_->setMinimumWidth(80);label->setBuddy(wallets_);choice->addWidget(label);choice->addWidget(wallets_,1);select_=new QPushButton("Show in Wallet");select_->setObjectName("pgn-wallet-select");choice->addWidget(select_);choice->addWidget(reload_);walletBox->addLayout(choice);
+ auto* actions=new QHBoxLayout;create_=new QPushButton("Create wallet…");create_->setObjectName("pgn-wallet-create");open_=new QToolButton;open_->setText("Open wallet…");open_->setObjectName("pgn-wallet-open");open_->setPopupMode(QToolButton::InstantPopup);auto* menu=new QMenu(open_);auto* folder=menu->addAction("Open wallet folder…");auto* file=menu->addAction("Open wallet .dat file…");open_->setMenu(menu);load_=new QPushButton("Load into Core");load_->setObjectName("pgn-wallet-load");close_=new QPushButton("Close wallet");close_->setObjectName("pgn-wallet-close");for(auto* button:{create_,load_,close_})actions->addWidget(button);actions->insertWidget(1,open_);actions->addStretch();walletBox->addLayout(actions);
+ service_=new QLabel;service_->setObjectName("pgn-wallet-service-binding");service_->setTextFormat(Qt::PlainText);service_->setWordWrap(true);walletGroupBox->addWidget(service_);
  auto* software=new QHBoxLayout;auto* components=new QPushButton("Components…");components->setObjectName("pgn-wallet-components");software->addWidget(components);software->addStretch();box->addLayout(software);connect(components,&QPushButton::clicked,this,[this]{if(onComponents)onComponents();});
- bootstrap_=new QPushButton("Apply blockchain bootstrap");bootstrap_->setObjectName("pgn-wallet-chain-bootstrap");bootstrap_->hide();
- auto* bootstrapActions=new QHBoxLayout;bootstrapActions->addWidget(bootstrap_);bootstrapActions->addStretch();box->addLayout(bootstrapActions);
- bootstrapStatus_=new QLabel;bootstrapStatus_->setTextFormat(Qt::PlainText);bootstrapStatus_->setWordWrap(true);bootstrapStatus_->hide();box->addWidget(bootstrapStatus_);
+ bootstrapGroup_=new QGroupBox("Blockchain sync");bootstrapGroup_->setObjectName("pgn-wallet-management-sync");
+ maintenance_->addWidget(bootstrapGroup_,1,Qt::AlignTop);bootstrapGroup_->hide();
+ auto* syncBox=new QVBoxLayout(bootstrapGroup_);syncBox->setSpacing(8);
+ auto* syncNote=new QLabel("On the first testnet sync, Horizon downloads a set of blocks for Core to verify. Use the button below to retry the download.");
+ syncNote->setWordWrap(true);syncBox->addWidget(syncNote);
+ bootstrap_=new QPushButton("Apply testnet bootstrap");bootstrap_->setObjectName("pgn-wallet-chain-bootstrap");syncBox->addWidget(bootstrap_,0,Qt::AlignLeft);
+ bootstrapStatus_=new QLabel;bootstrapStatus_->setObjectName("pgn-wallet-chain-bootstrap-status");
+ bootstrapStatus_->setTextFormat(Qt::PlainText);bootstrapStatus_->setWordWrap(true);bootstrapStatus_->hide();syncBox->addWidget(bootstrapStatus_);
  connect(bootstrap_,&QPushButton::clicked,this,[this]{if(onChainBootstrap)onChainBootstrap();});
- message_=new QLabel;message_->setObjectName("pgn-wallet-management-status");message_->setTextFormat(Qt::PlainText);message_->setWordWrap(true);message_->setAccessibleName("Wallet management status");box->addWidget(message_);
+ message_=new QLabel;message_->setObjectName("pgn-wallet-management-status");message_->setTextFormat(Qt::PlainText);message_->setWordWrap(true);message_->setAccessibleName("Wallet management status");outer->addWidget(message_);outer->addStretch();
  connect(configure_,&QPushButton::clicked,this,[this]{setupFields_->setVisible(setupFields_->isHidden());});connect(reload_,&QPushButton::clicked,this,[this]{manager_->refresh();});
  connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Choose PGN Core data folder",directory_->text());if(!path.isEmpty())directory_->setText(path);});
  const auto apply=[this](bool existing){if(setupBusy_||pending_||!onApplySetup)return;setupBusy_=true;setupError_.clear();setupFields_->setEnabled(false);message_->setText("Checking PGN Core files…");onApplySetup({QDir::cleanPath(directory_->text().trimmed()),setupWallet_->text().trimmed(),existing});};
@@ -51,14 +61,19 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
  connect(load_,&QPushButton::clicked,this,[this]{manager_->load(wallets_->currentData().toString());});connect(select_,&QPushButton::clicked,this,[this]{manager_->select(wallets_->currentData().toString());});connect(close_,&QPushButton::clicked,this,[this]{manager_->unload(wallets_->currentData().toString());});connect(wallets_,&QComboBox::currentIndexChanged,this,[this]{refresh();});refresh();
 }
 void WalletManagementPanel::present(const QString& network,const QString& directory,bool configured,bool pending,const QString& pendingDirectory,const QString& savedWallet){
- bootstrap_->setVisible(bool(onChainBootstrap));
+ bootstrapGroup_->setVisible(configured&&bool(onChainBootstrap));
  const bool changed=configured_!=configured;configured_=configured;pending_=pending;
  location_->setText(configured?QString("Network: %1\nCurrent Core data folder: %2\nDefault wallet folder: %3").arg(network,directory,QDir(directory).filePath(network=="test"?"testnet/wallets":"wallets")):"To get started, click Create node and wallet. You can use the suggested folder as it is. To reuse an existing node, choose Open existing Core folder. Existing wallet files are preserved.");
- configure_->setText("Change Core folder…");configure_->setVisible(configured);configure_->setToolTip("Choose a Core data folder. Existing files are never moved or deleted.");reload_->setVisible(configured);walletControls_->setVisible(configured);
+ configure_->setText("Change Core folder…");configure_->setVisible(configured);configure_->setToolTip("Choose a Core data folder. Existing files are never moved or deleted.");walletGroup_->setVisible(configured);
  if(!configured||changed)setupFields_->setVisible(!configured);setupFields_->setEnabled(!pending&&!setupBusy_);applySetup_->setText(configured?"Save Core folder":"Create node and wallet");existingSetup_->setVisible(!configured);
  if(configured&&!directory.isEmpty()){directory_->setText(directory);if(!savedWallet.isEmpty())setupWallet_->setText(savedWallet);else if(!manager_->serviceWallet().isEmpty())setupWallet_->setText(manager_->serviceWallet());}
  configure_->setEnabled(!pending);cancelChange_->setVisible(pending);
  if(pending)location_->setText(location_->text()+"\nScheduled Core data folder: "+pendingDirectory+"\nWaiting for the current Core to stop cleanly. Reopening Horizon while Core is still running keeps the current folder.");
+}
+void WalletManagementPanel::resizeEvent(QResizeEvent* event){
+ const auto direction=event->size().width()>=880?QBoxLayout::LeftToRight:QBoxLayout::TopToBottom;
+ if(maintenance_->direction()!=direction)maintenance_->setDirection(direction);
+ QWidget::resizeEvent(event);
 }
 void WalletManagementPanel::setChainBootstrapStatus(const QString& status,bool finished){
  bootstrap_->setEnabled(finished);bootstrapStatus_->setText(status);bootstrapStatus_->setVisible(!status.isEmpty());

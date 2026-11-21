@@ -27,6 +27,14 @@ int main(int argc,char** argv){
  button.present(states);if(paint().pixelColor(2,19)!=QColor("#ffad4a"))return 10;
  button.setChecked(false);if(paint().pixelColor(2,19)==QColor("#ffad4a"))return 11;
  button.present({});if(!button.property("miningCardStates").toList().isEmpty()){std::cerr<<"FAIL explicit empty inventory retained obsolete dots\n";return 8;}
+ const int normalWidth=button.minimumWidth();
+ QVariantList large;
+ for(int index=0;index<8;++index)large.append(MiningCardState(QString::number(index),"GPU",true));
+ button.present(large);
+ if(button.minimumWidth()<=normalWidth||button.minimumWidth()-button.property("miningStatusReserve").toInt()-22<
+     button.fontMetrics().horizontalAdvance("PRIME GAP SEARCH"))return 12;
+ button.present({});
+ if(button.minimumWidth()!=normalWidth)return 13;
  std::cout<<"PASS event-only state, original dot geometry/colours, identical frame, absence preservation, explicit OFF/removal and primary interaction\n";
  return 0;
 }
