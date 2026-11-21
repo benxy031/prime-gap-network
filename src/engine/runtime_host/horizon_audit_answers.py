@@ -71,7 +71,9 @@ class AuditAnswers:
                 if (os.name!='nt' or attempt==4
                         or not (error.errno==errno.EACCES or getattr(error,'winerror',None)in(5,32,33))):raise
                 time.sleep(.005*(2**attempt))
-        return self.decode(name,raw)
+        try:return self.decode(name,raw)
+        except RecursionError as error:
+            raise ValueError('Sealed answer exceeds the JSON nesting limit') from error
 
     def decode(self,name,raw):
         match=self.checked_name(name)
@@ -206,12 +208,19 @@ class AuditAnswers:
 
     def read_registered(self,name,digest):
         try:value,actual=self.read(name)
-        except FileNotFoundError:
+        except (FileNotFoundError,KeyError,TypeError,ValueError) as error:
             file=self.folder/'sealed-answers'/(name+'.json')
-            if not file.is_file():raise AuditSealRecoveryRequired('Original registered audit seal unavailable; keep the audit folder and restore its retained answer')
+            if not file.is_file():raise AuditSealRecoveryRequired('Original registered audit seal unavailable; keep the audit folder and restore its retained answer') from error
             value,actual=self.read_path(name,file)
             if actual!=digest:raise AuditSealRecoveryRequired('Sealed answer changed after registration')
-            if all(k in value for k in ('ticket','report_root','ranges','counts')):self.check_binding(value,value)
+            has_binding=all(k in value for k in ('ticket','report_root','ranges','counts'))
+            if has_binding:
+                try:self.check_binding(value,value)
+                except (KeyError,TypeError) as invalid:
+                    raise AuditSealRecoveryRequired('Original sealed audit binding is malformed') from invalid
+            elif not isinstance(error,FileNotFoundError):
+                raise AuditSealRecoveryRequired('Original registered audit seal lacks the scientific binding needed for repair') from error
+            value.pop('publication_intent',None)
             from pgn_session import atomic_bytes
             atomic_bytes(self.folder/(name+'.json'),canonical_bytes(value)+b'\n')
             return value

@@ -70,6 +70,57 @@ class SealRecoveryTests(unittest.TestCase):
         self.assertEqual(self.compute_calls, 0)
         self.assertEqual(self.commits, [(self.request, 1, 0, self.answer['commitment'])])
 
+    def test_background_read_recovers_a_malformed_working_copy(self):
+        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
+        original = seal.read_bytes()
+        digest = self.digest()
+        self.current.unlink()
+        self.named.write_bytes(b'{')
+        reopened = AuditAnswers(self.audits.folder)
+        page = reopened.next_page(1, isolate_failures=True)
+        self.assertEqual([name for name, _ in page], [self.name])
+        self.assertEqual(page[0][1]['answer'], self.answer)
+        self.assertEqual(page[0][1]['counts'], [7]*5)
+        self.assertEqual(reopened.publication_issues, ())
+        self.assertEqual(json.loads(self.named.read_bytes())['answer'], self.answer)
+        self.assertEqual(seal.read_bytes(), original)
+        self.assertEqual(self.digest(), digest)
+
+    def test_background_read_preserves_both_files_if_seal_is_unreadable(self):
+        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
+        digest = self.digest()
+        self.named.write_bytes(b'{')
+        seal.write_bytes(b'[')
+        self.current.unlink()
+        reopened = AuditAnswers(self.audits.folder)
+        self.assertEqual(reopened.next_page(1, isolate_failures=True), [])
+        self.assertEqual(reopened.publication_issues[0]['name'], self.name)
+        with reopened.database() as db:
+            self.assertEqual(db.execute('SELECT waiting FROM answers WHERE name=?',(self.name,)).fetchone()[0], 1)
+        self.assertEqual(self.named.read_bytes(), b'{')
+        self.assertEqual(seal.read_bytes(), b'[')
+        self.assertEqual(self.digest(), digest)
+
+    def test_background_read_isolates_excessive_json_nesting(self):
+        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
+        original = seal.read_bytes()
+        depth = sys.getrecursionlimit() + 20
+        nested = b'[' * depth + b'0' + b']' * depth
+        self.assertLess(len(nested), 262144)
+        self.current.unlink()
+        self.named.write_bytes(nested)
+        reopened = AuditAnswers(self.audits.folder)
+        self.assertEqual(reopened.next_page(1, isolate_failures=True)[0][1]['answer'], self.answer)
+        self.assertEqual(seal.read_bytes(), original)
+        self.named.write_bytes(b'{')
+        seal.write_bytes(nested)
+        self.assertEqual(reopened.next_page(1, isolate_failures=True), [])
+        self.assertEqual(reopened.publication_issues[0]['name'], self.name)
+        with reopened.database() as db:
+            self.assertEqual(db.execute('SELECT waiting FROM answers WHERE name=?',(self.name,)).fetchone()[0], 1)
+        self.assertEqual(self.named.read_bytes(), b'{')
+        self.assertEqual(seal.read_bytes(), nested)
+
     def test_mutable_binding_mismatch_cannot_block_valid_immutable_seal(self):
         seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
         original = seal.read_bytes()
