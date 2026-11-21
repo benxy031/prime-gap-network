@@ -1,4 +1,5 @@
 #include "ui/mining_session_summary.h"
+#include <QSettings>
 #include <QApplication>
 #include <QTemporaryDir>
 #include <QPixmap>
@@ -124,7 +125,51 @@ int main(int argc,char** argv){
         if(argc>1)require(render().save(QDir(QString::fromLocal8Bit(argv[1])).filePath(QString("bit-coverage-%1x%2-bottom.png").arg(size.width()).arg(size.height()))));
         scroll->setValue(0);
     }
-    auto legacyCore=core;legacyCore.remove("range_coverage");view.presentNetworkMetrics(legacyCore,QString(64,'a'));render();
+    const auto genesis=QString(64,'a');
+    const auto hashA=QString(64,'b'), hashB=QString(64,'e');
+    view.observeNetworkTip(genesis,hashA,1);
+    view.presentNetworkMetrics(core,genesis);render();
+    const auto previous=view.property("pgn_network_summary").toJsonObject().value("rows");
+    require(!view.property("pgn_network_summary_delayed").toBool());
+    view.observeNetworkTip(genesis,hashB,2);render();
+    require(view.property("pgn_network_summary_delayed").toBool()&&
+        view.property("pgn_network_summary").toJsonObject().value("rows")==previous);
+    view.presentNetworkMetrics({},genesis);render();
+    require(view.property("pgn_network_summary_delayed").toBool()&&
+        view.property("pgn_network_summary").toJsonObject().value("rows")==previous);
+    view.observeNetworkTip({},{},-1);render();
+    view.presentNetworkMetrics({},{});render();
+    require(view.property("pgn_network_summary_delayed").toBool());
+    view.observeNetworkTip(genesis,hashB,2);
+    view.presentNetworkMetrics(core,genesis);render();
+    require(view.property("pgn_network_summary_delayed").toBool()&&
+        view.property("pgn_network_summary_available").toBool());
+    view.observeNetworkTip(genesis,hashB,1);render();
+    require(!view.property("pgn_network_summary_available").toBool()&&
+        !view.property("pgn_bit_range_coverage").toJsonObject().value("available").toBool());
+    view.presentNetworkMetrics(core,genesis);render();
+    require(!view.property("pgn_network_summary_available").toBool());
+    auto newCore=core;auto newPoint=tip;
+    newCore.insert("bestblockhash",hashB);newPoint.insert("hash",hashB);
+    newCore.insert("points",QJsonArray{newPoint});
+    view.presentNetworkMetrics(newCore,genesis);render();
+    require(view.property("pgn_network_summary_available").toBool()&&!view.property("pgn_network_summary_delayed").toBool());
+    view.observeNetworkTip(genesis,hashA,1);render();
+    require(!view.property("pgn_network_summary_available").toBool());
+    view.presentNetworkMetrics(newCore,genesis);render();
+    require(!view.property("pgn_network_summary_available").toBool());
+    auto ahead=newCore;newPoint.insert("height",2);
+    ahead.insert("height",2);ahead.insert("points",QJsonArray{newPoint});
+    view.presentNetworkMetrics(ahead,genesis);render();
+    require(view.property("pgn_network_summary_available").toBool()&&view.property("pgn_network_summary_delayed").toBool());
+    view.observeNetworkTip(QString(64,'f'),hashB,2);render();
+    require(!view.property("pgn_network_summary_available").toBool()&&!view.property("pgn_network_summary_delayed").toBool());
+    view.presentNetworkMetrics(core,genesis);render();
+    require(!view.property("pgn_network_summary_available").toBool());
+    view.observeNetworkTip(genesis,hashA,1);
+    view.presentNetworkMetrics(core,genesis);render();
+    require(view.property("pgn_network_summary_available").toBool()&&!view.property("pgn_network_summary_delayed").toBool());
+    auto legacyCore=core;legacyCore.remove("range_coverage");view.presentNetworkMetrics(legacyCore,genesis);render();
     require(!view.property("pgn_bit_range_coverage").toJsonObject().value("available").toBool()&&view.property("pgn_bit_range_coverage_regions").toJsonArray().isEmpty());
     std::cout<<"PASS "<<checks<<" range precision, compact/large geometry, session/history, actual cadence and exact bit-coverage admission\n";
 }

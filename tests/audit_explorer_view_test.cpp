@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     struct Pending {int offset; View::Result reply;};
     std::deque<Pending> pending;
     View view(View::PageReader{[&](int offset, View::Result reply) {pending.push_back({offset,std::move(reply)});}});
-    view.resize(1100,700); view.show(); app.processEvents();
+    view.resize(1100,700); view.show(); app.processEvents(); view.hide();
     auto answer=[&](int offset,QJsonObject snapshot,QString error={}) {
         require(!pending.empty() && pending.front().offset==offset,"Wrong requested page");
         auto callback=std::move(pending.front().reply);pending.pop_front();callback(snapshot,error);app.processEvents();

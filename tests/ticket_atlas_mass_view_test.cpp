@@ -21,13 +21,13 @@ int main(int argc,char** argv){QApplication app(argc,argv);size_t checks{};auto 
     map->findChild<QPushButton*>("pgn-atlas-overview")->click();settle(180);
     need(map->property("pgn_ticket_atlas_snapshot").toJsonObject().value("tracked_assignments")==atlas.value("tracked_assignments"),"whole schedule retained");
     need(map->property("pgn_ticket_atlas_snapshot").toJsonObject().value("details_truncated").toBool(),"coarse aggregate mode");
-    QString selected;map->inspect=[&](const QString& id){selected=id;};
+    QString selected;map->inspect=[&](const QString& id,const QString&){selected=id;};
     const auto bin=atlas.value("bins").toArray().first().toObject();const QPointF point=map->inspectionPoint();need(point.x()>=0,"whole-bin inspection point exists");
     const auto send=[&](QEvent::Type kind,Qt::MouseButtons buttons){QMouseEvent e(kind,point,map->mapToGlobal(point.toPoint()),Qt::LeftButton,buttons,Qt::NoModifier);QApplication::sendEvent(map,&e);};
     send(QEvent::MouseButtonPress,Qt::LeftButton);send(QEvent::MouseButtonRelease,Qt::NoButton);settle(180);
     const auto cellEnd=atlas.value("bins").toArray()[3].toObject().value("end").toString();
     need(selected.isEmpty(),"coarse band never selects first100sample");need(!queries.isEmpty()&&queries.last().first==bin.value("start").toString()&&queries.last().second==cellEnd,"density click requests exact union of four complete native bins");
-    const QString target=QString(64,'a');map->inspect=[&](const QString& id){
+    const QString target=QString(64,'a');map->inspect=[&](const QString& id,const QString&){
         // Same callback used by the integrated view: choose an actual page row
         // via the normal selection, then an off-page exact request.
         Q_UNUSED(id);
@@ -37,7 +37,7 @@ int main(int argc,char** argv){QApplication app(argc,argv);size_t checks{};auto 
     // coarse-only assertion: locate it in a second integrated view.
     pgn::ui::NetworkWorkView selection([&](int,auto done){done(state,{});},[&](const QString&,auto done){detailWasRequested=true;done({},"Offpage details held");},nullptr,[](const QString&,const QString&,int,auto done){done({},"No testmap needed");});
     selection.resize(1200,900);selection.show();settle(20);auto* second=selection.findChild<QTableWidget*>("pgn-network-ticket-table");auto* secondMap=dynamic_cast<pgn::ui::TicketAtlasView*>(selection.findChild<QWidget*>("pgn-ticket-atlas"));second->selectRow(0);settle(10);need(!second->selectionModel()->selectedRows().isEmpty(),"initial selection in composed view");
-    secondMap->inspect(target);need(second->selectionModel()->selectedRows().isEmpty(),"offpage atlas request clears unrelated highlight");need(secondMap->property("pgn_ticket_atlas_selected").toString()==target,"map and evidence exact identity aligned");
+    secondMap->inspect(target,{});need(second->selectionModel()->selectedRows().isEmpty(),"offpage atlas request clears unrelated highlight");need(secondMap->property("pgn_ticket_atlas_selected").toString()==target,"map and evidence exact identity aligned");
     auto* split=view.findChild<QSplitter*>("pgn-network-evidence-split");auto* evidence=view.findChild<QTreeWidget*>("pgn-network-ticket-evidence");need(split&&split->orientation()==Qt::Horizontal,"wide view has side inspector");need(table->height()>400&&evidence->height()>400,"wide table and details keep substantial height");need(table->rowHeight(0)>=table->fontMetrics().height()+6&&table->rowHeight(0)<=table->fontMetrics().lineSpacing()*2,"compact rows preserve readable text");need(table->horizontalHeaderItem(2)->text()=="Audit 1"&&table->horizontalHeaderItem(3)->text()=="Audit 2",
          "individual audit outcomes have dedicated columns");
     const auto selectedId=table->item(0,0)->data(Qt::UserRole).toString();

@@ -80,7 +80,7 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  NetworkWorkView paged([&](int offset,NetworkWorkView::Result done){++seekReads;QJsonArray part;for(int i=offset;i<std::min(offset+100,int(ordered.size()));++i)part.append(ordered[i]);auto result=page;result.insert("leases",part);result.insert("reports",QJsonArray{});result.insert("audits",QJsonArray{});result.insert("active_lease_count",300);done(result,{});},[&](const QString& id,NetworkWorkView::Result done){++remoteDetails;auto result=page;result.insert("leases",QJsonArray{one(id)});result.insert("reports",QJsonArray{});result.insert("audits",QJsonArray{});done(result,{});},nullptr,[](const QString&,const QString&,int,auto done){done({},"Separate atlas transport is outside this page-selection fixture");});
  paged.resize(1366,990);paged.show();app.processEvents();
  auto* selectedTable=paged.findChild<QTableWidget*>("pgn-network-ticket-table");auto* pointCallback=static_cast<pgn::ui::TicketAtlasView*>(paged.findChild<QWidget*>("pgn-ticket-atlas"));need(selectedTable&&pointCallback,"actual table and atlas selection callback available");
- const auto selectPoint=[&](int n){const auto id=QString::number(n,16).rightJustified(64,'0');pointCallback->inspect(id);app.processEvents();QTableWidgetItem* item=nullptr;for(int row=0;row<selectedTable->rowCount();++row)if(selectedTable->item(row,0)->data(Qt::UserRole).toString()==id)item=selectedTable->item(row,0);need(item!=nullptr,"atlas-selected ticket appears on current table page");need(item->isSelected(),"atlas-selected row is highlighted");need(selectedTable->viewport()->rect().intersects(selectedTable->visualItemRect(item)),"selected row is scrolled into the visible viewport");need(paged.property("pgn_selected_ticket_evidence").toJsonObject().value("leases").toArray().first().toObject().value("request")==id,"right evidence and selected row identify the same ticket");};
+ const auto selectPoint=[&](int n){const auto id=QString::number(n,16).rightJustified(64,'0');pointCallback->inspect(id,QString::number(n));app.processEvents();QTableWidgetItem* item=nullptr;for(int row=0;row<selectedTable->rowCount();++row)if(selectedTable->item(row,0)->data(Qt::UserRole).toString()==id)item=selectedTable->item(row,0);need(item!=nullptr,"atlas-selected ticket appears on current table page");need(item->isSelected(),"atlas-selected row is highlighted");need(selectedTable->viewport()->rect().intersects(selectedTable->visualItemRect(item)),"selected row is scrolled into the visible viewport");need(paged.property("pgn_selected_ticket_evidence").toJsonObject().value("leases").toArray().first().toObject().value("request")==id,"right evidence and selected row identify the same ticket");};
  selectPoint(250);selectPoint(50);need(seekReads<=6,"page lookup is bounded, not a whole-history walk");paged.close();
  }
  
@@ -98,7 +98,7 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  auto* point=static_cast<pgn::ui::TicketAtlasView*>(raced.findChild<QWidget*>("pgn-ticket-atlas"));
  need(point&&aCalls.size()==1,"first point evidence request remains outstanding");
  raced.resize(930,850);app.processEvents();need(aCalls.size()==1,"resize adds zero point evidence reads");
- point->inspect(b);point->inspect(a);app.processEvents();
+ point->inspect(b,{});point->inspect(a,{});app.processEvents();
  need(aCalls.size()==2,"same ticket was selected again after another ticket");
  auto* racedTable=raced.findChild<QTableWidget*>("pgn-network-ticket-table");
  need(racedTable->currentRow()==0&&racedTable->item(0,0)->isSelected(),"current point is visible on the narrower table");
@@ -176,13 +176,34 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  covFrame.remove("scientific_coverage");covRefresh->click();app.processEvents();
  need(covLabel->text()=="Scientific coverage unavailable","older Core without optional summary keeps an honest unavailable state");
  {
-  struct Lookup{QString number;NetworkWorkView::Result callback;};
-  QVector<Lookup> lookups;
+  struct Lookup{QString number;NetworkWorkView::Result callback;std::function<void(QJsonObject)> summary;};
+  QVector<Lookup> lookups;int extraDetailReads=0;
   auto currentPage=page;currentPage.insert("height",200);currentPage.insert("bestblockhash",QString(64,'1'));
+  currentPage.insert("active_lease_count",201);
+  const auto remoteRequest=QString(64,'f');
+  const auto anchorGenesis=QString(64,'a');
+  const QJsonObject atlasTicket{{"request",remoteRequest},{"ticket_number","102"},
+      {"start","1505"},{"end","1510"},{"miner_script","ab"},{"stage","audits_passed"}};
+  QJsonObject atlasStages;
+  for(const auto* stage:pgn::wallet::AtlasStates)
+   atlasStages.insert(stage,QJsonObject{{"tickets",QString(stage)=="audits_passed"?1:0},
+       {"positions",QString(stage)=="audits_passed"?"5":"0"}});
+  const QJsonObject atlasSample{{"schema","PGN_TICKET_ATLAS_V1"},{"genesis",anchorGenesis},
+      {"bestblockhash",QString(64,'2')},{"height",201},{"current_assignments_complete",true},
+      {"range_origin","1000"},{"range_limit","2000"},{"ticket_width","5"},
+      {"start","1000"},{"end","2000"},{"tracked_assignments",1},{"visible_assignments",1},
+      {"details_truncated",false},{"details",QJsonArray{atlasTicket}},{"totals",atlasStages},
+      {"bins",QJsonArray{QJsonObject{{"start","1000"},{"end","2000"},{"stages",atlasStages}}}}};
+  int heldSeeks=0;bool holdPageSeek=false;
   const auto wait=[&]{QEventLoop loop;QTimer::singleShot(260,&loop,&QEventLoop::quit);loop.exec();};
-  NetworkWorkView searchable([&](int,NetworkWorkView::Result done){done(currentPage,{});},
-    [](const QString&,NetworkWorkView::Result done){done({},"Unexpected extra detail request");});
-  searchable.setTicketNumberReader([&](const QString& number,NetworkWorkView::Result done){lookups.append({number,std::move(done)});});
+  NetworkWorkView searchable([&](int offset,NetworkWorkView::Result done){
+      if(holdPageSeek&&offset>0){++heldSeeks;return;}
+      done(currentPage,{});
+    },[&](const QString&,NetworkWorkView::Result done){++extraDetailReads;done({},"Unexpected extra detail request");},
+    nullptr,[&](const QString&,const QString&,int,auto done){done(atlasSample,{});});
+  searchable.setTicketNumberReader([&](const QString& number,NetworkWorkView::Result done,auto summary){
+   lookups.append({number,std::move(done),std::move(summary)});
+  });
   searchable.resize(1280,800);searchable.show();app.processEvents();
   auto* field=searchable.findChild<QLineEdit*>("pgn-work-ticket-search");
   auto* result=searchable.findChild<QTableWidget*>("pgn-network-ticket-table");
@@ -192,11 +213,19 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
    if(button->text()=="Next page")next=button;
    if(button->text()=="Copy evidence")copy=button;
   }
-  need(field&&result&&reload&&next&&copy,"exact-search fixture controls");
+  auto* progress=searchable.findChild<QWidget*>("pgn-work-search-progress");
+  auto* atlas=static_cast<pgn::ui::TicketAtlasView*>(searchable.findChild<QWidget*>("pgn-ticket-atlas"));
+  need(atlas,"same-ticket inspection fixture has the real Atlas callback");
+  need(field&&result&&reload&&next&&copy&&progress,"exact-search fixture controls");
   field->setText("ticket 33");
   need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 33"&&lookups.isEmpty()&&!next->isEnabled(),
        "cached exact lookup did not project one ticket without waiting");
-  field->setText("101");wait();
+  field->setText("101");
+  need(progress->isVisible()&&progress->parentWidget()==result->viewport()&&result->rowCount()==0,
+       "the pending search indicator is outside the empty table");
+  need(progress->geometry().center()==result->viewport()->rect().center(),
+       "the pending search indicator is not centered in the table");
+  wait();
   need(lookups.size()==1&&lookups.first().number=="101"&&result->rowCount()==0&&!copy->isEnabled(),"old details remained active in an exact lookup");
   field->setText("102");wait();
   need(lookups.size()==1,"overlapping exact history calls");
@@ -207,15 +236,65 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
   auto missing=currentPage;
   for(const auto* key:{"leases","audits","reports"})missing.insert(key,QJsonArray{});
   auto latest=lookups.takeFirst();latest.callback(missing,{});
-  need(result->rowCount()==0,"verified negative produced ticket rows");
+  need(result->rowCount()==0&&!progress->isVisible(),"verified negative did not settle its loading indicator");
   reload->click();wait();
   need(lookups.size()==1&&lookups.first().number=="102","Refresh did not retry the same negative lookup");
   auto match=currentPage;
-  auto lease=leases.first().toObject();lease.insert("ticket_number","102");
-  match.insert("leases",QJsonArray{lease});match.insert("reports",QJsonArray{reports.first()});
-  match.insert("audits",QJsonArray{audits.first()});
-  auto fresh=lookups.takeFirst();fresh.callback(match,{});
-  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 102"&&copy->isEnabled(),
+  auto lease=leases.first().toObject();lease.insert("request",remoteRequest);
+  lease.insert("ticket_number","102");lease.insert("start","1505");lease.insert("end","1510");
+  auto remoteReport=reports.first().toObject();remoteReport.insert("request_id",remoteRequest);
+  auto remoteAudit=audits.first().toObject();remoteAudit.insert("request_id",remoteRequest);
+  match.insert("leases",QJsonArray{lease});match.insert("reports",QJsonArray{remoteReport});
+  match.insert("audits",QJsonArray{remoteAudit});
+  auto fresh=lookups.takeFirst();
+  need(atlas->property("pgn_ticket_atlas_snapshot").toJsonObject().value("details").toArray().size()==1,
+       "actual Atlas has the off-page assignment before the exact summary");
+  const auto markerReads=extraDetailReads;
+  atlas->embeddedCommand({{"action","inspect"},{"request",remoteRequest}});
+  need(extraDetailReads==markerReads&&result->rowCount()==0&&!copy->isEnabled(),
+       "off-page Atlas marker bypassed the active search");
+  const auto summaryLease=QJsonObject{{"request",lease.value("request")},{"ticket_number","102"},
+     {"start",lease.value("start")},{"end",lease.value("end")},{"stage","audits_passed"}};
+  auto summary=currentPage;
+  summary.insert("leases",QJsonArray{summaryLease});summary.insert("reports",QJsonArray{});
+  summary.insert("audits",QJsonArray{});summary.insert("ticket_search_summary",true);
+  auto wrongBranch=summary;
+  wrongBranch.insert("bestblockhash",QString(64,'9'));
+  fresh.summary(wrongBranch);
+  need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),"a summary from another tip appeared");
+  fresh.summary(summary);
+  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 102"&&!progress->isVisible()&&!copy->isEnabled(),
+       "verified range did not show before full details or exposed an action prematurely");
+  need(result->item(0,2)->toolTip().contains("have not been loaded"),"summary states that an existing report was not submitted");
+  const auto readsBeforeClick=extraDetailReads;
+  atlas->embeddedCommand({{"action","inspect"},{"request",remoteRequest}});
+  need(!copy->isEnabled()&&extraDetailReads==readsBeforeClick,
+       "Atlas click on the same ticket treated the summary as complete");
+  auto* pendingFilter=searchable.findChild<QComboBox*>("pgn-network-ticket-filter");
+  pendingFilter->setCurrentIndex(1);
+  need(result->rowCount()==0&&!copy->isEnabled(),"passed summary appeared under Assigned");
+  pendingFilter->setCurrentIndex(2);
+  need(result->rowCount()==1&&!copy->isEnabled(),"passed summary disappeared from Report submitted");
+  pendingFilter->setCurrentIndex(3);
+  need(result->rowCount()==1&&!copy->isEnabled(),"passed summary disappeared from Audits passed");
+  result->selectRow(0);
+  need(!copy->isEnabled(),"selecting a summary exposed evidence controls");
+  pendingFilter->setCurrentIndex(0);
+  const auto unrelated=leases[34].toObject();
+  holdPageSeek=true;
+  atlas->inspect(unrelated.value("request").toString(),unrelated.value("ticket_number").toString());
+  need(heldSeeks==1&&copy->isEnabled(),"a different verified ticket waits for page navigation");
+  const auto evidence=searchable.property("pgn_selected_ticket_evidence").toJsonObject();
+  result->setCurrentCell(0,0);result->selectRow(0);
+  need(!result->item(0,0)->isSelected()&&copy->isEnabled()&&
+       evidence.value("leases").toArray().first().toObject().value("request")==unrelated.value("request")&&
+       searchable.property("pgn_selected_ticket_evidence").toJsonObject()==evidence,
+       "an unverified summary cannot appear selected over unrelated verified evidence");
+  holdPageSeek=false;
+  fresh.callback(match,{});
+  result->clearSelection();result->selectRow(0);
+  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 102"&&!progress->isVisible()&&copy->isEnabled()&&
+       searchable.property("pgn_selected_ticket_evidence").toJsonObject().value("leases").toArray().first().toObject().value("request")==remoteRequest,
        "fresh assignment and its exact evidence did not replace the negative result");
   auto* filter=searchable.findChild<QComboBox*>("pgn-network-ticket-filter");
   filter->setCurrentIndex(1);
@@ -223,6 +302,22 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
        "filter hid the result without retiring its evidence actions");
   filter->setCurrentIndex(0);
   need(result->rowCount()==1&&copy->isEnabled(),"clearing exact filter did not restore matching evidence");
+  field->clear();
+  currentPage.insert("height",202);currentPage.insert("bestblockhash",QString(64,'3'));
+  currentPage.insert("reports",QJsonArray{});currentPage.insert("audits",QJsonArray{});
+  reload->click();app.processEvents();
+  field->setText("ticket 33");
+  need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),
+       "an incomplete on-page ticket reused old detail evidence");
+  wait();
+  need(lookups.size()==1&&lookups.front().number=="33",
+       "an incomplete on-page match did not issue exactly one explicit lookup");
+  const auto beforeMapClicks=extraDetailReads;
+  atlas->inspect(leases[32].toObject().value("request").toString(),"33");
+  need(extraDetailReads==beforeMapClicks&&!copy->isEnabled(),
+       "Atlas bypassed the pending complete lookup for the same visible ticket");
+  atlas->inspect(leases[35].toObject().value("request").toString(),"36");
+  need(extraDetailReads==beforeMapClicks+1,"an unrelated Atlas selection was blocked during a search");
  }
  std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
  }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}

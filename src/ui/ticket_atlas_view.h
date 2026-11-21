@@ -41,7 +41,7 @@ class TicketAtlasView final:public QWidget {
 public:
     using Reply=std::function<void(QJsonObject,QString)>;
     using Reader=std::function<void(const QString&,const QString&,int,Reply)>;
-    std::function<void(const QString&)> inspect;
+    std::function<void(const QString&,const QString&)> inspect;
     std::function<void()> onViewportChanged;
 private:
     using Int=pgn::wallet::AtlasInteger;
@@ -49,6 +49,7 @@ private:
     QTimer debounce_,poll_;QLabel *status_,*domain_;QVector<QPair<QRectF,QJsonObject>> hits_;
     QPoint pressed_;Int pressedFirst_{},pressedLast_{};bool dragging_{},busy_{},pending_{},autoFocused_{},bitScale_{},pressedBitScale_{},embedded_{};
     bool startupWarm_{};
+    int embeddedPanSequence_{};
     bool readable()const{return startupWarm_||isVisible()||(embedded_&&parentWidget()&&parentWidget()->isVisible());}
     static QColor color(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).color;}
     static QString stageTitle(size_t s){return ticketStagePresentation(pgn::wallet::AtlasStates[s]).text;}
@@ -105,6 +106,11 @@ private:
             if(guard->pending_)guard->requestSoon();
         });
     }
+    void selectTicket(const QJsonObject& row){
+        const auto id=row.value("request").toString();
+        if(inspect)inspect(id,row.value("ticket_number").toString());
+        else setSelected(id);
+    }
     void inspectRange(const QString& start,const QString& end,const QString& stage={}){
         const QPointer<TicketAtlasView> guard(this);const auto viewportStart=first_,viewportEnd=last_;const auto position=QCursor::pos();
         reader_(start,end,256,[guard,viewportStart,viewportEnd,stage,position](QJsonObject value,QString error){
@@ -119,10 +125,9 @@ private:
                     :QString("No ticket details available for this marker"));
                 return;
             }
-            const auto select=[guard](const QString& id){if(guard){guard->setSelected(id);if(guard->inspect)guard->inspect(id);}};
-            if(rows.size()==1&&!partial){select(rows.first().toObject().value("request").toString());return;}
+            if(rows.size()==1&&!partial){guard->selectTicket(rows.first().toObject());return;}
             auto* menu=new QMenu(guard);menu->setAttribute(Qt::WA_DeleteOnClose);
-            for(const auto& item:rows){const auto row=item.toObject();const auto id=row.value("request").toString();auto* action=menu->addAction("Ticket "+row.value("ticket_number").toString()+" · "+id.left(12));QObject::connect(action,&QAction::triggered,guard,[select,id]{select(id);});}
+            for(const auto& item:rows){const auto row=item.toObject();const auto id=row.value("request").toString();auto* action=menu->addAction("Ticket "+row.value("ticket_number").toString()+" · "+id.left(12));QObject::connect(action,&QAction::triggered,guard,[guard,row]{if(guard)guard->selectTicket(row);});}
             if(partial){menu->addSeparator();menu->addAction("More tickets here · zoom in to narrow the view")->setEnabled(false);}
             menu->popup(position);
         });
@@ -227,16 +232,16 @@ protected:
     void mousePressEvent(QMouseEvent* e)override{if(e->button()==Qt::LeftButton&&plot().contains(e->position())&&!snapshot_.isEmpty()){dragging_=true;pressed_=e->position().toPoint();pressedFirst_=first();pressedLast_=last();pressedBitScale_=bitScale_;setCursor(Qt::ClosedHandCursor);e->accept();}else QWidget::mousePressEvent(e);}
     void mouseMoveEvent(QMouseEvent* e)override{if(dragging_){const int dx=e->position().toPoint().x()-pressed_.x();if(pressedBitScale_){const auto a=atlasBitCoordinate(pressedFirst_),b=atlasBitCoordinate(pressedLast_);const auto delta=(Int(b-a)*dx/int(std::max(1.,plot().width()))).convert_to<qint64>();viewport(atlasBitInteger(a-delta),atlasBitInteger(b-delta));}else{const Int delta=(pressedLast_-pressedFirst_)*dx/int(std::max(1.,plot().width()));viewport(pressedFirst_-delta,pressedLast_-delta);}e->accept();}else QWidget::mouseMoveEvent(e);}
     void mouseReleaseEvent(QMouseEvent* e)override{if(!dragging_){QWidget::mouseReleaseEvent(e);return;}dragging_=false;setCursor(Qt::OpenHandCursor);
-        if((e->position().toPoint()-pressed_).manhattanLength()<6){QStringList found;for(const auto& hit:hits_)if(hit.first.contains(e->position())){
+        if((e->position().toPoint()-pressed_).manhattanLength()<6){QList<QJsonObject> found;for(const auto& hit:hits_)if(hit.first.contains(e->position())){
                 if(hit.second.value("atlas_bin").toBool()){
                     inspectRange(hit.second.value("start").toString(),hit.second.value("end").toString(),
                                  hit.second.value("stage").toString());
                     return;
                 }
-                found.append(hit.second.value("request").toString());
+                found.append(hit.second);
             }
-            if(found.size()==1){setSelected(found.first());if(inspect)inspect(selected_);return;}
-            if(found.size()>1){auto* menu=new QMenu(this);menu->setAttribute(Qt::WA_DeleteOnClose);for(const auto& id:found){auto* action=menu->addAction(id.left(16));connect(action,&QAction::triggered,this,[this,id]{setSelected(id);if(inspect)inspect(id);});}menu->popup(e->globalPosition().toPoint());return;}
+            if(found.size()==1){selectTicket(found.first());return;}
+            if(found.size()>1){auto* menu=new QMenu(this);menu->setAttribute(Qt::WA_DeleteOnClose);for(const auto& row:found){auto* action=menu->addAction(row.value("request").toString().left(16));connect(action,&QAction::triggered,this,[this,row]{selectTicket(row);});}menu->popup(e->globalPosition().toPoint());return;}
         }
         requestSoon();e->accept();
     }
@@ -269,10 +274,15 @@ public:
         else if(action=="zoom")zoom(std::clamp(command.value("steps").toInt(),-4,4),plot().left()+plot().width()*std::clamp(command.value("x_ppm").toInt(500000),0,1000000)/1000000.);
         else if(action=="shift"&&!snapshot_.isEmpty()){
             const int delta=std::clamp(command.value("delta_ppm").toInt(),-1000000,1000000);
+            embeddedPanSequence_=command.value("pan_sequence").toInt();
             if(bitScale_){const auto a=atlasBitCoordinate(first()),b=atlasBitCoordinate(last()),d=(Int(b-a)*delta/1000000).convert_to<qint64>();viewport(atlasBitInteger(a+d),atlasBitInteger(b+d));}
             else{const Int d=(last()-first())*delta/1000000;viewport(first()+d,last()+d);}requestSoon();
         }else if(action=="inspect"){
-            const auto id=command.value("request").toString();for(const auto& row:snapshot_.value("details").toArray())if(row.toObject().value("request")==id){setSelected(id);if(inspect)inspect(id);break;}
+            const auto id=command.value("request").toString();
+            for(const auto& entry:snapshot_.value("details").toArray()){
+                const auto row=entry.toObject();
+                if(row.value("request")==id){selectTicket(row);break;}
+            }
         }
         if(onViewportChanged)onViewportChanged();
     }
@@ -282,7 +292,7 @@ public:
     QJsonObject auditProjection(const QJsonArray& audits,QWidget* surface)const{
         QJsonObject result;if(!surface||first_.isEmpty()||surface->width()<1||surface->height()<1)return result;
         if(startupWarm_&&(!autoFocused_||snapshot_.value("start")!=first_||snapshot_.value("end")!=last_))return result;
-        if(embedded_){auto map=snapshot_;map.insert("start",first_);map.insert("end",last_);map.insert("bit_scale",bitScale_);map.insert("selected",selected_);result.insert("__atlas",map);}
+        if(embedded_){auto map=snapshot_;map.insert("start",first_);map.insert("end",last_);map.insert("bit_scale",bitScale_);map.insert("pan_sequence",embeddedPanSequence_);map.insert("selected",selected_);result.insert("__atlas",map);}
         auto rows=audits;if(rows.isEmpty()){const auto details=snapshot_.value("details").toArray();for(int i=0;i<4&&!details.isEmpty();++i){auto row=details[std::min(details.size()-1,qsizetype(i)*details.size()/4)].toObject();row.insert("request_id",row.value("request"));rows.append(row);}}
         for(const auto& entry:rows){const auto row=entry.toObject();if(!row.value("start").isString()||!row.value("end").isString())continue;
             const Int a=pgn::wallet::atlasInteger(row.value("start")),b=pgn::wallet::atlasInteger(row.value("end"));if(b<=a)continue;const Int midpoint=a+(b-a)/2;

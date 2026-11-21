@@ -996,14 +996,15 @@ void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QStri
   });
  });
 }
-void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJsonObject,QString)> consume){
+void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJsonObject,QString)> consume,
+                                   std::function<void(QJsonObject)> summary){
  if(number.isEmpty()||number.size()>80||number=="0"||number.startsWith('0')){
   consume({},"Enter a ticket number greater than zero");return;
  }
  for(const auto digit:number)if(digit<'0'||digit>'9'){
   consume({},"Enter a ticket number in decimal");return;
  }
- auto search=[this,number,consume=std::move(consume)](QJsonObject domain,QString error)mutable{
+ auto search=[this,number,consume=std::move(consume),summary=std::move(summary)](QJsonObject domain,QString error)mutable{
   if(!error.isEmpty()){consume({},error);return;}
   QString start,end;
   try{
@@ -1014,7 +1015,7 @@ void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJso
    const AtlasInteger last=first+width;
    start=QString::fromStdString(first.str());end=QString::fromStdString((last<limit?last:limit).str());
   }catch(const std::exception&){consume({},"Core ticket domain is invalid");return;}
-  readTicketAtlas(start,end,1,[this,number,consume=std::move(consume)](QJsonObject atlas,QString error)mutable{
+  readTicketAtlas(start,end,1,[this,number,consume=std::move(consume),summary=std::move(summary)](QJsonObject atlas,QString error)mutable{
    if(!error.isEmpty()){consume({},error);return;}
    const auto rows=atlas.value("details").toArray();
    if(rows.isEmpty()&&!atlas.value("details_truncated").toBool()){
@@ -1024,6 +1025,8 @@ void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJso
    }
    const auto row=rows.isEmpty()?QJsonObject{}:rows.first().toObject();
    if(rows.size()!=1||row.value("ticket_number").toString()!=number){consume({},"Core returned a different ticket");return;}
+   if(summary)summary({{"genesis",atlas.value("genesis")},{"bestblockhash",atlas.value("bestblockhash")},
+      {"height",atlas.value("height")},{"leases",QJsonArray{row}},{"ticket_search_summary",true}});
    readTicketDetails(row.value("request").toString(),[number,consume=std::move(consume)](QJsonObject state,QString error)mutable{
     if(error.isEmpty()&&state.value("leases").toArray().first().toObject().value("ticket_number").toString()!=number)
      error="Ticket changed while searching";

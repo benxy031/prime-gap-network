@@ -513,7 +513,7 @@ int main(int argc,char** argv) {
  pgn::ui::selectNativeGraphAxis(canvas,"length");
  QWidget* community=nullptr;QTableWidget* testnetTickets=nullptr;
  pgn::ui::NetworkWorkView* networkWork=nullptr;pgn::ui::AuditAnimationView* auditAnimation=nullptr;
- if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});networkWork->setTicketNumberReader([&inspectWallet](const QString& number,auto done){pgn::ui::readWalletTicketNumber(inspectWallet,number,std::move(done));});community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
+ if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});networkWork->setTicketNumberReader([&inspectWallet](const QString& number,auto done,auto summary){pgn::ui::readWalletTicketNumber(inspectWallet,number,std::move(done),std::move(summary));});community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
 #ifdef Q_OS_WIN
  if(networkWork){auto* animation=new pgn::ui::AuditAnimationView([&inspectWallet](qint64 height,const QString& hash,const QJsonArray& watched,auto done){pgn::ui::readWalletAuditActivity(inspectWallet,height,hash,watched,std::move(done));},[networkWork](const QJsonArray& rows,QWidget* surface){return networkWork->auditProjection(rows,surface);});networkWork->onAtlasProjectionChanged=[animation]{animation->reproject();};animation->onAtlasCommand=[networkWork](const QJsonObject& command){networkWork->atlasCommand(command);};networkWork->setAuditAnimation(animation);auditAnimation=animation;}
 #endif
@@ -613,13 +613,23 @@ int main(int argc,char** argv) {
  miningBox->addWidget(tabs,1);
  auto* major=new QStackedWidget;major->setObjectName("pgn-primary-workspaces");major->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Ignored);major->addWidget(miningWorkspace);
   markStartup(4,"Opening the wallet connection and device controls");
-  inspectWallet=pgn::ui::createWalletCoreView(root,[canvas,identity,networkObservation,displayNetwork](const auto& observation){
+  inspectWallet=pgn::ui::createWalletCoreView(root,[canvas,identity,miningResults,networkObservation,displayNetwork](const auto& observation){
    *networkObservation=observation;displayNetwork();
+    pgn::ui::observeMiningNetworkTip(miningResults,observation?observation->genesis:QString{},
+        observation?observation->tipHash:QString{},observation?observation->height:-1);
   pgn::ui::presentNetwork(canvas,observation);
   identity->setText(observation?"PRIME GAP NETWORK · VERIFIED WALLET CORE · GPU SOURCE / INDEPENDENT PROOF":
    "PRIME GAP NETWORK · GPU SOURCE / INDEPENDENT PROOF · WALLET SERVICE NOT CONNECTED");
  },testnetMode);
-  pgn::ui::bindWalletNetworkMetrics(inspectWallet,miningResults,[miningResults,networkObservation](const QJsonObject& metrics,const QString& error){const auto& anchor=*networkObservation;const bool same=error.isEmpty()&&anchor&&anchor->freshAt(QDateTime::currentDateTimeUtc())&&metrics.value("genesis")==anchor->genesis&&metrics.value("bestblockhash")==anchor->tipHash&&metrics.value("height").toInteger(-1)==anchor->height;pgn::ui::presentMiningNetworkMetrics(miningResults,same?metrics:QJsonObject{},same?anchor->genesis:QString{});});
+  pgn::ui::bindWalletNetworkMetrics(inspectWallet,miningResults,
+    [miningResults,networkObservation](const QJsonObject& metrics,const QString& error){
+     const auto& anchor=*networkObservation;
+     // Core verifies the metrics against its block at the sampled height.
+     // The panel also checks for a conflict with the wallet's latest observed tip.
+     const bool usable=error.isEmpty()&&anchor&&anchor->freshAt(QDateTime::currentDateTimeUtc());
+     pgn::ui::presentMiningNetworkMetrics(miningResults,usable?metrics:QJsonObject{},
+         anchor?anchor->genesis:QString{});
+    });
   if(!startup.diagnostic.isEmpty()){auto* notice=new QLabel(startup.diagnostic,inspectWallet);notice->setObjectName("pgn-startup-network-notice");notice->setTextFormat(Qt::PlainText);notice->setWordWrap(true);if(auto* box=qobject_cast<QBoxLayout*>(inspectWallet->layout()))box->insertWidget(0,notice);}
   major->addWidget(inspectWallet);ticketProgressRail->bindTicketLookup([&inspectWallet](const QString& request,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,request,std::move(consume));});
  auto socialConnection=std::make_shared<QPointer<pgn::social::CoreSocialService>>();
@@ -646,7 +656,10 @@ int main(int argc,char** argv) {
   pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection,target](QJsonValue value,QString error){if(!target||*displayConnection!=target)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)target->open(object["scriptPubKey"].toString());else target->open();});
  };
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
- auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
+ const auto socialRoot=pgn::app::mutableDataRoot(root)+"/social";
+ auto* social=new pgn::ui::SocialView(socialRoot+"/drafts.json",std::move(socialServices));
+ social->setLeaderboardCacheScope(socialRoot+"/leaderboard",installedGenesis);
+ major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
  *syncSocial=[socialConnection,displayConnection,accessConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{

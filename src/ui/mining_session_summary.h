@@ -13,7 +13,6 @@
 #include <QPushButton>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QSettings>
 #include <QHelpEvent>
 #include <QContextMenuEvent>
 #include <QToolTip>
@@ -28,7 +27,20 @@ class MiningSessionSummary final:public QWidget {
     QJsonObject ticket_,session_,history_,context_,productivity_;QRectF trackedRect_,timingRect_,rosettesRect_;QString scopeKey_{"session"};QPushButton *ticketButton_,*sessionButton_,*historyButton_;
     QElapsedTimer received_;QScrollBar* scroll_{};
     QElapsedTimer productivityClock_;ObservedTicketProductivity observedProductivity_;
-    QJsonObject coreMetrics_;QString coreGenesis_;QElapsedTimer coreReceived_;bool coreBound_{};
+    QJsonObject coreMetrics_;
+    QString coreGenesis_,networkTipHash_;
+    qint64 networkTipHeight_{-1};
+    QElapsedTimer coreReceived_;
+    bool coreBound_{},coreDelayed_{},networkTipKnown_{};
+    void clearNetworkMetrics(){
+        coreMetrics_={};coreReceived_.invalidate();coreDelayed_=false;
+    }
+    void setNetworkGenesis(const QString& genesis){
+        if(genesis.isEmpty()||genesis==coreGenesis_)return;
+        clearNetworkMetrics();coreGenesis_=genesis;
+        networkTipHash_.clear();networkTipHeight_=-1;
+        networkTipKnown_=false;
+    }
     QJsonObject networkSummary()const{const auto sourceGenesis=context_.value("genesis").toString();if(coreBound_&&!sourceGenesis.isEmpty()&&sourceGenesis!=coreGenesis_)return {{"available",false},{"rows",QJsonArray{}}};return coreBound_?networkMiningCoreSummary(coreMetrics_,coreGenesis_,coreReceived_.isValid()?coreReceived_.elapsed():90001):networkMiningSummary(context_,received_.isValid()?received_.elapsed():0);}
     const QJsonObject& scope()const{return scopeKey_=="ticket"?ticket_:scopeKey_=="history"?history_:session_;}
     static QString scalar(const QJsonObject& object,const char* key){return object.contains(key)?object.value(key).toVariant().toString():QString("—");}
@@ -44,7 +56,7 @@ class MiningSessionSummary final:public QWidget {
         return {scalar(data,"completed_tickets"),scalar(data,"ticket_count"),positionFormats(scalar(data,"positions")).decimal,positionFormats(scalar(data,"tests")).decimal,data.contains("active_time_ns")?QString("%1:%2:%3").arg(secs/3600,2,10,QChar('0')).arg(secs/60%60,2,10,QChar('0')).arg(secs%60,2,10,QChar('0')):QString("—"),average,medal("gold"),medal("silver"),medal("bronze"),medal("rust"),best.isEmpty()?QString("—"):QString::number(best.first().toObject().value("gap").toInt())};
     }
 
-    void mode(const QString& selected){scopeKey_=selected;ticketButton_->setChecked(selected=="ticket");sessionButton_->setChecked(selected=="session");historyButton_->setChecked(selected=="history");QSettings().setValue("mining/statisticsScope",selected);setProperty("pgn_summary_scope",selected);describe();update();if(onScopeChanged)onScopeChanged(selected);}
+    void mode(const QString& selected){scopeKey_=selected;ticketButton_->setChecked(selected=="ticket");sessionButton_->setChecked(selected=="session");historyButton_->setChecked(selected=="history");setProperty("pgn_summary_scope",selected);describe();update();if(onScopeChanged)onScopeChanged(selected);}
     void describe(){setProperty("pgn_summary_statistics",scope());setToolTip(QString{});setProperty("pgn_summary_range_start",context_.value("start").toString());setProperty("pgn_summary_range_end",context_.value("end").toString());}
 
 public:
@@ -52,11 +64,38 @@ public:
     QString selectedScope()const{return scopeKey_;}
     void presentTicket(const QJsonObject& ticket){ticket_=ticket;describe();update();}
     explicit MiningSessionSummary(QWidget* parent=nullptr):QWidget(parent){
-        setObjectName("pgn-session-statistics");setMinimumSize(0,0);setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Ignored);ticketButton_=new QPushButton("Ticket",this);ticketButton_->setObjectName("pgn-summary-ticket");sessionButton_=new QPushButton("Session",this);historyButton_=new QPushButton("History",this);sessionButton_->setObjectName("pgn-summary-session");historyButton_->setObjectName("pgn-summary-history");for(auto* button:{ticketButton_,sessionButton_,historyButton_}){button->setCheckable(true);button->setAutoExclusive(true);button->setStyleSheet("QPushButton{background:#08232b;color:#9fc8c3;border:1px solid #2a5a61;font-size:12px;padding:0;} QPushButton:checked{background:#17584f;color:#eafff5;border-color:#69efc5;} QPushButton:hover{border-color:#9ffff0;}");}connect(ticketButton_,&QPushButton::clicked,this,[this]{mode("ticket");});connect(sessionButton_,&QPushButton::clicked,this,[this]{mode("session");});connect(historyButton_,&QPushButton::clicked,this,[this]{mode("history");});scroll_=new QScrollBar(Qt::Vertical,this);scroll_->setObjectName("pgn-summary-scroll");scroll_->setSingleStep(22);scroll_->setStyleSheet("QScrollBar:vertical{background:#071b22;width:9px;border:0;}QScrollBar::handle:vertical{background:#387b78;min-height:22px;border-radius:4px;}QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}");connect(scroll_,&QScrollBar::valueChanged,this,[this]{update();});const auto selected=QSettings().value("mining/statisticsScope",QSettings().value("mining/summaryHistory",false).toBool()?"history":"session").toString();mode(QStringList{"ticket","session","history"}.contains(selected)?selected:QString("session"));
+        setObjectName("pgn-session-statistics");setMinimumSize(0,0);setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Ignored);ticketButton_=new QPushButton("Ticket",this);ticketButton_->setObjectName("pgn-summary-ticket");sessionButton_=new QPushButton("Session",this);historyButton_=new QPushButton("History",this);sessionButton_->setObjectName("pgn-summary-session");historyButton_->setObjectName("pgn-summary-history");for(auto* button:{ticketButton_,sessionButton_,historyButton_}){button->setCheckable(true);button->setAutoExclusive(true);button->setStyleSheet("QPushButton{background:#08232b;color:#9fc8c3;border:1px solid #2a5a61;font-size:12px;padding:0;} QPushButton:checked{background:#17584f;color:#eafff5;border-color:#69efc5;} QPushButton:hover{border-color:#9ffff0;}");}connect(ticketButton_,&QPushButton::clicked,this,[this]{mode("ticket");});connect(sessionButton_,&QPushButton::clicked,this,[this]{mode("session");});connect(historyButton_,&QPushButton::clicked,this,[this]{mode("history");});scroll_=new QScrollBar(Qt::Vertical,this);scroll_->setObjectName("pgn-summary-scroll");scroll_->setSingleStep(22);scroll_->setStyleSheet("QScrollBar:vertical{background:#071b22;width:9px;border:0;}QScrollBar::handle:vertical{background:#387b78;min-height:22px;border-radius:4px;}QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}");connect(scroll_,&QScrollBar::valueChanged,this,[this]{update();});mode("session");
         auto* freshness=new QTimer(this);freshness->setInterval(1000);connect(freshness,&QTimer::timeout,this,[this]{const bool available=networkSummary().value("available").toBool();if(property("pgn_network_summary_available").toBool()!=available)update();});freshness->start();
     }
     void present(const QJsonObject& session,const QJsonObject& history,const QJsonObject& context){session_=session;history_=history;context_=context;received_.start();describe();update();}
-    void presentNetworkMetrics(const QJsonObject& metrics,const QString& genesis){coreBound_=true;coreMetrics_=metrics;coreGenesis_=genesis;coreReceived_.start();update();}
+    void observeNetworkTip(const QString& genesis,const QString& hash,qint64 height){
+        setNetworkGenesis(genesis);
+        networkTipKnown_=!genesis.isEmpty()&&!hash.isEmpty()&&height>=0;
+        if(networkTipKnown_){
+            const auto cachedHeight=coreMetrics_.value("height").toInteger(-1);
+            const bool changedBranch=height<networkTipHeight_||
+                (height==networkTipHeight_&&hash!=networkTipHash_)||
+                (height==cachedHeight&&coreMetrics_.value("bestblockhash")!=hash);
+            if(changedBranch)clearNetworkMetrics();
+            networkTipHash_=hash;networkTipHeight_=height;
+        }
+        if(!coreMetrics_.isEmpty()&&(!networkTipKnown_||
+           coreMetrics_.value("bestblockhash")!=networkTipHash_))coreDelayed_=true;
+        update();
+    }
+    void presentNetworkMetrics(const QJsonObject& metrics,const QString& genesis){
+        coreBound_=true;if(coreGenesis_.isEmpty())coreGenesis_=genesis;
+        const auto height=metrics.value("height").toInteger(-1);
+        const bool matchesTip=networkTipKnown_&&height==networkTipHeight_&&
+            metrics.value("bestblockhash")==networkTipHash_;
+        if(genesis==coreGenesis_&&networkMiningCoreSummary(metrics,genesis).value("available").toBool()&&
+           (!networkTipKnown_||height!=networkTipHeight_||matchesTip)&&
+           height>=coreMetrics_.value("height").toInteger(-1)){
+            coreMetrics_=metrics;coreReceived_.start();
+            coreDelayed_=networkTipHeight_>=0&&!matchesTip;
+        }else coreDelayed_=!coreMetrics_.isEmpty();
+        update();
+    }
     void presentProductivity(const QJsonArray& devices,const QString& width){if(!productivityClock_.isValid())productivityClock_.start();auto value=ticketProductivity(devices,width);value.insert("observed",observedProductivity_.observe(devices,width,productivityClock_.nsecsElapsed()));if(value==productivity_)return;productivity_=value;setProperty("pgn_ticket_productivity",value);update();}
 protected:
     bool event(QEvent* event)override{if(event->type()==QEvent::ToolTip){auto* help=static_cast<QHelpEvent*>(event);if(trackedRect_.contains(help->pos())){QToolTip::showText(help->globalPos(),"Distinct tickets included in this view: completed, current or paused. Tickets done counts completed calculation, not network audit acceptance.",this,trackedRect_.toRect());}else if(timingRect_.contains(help->pos())){QToolTip::showText(help->globalPos(),QString("Average compute time of %1 complete search tickets measured from the start. Audits and waiting are excluded. Partial or interrupted clock measurements are excluded.").arg(scope().value("completed_timed_tickets").toVariant().toLongLong()),this,timingRect_.toRect());}else if(rosettesRect_.contains(help->pos())){QToolTip::showText(help->globalPos(),"Discovered rosettes against each ticket's original unrounded target. These counts do not mean audited, accepted or paid. A dash means older statistics did not retain that complete count.",this,rosettesRect_.toRect());}else QToolTip::hideText();event->accept();return true;}return QWidget::event(event);}
@@ -91,7 +130,11 @@ protected:
         const auto coverage=networkBitCoverage(coreMetrics_,coreGenesis_,context_.value("bits").toInt(),coreReceived_.isValid()?coreReceived_.elapsed():90001);
         const bool hasCoverage=coreBound_&&network.value("available").toBool()&&coverage.value("available").toBool();
         setProperty("pgn_bit_range_coverage",hasCoverage?coverage:QJsonObject{{"available",false}});
-        setProperty("pgn_network_summary_available",network.value("available"));setProperty("pgn_network_summary",network);
+        const bool networkAvailable=network.value("available").toBool();
+        const bool networkDelayed=networkAvailable&&coreBound_&&coreDelayed_;
+        setProperty("pgn_network_summary_available",networkAvailable);
+        setProperty("pgn_network_summary_delayed",networkDelayed);
+        setProperty("pgn_network_summary",network);
         constexpr double top=32.,domainHeight=22.,rateHeight=22.,networkHeight=116.;
         const double coverageHeight=hasCoverage?64.:0.;
         const bool footer=height()>=560;
@@ -133,7 +176,10 @@ protected:
         const auto total=observed.isDouble()?observed:productivity_.value("total_tickets_per_hour");const QString rate=total.isDouble()?(observed.isDouble()?QString{}:QString("≈ "))+QString::number(total.toDouble(),'g',3):QString("—");
         const double rateY=y;row("Tickets/h",rate,rateHeight);setProperty("pgn_productivity_regions",QJsonArray{QJsonObject{{"label","Tickets/h"},{"value",rate},{"y",rateY-offset},{"height",rateHeight}}});
         p.setPen(QColor("#2b5961"));p.drawLine(QPointF(left,y+3),QPointF(left+usable,y+3));y+=8;
-        p.setFont(font);p.setPen(QColor("#69efc5"));const auto seconds=network.value("window_seconds").toInteger();const QString networkTitle=network.value("available").toBool()?QString("Network · %1 min").arg(seconds/60.):QString("Network · unavailable");
+        p.setFont(font);p.setPen(QColor(networkDelayed?"#edc17c":"#69efc5"));
+        const auto seconds=network.value("window_seconds").toInteger();
+        const QString networkTitle=!networkAvailable?QString("Network · unavailable"):
+            networkDelayed?QString("Network · last verified"):QString("Network · %1 min").arg(seconds/60.);
         p.drawText(QRectF(left,y,usable,18),Qt::AlignVCenter,p.fontMetrics().elidedText(networkTitle,Qt::ElideRight,int(usable)));region("Network",networkTitle,QRectF(left,y,usable,18),font.pixelSize());y+=18;
         QJsonArray networkRegions;auto rows=network.value("rows").toArray();
         if(rows.isEmpty())for(const auto* label:{"Registered operators","Reporting miners","Reported search","Gold merit","Audit slots pending"})rows.append(QJsonObject{{"label",label},{"value","—"}});

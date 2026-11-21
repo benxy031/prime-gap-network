@@ -47,6 +47,7 @@ private:
     QPushButton *previous_, *next_;
     QTimer timer_;
     quint64 searchGeneration_{};
+    WorkSearchIndicator* searchProgress_{};
     QJsonArray reports_, audits_;
     QJsonObject inspectedReport_, inspectedAudit_;
     QString selectedRequest_;
@@ -263,6 +264,7 @@ private:
             guard->busy_ = false;
             // A delayed reply must never relabel a different page's reports.
             if(page!=guard->offset_||generation!=guard->searchGeneration_){guard->refresh();return;}
+            guard->searchProgress_->setActive(false);
             if (!error.isEmpty()) {
                 guard->status_->setText("Audit state unavailable · " + error);
                 guard->status_->setStyleSheet("color:#ffbd69");
@@ -387,7 +389,11 @@ public:
         ticketSearch_->setPlaceholderText("Find an audit by ticket number");
         ticketSearch_->setClearButtonEnabled(true);
         ticketSearch_->hide();
-        box->addWidget(ticketSearch_);
+        auto* searchRow=new QHBoxLayout;
+        searchProgress_=new WorkSearchIndicator(table_->viewport());
+        searchProgress_->setObjectName("pgn-audit-search-progress");
+        searchRow->addWidget(ticketSearch_,1);
+        box->addLayout(searchRow);
         box->addWidget(table_, 1);
         connect(ticketSearch_,&QLineEdit::textChanged,this,[this](const QString& text){
             const auto generation=++searchGeneration_;
@@ -396,12 +402,13 @@ public:
             setProperty("pgn_audit_snapshot",QJsonObject{});
             setProperty("pgn_audit_reports",0);
             const auto number=exactWorkTicketNumber(text);
+            searchProgress_->setActive(!number.isEmpty());
             if(!text.trimmed().isEmpty()&&number.isEmpty()){
                 status_->setText("Enter a ticket number, for example 123");
                 return;
             }
             status_->setText(number.isEmpty()?QStringLiteral("Loading audit reports…"):QString("Looking up Ticket %1…").arg(number));
-            QTimer::singleShot(200,this,[this,generation]{if(searchGeneration_==generation)refresh();});
+            QTimer::singleShot(WorkTicketSearchDelayMs,this,[this,generation]{if(searchGeneration_==generation)refresh();});
         });
         detail_ = new QTreeWidget;
         detail_->setObjectName("pgn-audit-report-details");

@@ -266,6 +266,7 @@ public:
     }
     void productivity(const QJsonArray& devices,const QString& width){sessionSummary_->presentProductivity(devices,width);}
     void networkMetrics(const QJsonObject& metrics,const QString& genesis){sessionSummary_->presentNetworkMetrics(metrics,genesis);}
+    void observeNetworkTip(const QString& genesis,const QString& hash,qint64 height){sessionSummary_->observeNetworkTip(genesis,hash,height);}
     void recordEligibility(const QJsonArray& pairs){QSet<QString> keys;for(const auto& value:pairs){const auto pair=value.toObject();keys.insert(pair.value("lower_prime").toString()+":"+QString::number(pair.value("gap").toInt()));}if(keys==eligibleRecords_)return;eligibleRecords_=std::move(keys);fill(best_,latest_.best);fill(recent_,latest_.recent);}
     void ticketData(const QJsonObject& packet){
         if(packet.value("schema")!="PGN_HORIZON_MINING_VIEW_V1")return;if(ticketArchive_.retiredSource(packet.value("stream_id").toString()))return;ticketArchive_.observe(packet);setProperty("pgn_ticket_statistics_error",ticketArchive_.error());heading_->hide();detail_->hide();direct_=true;directPacket_=packet;if(cancel_)cancel_->store(true);
@@ -307,5 +308,6 @@ void presentMiningResultsSource(QWidget* widget,const FrontierTelemetrySnapshot&
 void presentMiningTicketData(QWidget* widget,const QJsonObject& packet){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->ticketData(packet);}
 void presentMiningProductivity(QWidget* widget,const QJsonArray& devices,const QString& width){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->productivity(devices,width);}
 void presentMiningNetworkMetrics(QWidget* widget,const QJsonObject& metrics,const QString& genesis){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->networkMetrics(metrics,genesis);}
+void observeMiningNetworkTip(QWidget* widget,const QString& genesis,const QString& hash,qint64 height){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->observeNetworkTip(genesis,hash,height);}
 void presentMiningResultsIndex(QWidget* widget,const QJsonObject& packet){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->index(packet);}
 }

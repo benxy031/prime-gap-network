@@ -16,8 +16,9 @@ public:
     explicit SocialView(QString draftPath,social::Services services={},QWidget* parent=nullptr);
     ~SocialView()override;
     void setIdentity(social::Identity identity);
+    void setLeaderboardCacheScope(QString directory, QString genesis);
     void refresh();void selectSection(social::Section section);bool saveDrafts();
-    void refreshExpiredLeaderboardWindow();
+    void refreshExpiredLeaderboardWindow(qint64 nowMs=QDateTime::currentMSecsSinceEpoch());
 private:
     struct Page{
         QLabel *counter{},*saved{},*reason{},*empty{},*count{},*composeContext{},*windowInfo{};
@@ -31,7 +32,7 @@ private:
         QStackedWidget *journey{},*dataSlot{};
         QVector<social::Entry> entries;QVector<social::Miner> miners;
         QDateTime observedUtc;QString selectedId,nextCursor,state{"offline"},statusText,chatHistoryGeneration;
-        bool loaded{},busy{},replyMode{};quint64 generation{};
+        bool loaded{},busy{},replyMode{},leaderboardSaved{};quint64 generation{};
         std::optional<social::LeaderboardPeriod> leaderboardPeriod;
         qint64 utcRefreshAttemptMs{};
         bool threadBusy{};quint64 threadGeneration{};
@@ -47,7 +48,9 @@ private:
     QVector<social::Window> leaderboardWindows_;
     QTimer leaderboardWarmTimer_;
     quint64 leaderboardIdentityGeneration_{};
+    QString leaderboardCacheDirectory_, leaderboardCacheGenesis_;
     bool leaderboardWarmInFlight_{};
+    int leaderboardStartupRetries_{};
     std::array<Page,4> pages_;QTabWidget* tabs_{};QLabel *account_{},*network_{},*status_{};QTimer autosave_;
     bool dirty_{},loadFailed_{},loadingDraft_{},chatPreedit_{};QString loadError_,replyId_,replyPostId_;
     int sortColumn_{1};bool sortDescending_{true};
@@ -63,7 +66,8 @@ private:
     void updateChatSend();void sendChat();
     void openRead(int index);void openComposer(int index,bool reply=false);void back(int index);void previewPublication(int index=1);
     void showDetail(int index,bool preserveScroll=false);void filter(int index);void renderMiners();void renderList(int index);
-    void selectLeaderboardWindow(int window);
+    void selectLeaderboardWindow(int window,bool restoreSaved=true);
+    bool restoreLeaderboard();
     void fetchLeaderboard(const social::ReadRequest& request,social::Services::Reply reply,bool retryExpired=true);
     void warmLeaderboard();
     void read(int index,bool more=false);void present(int index,const social::Snapshot& snapshot,bool append);

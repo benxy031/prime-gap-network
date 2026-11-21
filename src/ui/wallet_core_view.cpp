@@ -225,7 +225,7 @@ public:
   runtime_->onObservation=[this,observe=std::move(observe)](const auto& anchor){
    if(observe)observe(anchor);
    if(anchor&&anchor->tipHash!=networkDone_&&!networkBusy_)refreshNetwork();
-   if(anchor&&anchor->tipHash!=metricsTip_){metricsTip_=anchor->tipHash;metrics_->refresh();}
+   if(anchor)metrics_->observeTip(anchor->genesis,anchor->tipHash,anchor->height);
   };
   runtime_->onStatus=[this](const QString& text){const bool unconfigured=!QFileInfo::exists(runtime_->runtimeDirectory()+"/wallet-core.json");const auto setupError=management_->setupError();status_->setText(unconfigured?(!setupError.isEmpty()?setupError:setupOpen_?QString("Checking PGN Core files…"):QString("No wallet is connected yet. Click Create node and wallet below to use the suggested folder and connect.")):text);status_->setStyleSheet(runtime_->connected()?"color:#69efc5;font:11px monospace":"color:#ffbd69;font:11px monospace");};
    runtime_->onReady=[this,presentSetup](qint64){setProperty("pgn_wallet_setup_required",false);presentSetup();attachClock_.start();attach();accountPanel_->setEnabled(!runtime_->walletManager()->busy());accountPanel_->refreshWallet();metrics_->refresh();};
@@ -271,13 +271,17 @@ private:
  QVBoxLayout* viewport_{};WalletAccountPanel* accountPanel_{};WalletManagementPanel* management_{};QPointer<ComponentVersionsDialog> componentDialog_;bool setupOpen_{};quint64 displayGeneration_{};
  QTimer attachClock_;int attempts_{};
 
- NetworkMetricsHub* metrics_{};QString metricsTip_;
+ NetworkMetricsHub* metrics_{};
 };
 }
 QWidget* createWalletCoreView(const QString& root,WalletObservationSink observe,bool testnet){return new WalletCoreView(root,std::move(observe),testnet);}
 void readWalletTicketPage(QWidget* widget,int offset,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketPage(offset,std::move(consume));else consume({},"Wallet network view unavailable");}
 void readWalletTicketDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketDetails(id,std::move(consume));else consume({},"Wallet network view unavailable");}
-void readWalletTicketNumber(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketNumber(id,std::move(consume));else consume({},"Wallet network view unavailable");}
+void readWalletTicketNumber(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume,
+    std::function<void(QJsonObject)> summary){
+ if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketNumber(id,std::move(consume),std::move(summary));
+ else consume({},"Wallet network view unavailable");
+}
 void readWalletTicketAtlas(QWidget* widget,const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketAtlas(start,end,bins,std::move(consume));else consume({},"Wallet network atlas unavailable");}
 void readWalletAuditActivity(QWidget* widget,qint64 height,const QString& hash,const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditActivity(height,hash,watched,std::move(consume));else consume({},"Wallet network activity unavailable");}
 void readWalletAuditDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditDetails(id,std::move(consume));else consume({},"Wallet audit view unavailable");}
