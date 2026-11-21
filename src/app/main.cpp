@@ -1282,7 +1282,7 @@ int main(int argc,char** argv) {
 #ifdef _WIN32
    &bridge,&hardwareMonitor,
 #endif
-   canvas,miningStartupNotice,hardwareNotice,cpuFleet,ticketProgressRail,miningResults,records,testnetSummary,testnetProgress,pgn,status,gpuControls,inspectWallet,toolsButton,pendingUpdateResume](const QJsonObject& profile,QPushButton* miningToggle){
+   canvas,miningLayout,miningStartupNotice,hardwareNotice,cpuFleet,ticketProgressRail,miningResults,records,testnetSummary,testnetProgress,pgn,status,gpuControls,inspectWallet,toolsButton,pendingUpdateResume](const QJsonObject& profile,QPushButton* miningToggle){
    const auto device=profile.value("gpu_uuid").toString();
    if(device.isEmpty()||gpuControls->contains(device.toLower()))return;
    pgn::ui::registerMiningSourceDevice(canvas,device);
@@ -1300,6 +1300,15 @@ int main(int argc,char** argv) {
    }
 #endif
    auto* connectionRecovery=new pgn::mining::NetworkControllerRecovery(stream,&window);
+   // A transport warning is independent of genuine audit, ticket and control frames.
+   auto* liveDataNotice=new QLabel(miningStartupNotice->parentWidget());
+   liveDataNotice->setObjectName("pgn-gpu-live-data-notice");
+   liveDataNotice->setProperty("pgn_gpu_device_id",device);
+   liveDataNotice->setTextFormat(Qt::PlainText);
+   liveDataNotice->setWordWrap(true);
+   liveDataNotice->setStyleSheet(miningStartupNotice->styleSheet());
+   liveDataNotice->hide();
+   miningLayout->insertWidget(miningLayout->indexOf(miningStartupNotice)+1,liveDataNotice);
    auto applyMiningIntent=std::make_shared<std::function<void(bool)>>();
    auto networkMode=std::make_shared<bool>(false);auto pendingNetwork=std::make_shared<bool>(false);auto stopRequested=std::make_shared<bool>(false);auto pendingCard=std::make_shared<QStringList>();auto presentationSequence=std::make_shared<qint64>(0);auto gapRates=std::make_shared<pgn::mining::GapRateWindow>();
    gpuControls->insert(device.toLower(),[canvas,device,miningToggle,pendingCard,ticketProgressRail,applyMiningIntent](const QString& id,bool on){
@@ -1328,9 +1337,11 @@ int main(int argc,char** argv) {
      canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);canvas->setProperty("pgn_worker_stream_phase",packet.value("phase").toString());canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
      {auto intents=canvas->property("pgn_update_gpu_intents").toJsonObject();const auto device=profile.value("gpu_uuid").toString();auto entry=intents.value(device).toObject();entry.insert("phase",packet.value("phase"));intents.insert(device,entry);canvas->setProperty("pgn_update_gpu_intents",intents);}
      const bool sourceFresh=packet.value("source_stale").isBool()&&!packet.value("source_stale").toBool();
-     connectionRecovery->phase(packet.value("phase").toString(),sourceFresh);
+     const auto observedPhase=packet.value("phase").toString();
+     connectionRecovery->phase(observedPhase,sourceFresh&&!observedPhase.isEmpty()&&packet.value("schema")=="PGN_HORIZON_MINING_VIEW_V1");
      const auto controlPhase=pgn::mining::networkControlPhase(packet.value("phase").toString().toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
      if(controlPhase.suppressPresentation)continue;
+     if(controlPhase.acknowledgeOff)connectionRecovery->stopConfirmed();
      const bool showTicket=ticketProgressRail->workSource()=="GPU";
      if(packet.value("schema")!="PGN_HORIZON_MINING_VIEW_V1"){auto phaseFrame=canvas->property("pgn_network_ticket_frame").toJsonObject();phaseFrame.insert("phase",packet.value("phase").toString("Starting"));phaseFrame.insert("message",packet.value("message"));phaseFrame=pgn::ui::currentAssignmentPresentation(phaseFrame);canvas->setProperty("pgn_network_ticket_frame",phaseFrame);ticketProgressRail->present(phaseFrame);if(controlPhase.acknowledgeOff){*stopRequested=false;const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);if(!pendingCard->isEmpty()&&pendingCard->at(2)=="off"){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),true,"GPU released after checkpoint");pendingCard->clear();}}if(showTicket)testnetSummary->setText(packet.value("message").toString("Starting · waiting for the first coherent worker checkpoint"));if(packet.value("phase")=="Needs attention"){const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);miningToggle->setText("Start mining");*stopRequested=false;if(!pendingCard->isEmpty()){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),false,packet.value("message").toString());pendingCard->clear();}}continue;}
      packet=pgn::ui::currentAssignmentPresentation(packet);
@@ -1352,7 +1363,8 @@ int main(int argc,char** argv) {
      processDiagnostics->intent(on);
     if(on&&!canvas->property("pgn_vanity_gpu_lease").toString().isEmpty()){const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);testnetSummary->setText("GPU reserved by the vanity search");return;}
     {const QSignalBlocker blocked(miningToggle);miningToggle->setChecked(on);}
-    connectionRecovery->intent(on);canvas->setProperty("pgn_network_desired_on",on);
+    const bool newStop=!on&&*networkMode&&!*stopRequested;
+    connectionRecovery->intent(on,newStop);canvas->setProperty("pgn_network_desired_on",on);
     {auto intents=canvas->property("pgn_update_gpu_intents").toJsonObject();auto entry=intents.value(device).toObject();entry.insert("wanted",on);intents.insert(device,entry);canvas->setProperty("pgn_update_gpu_intents",intents);}
     miningToggle->setText(on?"Stop mining":"Stopping…");if(on)*stopRequested=false;if(!on){*stopRequested=true;*pendingNetwork=false;miningToggle->setEnabled(false);}
     if(stream->state()==QProcess::NotRunning){connectionRecovery->restartIfClosed();return;}
@@ -1379,12 +1391,14 @@ int main(int argc,char** argv) {
    connectionRecovery->mayReconnect=[&window,canvasGuard=QPointer<QWidget>(canvas)]{return canvasGuard&&!window.property("pgn_closing").toBool()&&canvasGuard->property("pgn_vanity_gpu_lease").toString().isEmpty();};
    connectionRecovery->reconnect=[startNetwork,canvas](bool wanted){canvas->setProperty("pgn_network_desired_on",wanted);canvas->setProperty("pgn_worker_reconnect_count",canvas->property("pgn_worker_reconnect_count").toInt()+1);startNetwork();};
    connectionRecovery->onWaiting=[canvas,testnetSummary,ticketProgressRail](int delay){canvas->setProperty("pgn_worker_reconnect_delay_ms",delay);testnetSummary->setText("Reconnecting · saved ticket retained");auto frame=canvas->property("pgn_network_ticket_frame").toJsonObject();frame.insert("phase","Reconnecting");frame.insert("source_stale",true);frame=pgn::ui::currentAssignmentPresentation(frame);canvas->setProperty("pgn_network_ticket_frame",frame);ticketProgressRail->present(frame);};
-   connectionRecovery->onSilent=[canvas,testnetSummary,ticketProgressRail]{
-    canvas->setProperty("pgn_worker_stream_phase","Waiting for connection");
-    auto frame=canvas->property("pgn_network_ticket_frame").toJsonObject();frame.insert("phase","Waiting for connection");frame.insert("source_stale",true);
-    frame=pgn::ui::currentAssignmentPresentation(frame);canvas->setProperty("pgn_network_ticket_frame",frame);ticketProgressRail->present(frame);
-    testnetSummary->setText("Waiting for live miner data · checkpoint retained");
+   connectionRecovery->awaitingStop=[networkMode,stopRequested]{return *networkMode&&*stopRequested;};
+   connectionRecovery->onSilent=[liveDataNotice,device,deviceName=profile.value("device_name").toString(),stopRequested]{
+    const auto label=QString("%1 (%2)").arg(deviceName.isEmpty()?QString("GPU"):deviceName,device.right(8));
+    liveDataNotice->setText(QString("%1 · %2").arg(label,*stopRequested?
+      QString("Stopping · waiting for controller confirmation"):QString("Waiting for live miner data")));
+    liveDataNotice->show();
    };
+   connectionRecovery->onSilenceCleared=[liveDataNotice]{liveDataNotice->hide();};
    connectionRecovery->disconnected=[canvas,profile,miningToggle,pendingCard,ticketProgressRail,connectionRecovery,presentationSequence]{
     canvas->setProperty("pgn_worker_stream_phase","Disconnected");auto frame=canvas->property("pgn_network_ticket_frame").toJsonObject();frame.insert("phase","Disconnected");frame.insert("source_stale",true);const auto retainedRun=frame.value("ticket_id").toString();frame=pgn::ui::currentAssignmentPresentation(frame);canvas->setProperty("pgn_network_ticket_frame",frame);ticketProgressRail->present(frame);
     FrontierTelemetrySnapshot stale;stale.sequence=++*presentationSequence;stale.observedUtc=QDateTime::currentDateTimeUtc();stale.sourceMode="live";stale.runId=retainedRun;stale.authoritative=true;stale.stale=true;stale.gpuUuid=profile.value("gpu_uuid").toString();stale.gpuName=profile.value("device_name").toString();stale.state="stopped";stale.raw.insert("pgn_device_enabled",false);stale.raw.insert("pgn_process_running",false);pgn::ui::presentDevice(canvas,stale);

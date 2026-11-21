@@ -63,6 +63,15 @@ inline QJsonObject diagnosticMiningStartup(QWidget* canvas){
   {"reconnect_delay_ms",canvas->property("pgn_worker_reconnect_delay_ms").toInt()},
   {"process",canvas->property("pgn_worker_process_state").toJsonObject()},
   {"events",canvas->property("pgn_worker_process_events").toJsonArray()}};
+ QJsonArray notices;
+ for(const auto* notice:canvas->window()->findChildren<QLabel*>("pgn-gpu-live-data-notice")){
+  if(notices.size()==32)break;
+  if(!notice->isHidden())notices.append(QJsonObject{
+   {"device",notice->property("pgn_gpu_device_id").toString().left(80)},
+   {"text",diagnosticStatusText(notice->text())},
+   {"visible",notice->isVisible()&&!notice->window()->isMinimized()}});
+ }
+ value.insert("gpu_live_data_notices",notices);
  QJsonArray unsupported;
  for(const auto& item:canvas->property("pgn_local_runtime_unsupported").toJsonArray()){
   if(unsupported.size()>=32)break;

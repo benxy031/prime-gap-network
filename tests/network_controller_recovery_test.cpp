@@ -43,8 +43,54 @@ QProcess process;bool allowed=true;std::vector<bool> launches;int disconnected=0
  silence.intent(true);need(silence.restartIfClosed(),"Silent fixture could not start");wait([&]{return silent.state()==QProcess::Running;});
  silence.phase("Searching",true);wait([&]{return silences==1;});
  need(starts==1&&silent.state()==QProcess::Running&&silence.wanted(),"Silence duplicated or killed a worker / lost ON");
- silence.phase("Paused",true);silence.intent(false);wait([&]{return silences==2;});need(!silence.wanted()&&starts==1,"Silence overrode manual OFF");
+ silence.phase("Paused",true);silence.intent(false);
+ quiet.restart();while(quiet.elapsed()<160){app.processEvents();QThread::msleep(2);}
+ need(!silence.wanted()&&starts==1&&silences==1,"An already stopped controller reported a live-data delay");
  silence.close();silent.write("quit\n");wait([&]{return silent.state()==QProcess::NotRunning;});
+ QProcess stream;
+ pgn::mining::NetworkControllerRecovery watchdog(&stream,nullptr,20,100,65);
+ bool awaitingStop=false;
+ int shown=0,cleared=0;
+ watchdog.awaitingStop=[&]{return awaitingStop;};
+ watchdog.onSilent=[&]{++shown;};
+ watchdog.onSilenceCleared=[&]{++cleared;};
+ watchdog.reconnect=[&](bool){watchdog.launching();stream.start(QCoreApplication::applicationFilePath(),{"--transport"});};
+ watchdog.intent(true);
+ need(watchdog.restartIfClosed(),"A dead transport could not start");
+ wait([&]{return stream.state()==QProcess::Running;});
+ watchdog.phase("Searching",true);
+ wait([&]{watchdog.phase("Searching",false);return shown==1;});
+ for(const auto& phase:QStringList{"Searching","Completing audits","Submitting reports","Waiting for storage","Report ready",""})
+  watchdog.phase(phase,false);
+ need(shown==1&&cleared==0,"Cached or phase-only observations cleared the live-data notice");
+ watchdog.phase("Searching",true);
+ need(cleared==1,"New live observations did not clear the notice");
+ watchdog.intent(false);
+ awaitingStop=true;
+ need(shown==1,"A stop request reused an earlier waiting period");
+ wait([&]{watchdog.phase("Searching",false);watchdog.intent(false);return shown==2;});
+ watchdog.phase("Paused",false);
+ watchdog.stopConfirmed();
+ awaitingStop=false;
+ need(cleared==2,"A phase-only stop confirmation did not clear the notice");
+ quiet.restart();
+ while(quiet.elapsed()<160){app.processEvents();QThread::msleep(2);}
+ need(shown==2,"An idle OFF observer produced an alert");
+ QElapsedTimer newStopClock;
+ newStopClock.start();
+ watchdog.intent(false,true);
+ awaitingStop=true;
+ wait([&]{return shown==3;});
+ need(newStopClock.elapsed()>=55,"A new OFF request reused the idle transport age");
+ watchdog.stopConfirmed();
+ awaitingStop=false;
+ need(cleared==3,"A new stop acknowledgement did not clear the notice");
+ watchdog.intent(true);
+ wait([&]{return shown==4;});
+ watchdog.phase("Needs attention",false);
+ need(cleared==4&&watchdog.needsAttention(),"An important error competed with a stale live-data notice");
+ watchdog.close();stream.write("quit\n");
+ wait([&]{return stream.state()==QProcess::NotRunning;});
  QProcess absent;pgn::mining::NetworkControllerRecovery failed(&absent,nullptr,20,100);int failedStarts=0;failed.reconnect=[&](bool){++failedStarts;failed.launching();absent.setProgram(QCoreApplication::applicationFilePath()+".missing");absent.start();};failed.intent(true);need(failed.restartIfClosed(),"Failed-start fixture not dispatched");wait([&]{return failed.needsAttention();});need(failedStarts==1&&!failed.retryPending(),"Missing executable entered a retry loop");failed.close();
  for(const auto& waitingPhase:QStringList{"Waiting for controller","Waiting for connection"})for(const bool wanted:{true,false}){
   QProcess contended;pgn::mining::NetworkControllerRecovery waiting(&contended,nullptr,20,100);int attempts=0;std::vector<bool> intents;
