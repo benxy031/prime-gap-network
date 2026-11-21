@@ -145,7 +145,7 @@ class MiningResultsView final:public QWidget {
             for(int band=first;band<=last&&band-first<64;++band){
                 const bool final=target&&double(band+1)>*target;
                 const auto label=QString("%1–%2").arg(band==first?QStringLiteral("min"):QString::number(band),final?QStringLiteral("target"):QString::number(band+1));
-                stat(meritStatistics_,mixed?QString("Below target · %1").arg(label):label,data.meritBands.value(band));
+                stat(meritStatistics_,mixed&&band==first?QString("Below target · %1").arg(label):label,data.meritBands.value(band));
                 if(target){const double tier=band>=*target-1?*target-1:band>=*target-2?*target-2:band>=*target-3?*target-3:-1;
                     if(tier>=0){const auto row=nextRows.value(meritStatistics_)-1;for(int c=0;c<2;++c)meritStatistics_->item(row,c)->setForeground(meritColor(band,target));meritStatistics_->item(row,0)->setToolTip("Color indicates the minimum award tier guaranteed by the band lower bound; higher tiers may also occur inside the band.");}}
             }
