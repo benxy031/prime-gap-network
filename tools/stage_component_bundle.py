@@ -119,8 +119,13 @@ def _linked(path):
 def _plain_chain(path):
     path = Path(os.path.abspath(path))
     for part in (path, *path.parents):
-        if os.path.lexists(part):
-            require(not _linked(part), 'Symlink/reparse path is forbidden')
+        # lexists already performs an lstat. Inspect that same kernel result
+        # instead of making a second path lookup for every existing parent.
+        try:
+            linked = _linked(part)
+        except (OSError, ValueError):
+            continue
+        require(not linked, 'Symlink/reparse path is forbidden')
     return path
 
 
