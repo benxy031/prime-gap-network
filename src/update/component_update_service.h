@@ -25,6 +25,7 @@ QString componentUpdateFailureMessage(const QString& detail);
 QJsonArray componentUpdateDiagnosticHistory(const QString& genesis={});
 QJsonObject currentUpdateActivation(const QString& applicationRoot,const QString& mutableDataRoot);
 QString startDetachedComponentInstall(const ComponentUpdateDeployment&,const QJsonObject& request);
+QJsonObject readDetachedComponentInstallResult(const QString& resultPath);
 
 // One bounded helper at a time. This class never controls a mining process or
 // interprets downloaded data as a command. Installed helper identity is checked

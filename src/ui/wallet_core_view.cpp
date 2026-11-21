@@ -143,7 +143,8 @@ public:
   networkPages_=new QTabWidget;networkPages_->setObjectName("pgn-wallet-network-tabs");networkPages_->addTab(networkExplorer_,"Blocks");networkPages_->addTab(new WalletPeersView([runtime=QPointer(runtime_)](auto done){if(runtime)runtime->readPeerSnapshot(std::move(done));else done({},"Core is unavailable");}),"Peers");networkPages_->addTab(new WalletConsoleView([runtime=QPointer(runtime_)](QString method,QByteArray params,bool wallet,auto done){if(runtime)runtime->consoleRequest(method,params,wallet,std::move(done));else done({},"Core is unavailable");}),"Console");workspace->addTab(networkPages_,"Explorer");
    management_=new WalletManagementPanel(runtime_->walletManager(),managementContent,pgn::wallet::installedCoreGenesis(root,testnet));managementBox->addWidget(management_);managementBox->addStretch();
    management_->onComponents=[this,root,testnet]{
-    if(componentDialog_){componentDialog_->raise();componentDialog_->activateWindow();return;}
+    if(openUpdates_){openUpdates_();return;}
+    if(componentDialog_){componentDialog_->show();componentDialog_->raise();componentDialog_->activateWindow();return;}
     componentDialog_=new ComponentVersionsDialog(walletComponentVersionsContext(root,runtime_->runtimeDirectory(),testnet),this);
     componentDialog_->setAttribute(Qt::WA_DeleteOnClose);componentDialog_->open();
    };
@@ -261,6 +262,7 @@ public:
   else QTimer::singleShot(0,runtime_,[this]{runtime_->launch();});
  }
  ~WalletCoreView() override = default;
+ void setOpenUpdates(std::function<void()> open){openUpdates_=std::move(open);}
 private:
  void refreshBlockStorage(const std::optional<pgn::wallet::ChainObservation>& anchor){
   if(!anchor){
@@ -316,6 +318,7 @@ private:
  pgn::wallet::CoreRuntime* runtime_{};QLabel* status_{};QWidget* placeholder_{};
  BlockExplorerView* networkExplorer_{};QTabWidget* networkPages_{};bool networkBusy_{};QString networkDone_;
  pgn::wallet::GoldBlockStatus goldStatus_;
+ std::function<void()> openUpdates_;
  QVBoxLayout* viewport_{};WalletAccountPanel* accountPanel_{};WalletManagementPanel* management_{};QPointer<ComponentVersionsDialog> componentDialog_;bool setupOpen_{};quint64 displayGeneration_{};
  QTimer attachClock_;int attempts_{};
 
@@ -327,6 +330,7 @@ private:
 };
 }
 QWidget* createWalletCoreView(const QString& root,WalletObservationSink observe,bool testnet){return new WalletCoreView(root,std::move(observe),testnet);}
+void bindWalletUpdates(QWidget* widget,std::function<void()> open){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->setOpenUpdates(std::move(open));}
 void readWalletTicketPage(QWidget* widget,int offset,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketPage(offset,std::move(consume));else consume({},"Wallet network view unavailable");}
 void readWalletTicketDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketDetails(id,std::move(consume));else consume({},"Wallet network view unavailable");}
 void readWalletTicketNumber(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume,

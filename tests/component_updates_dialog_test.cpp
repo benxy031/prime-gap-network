@@ -1,5 +1,6 @@
 #include "ui/component_versions_dialog.h"
 #include <QApplication>
+#include <QMainWindow>
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QTableWidget>
@@ -14,6 +15,7 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include "update/update_paths.h"
+#include "wallet/installed_core_binding.h"
 #include <iostream>
 #include <stdexcept>
 int main(int argc,char** argv){
@@ -63,6 +65,21 @@ int main(int argc,char** argv){
  // Horizon open if the installation stops before committing.
  QTemporaryDir receipts;
  check(receipts.isValid());
+ const auto profilePath=receipts.filePath("wallet-core.json");
+ const auto saveProfile=[&](QChar genesis){
+  QFile file(profilePath);check(file.open(QIODevice::WriteOnly));
+  const auto bytes=QJsonDocument(QJsonObject{{"executable",app.applicationFilePath()},
+     {"genesis_hash",QString(64,genesis)}}).toJson();
+  check(file.write(bytes)==bytes.size());
+ };
+ saveProfile('a');
+ const auto identityA=pgn::wallet::readInstalledCoreProfile(profilePath).identity;
+ saveProfile('b');
+ const auto sampleB=pgn::wallet::readInstalledCoreProfile(profilePath);
+ saveProfile('a');
+ check(pgn::wallet::readInstalledCoreProfile(profilePath).identity==identityA);
+ check(sampleB.identity!=identityA);
+ check(pgn::wallet::installedCoreBinding({},sampleB,true).genesis==QString(64,'b'));
  const auto resultPath=receipts.filePath("result.json");
  const auto deliver=[&](pgn::ui::ComponentVersionsDialog& target,const QJsonObject& value){
   target.setProperty("pgn_update_result_file",resultPath);
@@ -91,6 +108,40 @@ int main(int argc,char** argv){
  check(status->text().contains("Installation did not complete")&&!globalProgress->isVisible());
  check(!install->isVisible());
  check(dialog.findChild<QPushButton*>("pgn-components-check")->isEnabled());
+
+ // Close and Escape dismiss the active dialog without dropping its poll.
+ // The actual install launcher and its result channel are tested separately.
+ auto* active=new pgn::ui::ComponentVersionsDialog(context);
+ active->setAttribute(Qt::WA_DeleteOnClose);
+ const QPointer<pgn::ui::ComponentVersionsDialog> held(active);
+ active->show();
+ QTimer* activePoll=nullptr;
+ for(auto* timer:active->findChildren<QTimer*>())if(timer->interval()==500)activePoll=timer;
+ check(activePoll);
+ activePoll->start();
+ active->close();
+ app.processEvents();
+ check(held&&!held->isVisible()&&activePoll->isActive());
+ held->show();
+ held->reject();
+ app.processEvents();
+ check(held&&!held->isVisible()&&activePoll->isActive());
+ deliver(*held,completeFailure);
+ check(!activePoll->isActive());
+ app.sendPostedEvents(nullptr,QEvent::DeferredDelete);
+ check(!held);
+
+ QMainWindow owner;
+ owner.show();
+ auto* attached=new pgn::ui::ComponentVersionsDialog(context,&owner);
+ attached->show();
+ QTimer* attachedPoll=nullptr;
+ for(auto* timer:attached->findChildren<QTimer*>())if(timer->interval()==500)attachedPoll=timer;
+ check(attachedPoll);
+ attachedPoll->start();
+ attached->close();
+ check(!attached->isVisible()&&attachedPoll->isActive());
+ check(owner.close());
 
  // An interrupted installation stays visible even when no update catalogue
  // can be fetched. The fixture uses a unique test-mode application directory.

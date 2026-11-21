@@ -26,6 +26,41 @@
 namespace pgn::update {
 namespace {
 constexpr qsizetype MessageLimit=128*1024,ErrorLimit=16*1024;
+
+QString detachedResultOutputPath(const QString& resultPath)
+{
+    return QFileInfo(resultPath).absolutePath()+"/result-stdout.json";
+}
+
+QJsonObject readBoundedResult(const QString& path)
+{
+    const QFileInfo entry(path);
+    if(!entry.isFile()||entry.isSymLink())return {};
+    QFile file(path);
+    if(!file.open(QIODevice::ReadOnly)||file.size()>MessageLimit)return {};
+    const auto raw=file.read(MessageLimit+1);
+    if(raw.size()>MessageLimit)return {};
+    return QJsonDocument::fromJson(raw).object();
+}
+
+bool terminalInstallResult(const QJsonObject& value)
+{
+    const auto schema=value.value("schema").toString();
+    const auto committed=value.value("installation_committed");
+    const auto performed=value.value("installation_performed");
+    if(schema=="PGN_UPDATE_INSTALL_RESULT_V1"){
+        return committed.isBool()&&performed==committed
+            &&value.value("publisher_authenticated")==QJsonValue(true)
+            &&value.value("process_control_performed")==QJsonValue(true);
+    }
+    if(schema=="PGN_UPDATE_RECOVERY_RESULT_V1"){
+        return committed==QJsonValue(false)&&value.value("recovery_performed")==QJsonValue(true)
+            &&value.value("previous_inventory_verified")==QJsonValue(true);
+    }
+    return schema=="PGN_UPDATE_HELPER_ERROR_V1"&&committed==QJsonValue(false)
+        &&performed==QJsonValue(false)&&value.value("error").isString()
+        &&!value.value("error_type").toString().isEmpty();
+}
 void require(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 QMutex diagnosticMutex;
 QJsonArray diagnosticHistory;
@@ -260,12 +295,25 @@ QString startDetachedComponentInstall(const ComponentUpdateDeployment& deploymen
     QSaveFile file(session+"/request.json");require(file.open(QIODevice::WriteOnly)&&file.write(encoded)==encoded.size()&&file.commit(),"Cannot persist the installation request");
     QProcess helper;helper.setProgram(deployment.helper);helper.setArguments({"--request-file",session+"/request.json","--result-file",session+"/result.json"});
     helper.setWorkingDirectory(QFileInfo(deployment.helper).absolutePath());
-    helper.setStandardInputFile(QProcess::nullDevice());helper.setStandardOutputFile(QProcess::nullDevice());helper.setStandardErrorFile(QProcess::nullDevice());
+    helper.setStandardInputFile(QProcess::nullDevice());
+    helper.setStandardOutputFile(detachedResultOutputPath(session+"/result.json"));
+    helper.setStandardErrorFile(QProcess::nullDevice());
 #ifdef Q_OS_WIN
     helper.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args){args->flags|=CREATE_NO_WINDOW|BELOW_NORMAL_PRIORITY_CLASS;});
 #endif
     require(helper.startDetached(),"The installation helper could not start; installed components are unchanged");
     return session+"/result.json";
+}
+
+QJsonObject readDetachedComponentInstallResult(const QString& resultPath)
+{
+    if(resultPath.isEmpty())return {};
+    const auto primary=readBoundedResult(resultPath);
+    if(terminalInstallResult(primary))return primary;
+    // The helper prints its final result even if replacing result.json failed.
+    const auto alternate=readBoundedResult(detachedResultOutputPath(resultPath));
+    if(terminalInstallResult(alternate))return alternate;
+    return validComponentUpdateProgress(primary)?primary:QJsonObject{};
 }
 
 ComponentUpdateService::ComponentUpdateService(ComponentUpdateDeployment deployment,QObject* parent)

@@ -13,15 +13,41 @@
 #include <QThread>
 #include <QTimer>
 #include <QProcess>
+#include <QSaveFile>
 #include <QUuid>
 #include <QSysInfo>
 #include <iostream>
 #include <stdexcept>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 int main(int argc,char** argv){
  QCoreApplication app(argc,argv);
  const auto helperName=QSysInfo::kernelType()=="winnt"?"horizon-updater.exe":"horizon-updater";
  if(QFileInfo(app.applicationFilePath()).fileName()==helperName){
+  const auto args=app.arguments();
+  if(args.size()==5&&args.at(1)=="--request-file"&&args.at(3)=="--result-file"){
+   QFile input(args.at(2));
+   if(!input.open(QIODevice::ReadOnly)||QJsonDocument::fromJson(input.readAll()).object().value("fixture")!="detached-result")return 5;
+   QFile result(args.at(4));
+   if(!result.open(QIODevice::WriteOnly))return 6;
+   result.write(R"({"schema":"PGN_UPDATE_PROGRESS_V1","stage":"startup","completed":0,"total":0,"component":""})");
+   result.close();
+#ifdef Q_OS_WIN
+   const auto nativePath=QDir::toNativeSeparators(result.fileName()).toStdWString();
+   const auto fileHandle=CreateFileW(nativePath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+   if(fileHandle==INVALID_HANDLE_VALUE)return 7;
+   QSaveFile terminal(result.fileName());
+   const QByteArray replacement=R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1","error":"would replace progress"})";
+   const bool written=terminal.open(QIODevice::WriteOnly)&&terminal.write(replacement)==replacement.size();
+   const bool replaced=written&&terminal.commit();
+   CloseHandle(fileHandle);
+   if(!written||replaced)return 8;
+#endif
+   std::cout<<R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1","error":"Fixture could not replace the result file","error_type":"OSError","installation_committed":false,"installation_performed":false,"result_file_written":false})"<<std::endl;
+   return 1;
+  }
   QFile input;input.open(stdin,QIODevice::ReadOnly);const auto request=QJsonDocument::fromJson(input.readAll()).object();const auto fixture=request.value("fixture").toString();
   if(fixture=="delay")QThread::sleep(30);
   if(fixture=="ongoing"||fixture=="repeated"){
@@ -74,6 +100,44 @@ int main(int argc,char** argv){
   QJsonObject deployment{{"schema","PGN_UPDATE_DEPLOYMENT_V1"},{"network","testnet"},{"genesis_hash",QString(64,'5')},{"helper","UpdateRuntime/"+QString(helperName)},{"sha256",QString::fromLatin1(digest.result().toHex())}};
   QFile descriptor(temp.path()+"/UpdateRuntime/deployment.json");require(descriptor.open(QIODevice::WriteOnly),"Descriptor fixture unavailable");descriptor.write(QJsonDocument(deployment).toJson());descriptor.close();
   auto resolved=pgn::update::componentUpdateDeployment(temp.path(),true);require(resolved.helper==helper,"Wrong helper selected");bool rejected=false;try{pgn::update::componentUpdateDeployment(temp.path(),false);}catch(const std::exception&){rejected=true;}require(rejected,"Wrong network was admitted");
+  auto launcher=resolved;
+  launcher.context.insert("owned_update_protocol",1);
+  const auto detached=pgn::update::startDetachedComponentInstall(launcher,{{"schema","PGN_UPDATE_REQUEST_V1"},
+      {"action","install"},{"fixture","detached-result"},{"cache",temp.path()+"/detached-cache"}});
+  QElapsedTimer detachedClock;detachedClock.start();
+  QJsonObject receipt;
+  do {
+   QThread::msleep(10);
+   receipt=pgn::update::readDetachedComponentInstallResult(detached);
+  } while(detachedClock.elapsed()<3000&&receipt.value("schema")!="PGN_UPDATE_HELPER_ERROR_V1");
+  require(receipt.value("schema")=="PGN_UPDATE_HELPER_ERROR_V1"
+      &&receipt.value("result_file_written")==QJsonValue(false),"Detached stdout result did not supersede stale progress");
+  QFile primary(detached);
+  require(primary.open(QIODevice::ReadOnly)&&QJsonDocument::fromJson(primary.readAll()).object().value("schema")=="PGN_UPDATE_PROGRESS_V1",
+      "Detached fixture overwrote the primary progress result");
+  primary.close();
+  const auto arbiter=temp.path()+"/receipt-arbitration";
+  require(QDir().mkpath(arbiter),"Detached receipt arbitration directory unavailable");
+  const auto primaryPath=arbiter+"/result.json";
+  const auto secondaryPath=arbiter+"/result-stdout.json";
+  const auto seed=[&](const QString& path,const QByteArray& bytes){
+   QFile file(path);require(file.open(QIODevice::WriteOnly),"Detached receipt fixture unavailable");
+   require(file.write(bytes)==bytes.size(),"Detached receipt fixture write failed");
+  };
+  seed(primaryPath,R"({"schema":"PGN_UPDATE_INSTALL_RESULT_V1"})");
+  seed(secondaryPath,R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1"})");
+  require(pgn::update::readDetachedComponentInstallResult(primaryPath).isEmpty(),
+      "A schema-only result was accepted");
+  seed(secondaryPath,R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1","error_type":"OSError","error":"fallback","installation_performed":false,"installation_committed":false})");
+  require(pgn::update::readDetachedComponentInstallResult(primaryPath).value("error")=="fallback",
+      "A malformed primary hid a complete stdout result");
+  seed(primaryPath,R"({"schema":"PGN_UPDATE_RECOVERY_RESULT_V1","installation_committed":false,"recovery_performed":true,"previous_inventory_verified":true})");
+  require(pgn::update::readDetachedComponentInstallResult(primaryPath).value("recovery_performed")==QJsonValue(true),
+      "A secondary result replaced the primary recovery receipt");
+  seed(primaryPath,R"({"schema":"PGN_UPDATE_PROGRESS_V1","stage":"startup","completed":0,"total":0,"component":""})");
+  seed(secondaryPath,R"({"schema":"PGN_UPDATE_HELPER_ERROR_V1",)");
+  require(pgn::update::readDetachedComponentInstallResult(primaryPath).value("stage")=="startup",
+      "Partial stdout hid the last valid progress");
   const auto activation=pgn::update::currentUpdateActivation(temp.path(),temp.path()+"/user-data");
   require(activation.value("ui_pid").toInteger()==app.applicationPid(),"Activation process identity differs");
   require(activation.value("application_root")==temp.path()&&activation.value("data_root")==temp.path()+"/user-data","Activation changed the application/data scope");

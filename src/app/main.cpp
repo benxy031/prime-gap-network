@@ -1017,6 +1017,7 @@ int main(int argc,char** argv) {
  auto* footerBox=new QVBoxLayout(footer);footerBox->setContentsMargins(12,5,12,5);footerBox->setSpacing(3);
  auto* connectionRow=new QHBoxLayout;connectionRow->setSpacing(12);networkSummary->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);connectionRow->addWidget(networkSummary,1);
  auto* componentStatus=new pgn::ui::ComponentStatusStrip(pgn::ui::walletComponentVersionsContext(root,pgn::wallet::coreRuntimeDirectory(root,testnetMode),testnetMode),footer);connectionRow->addWidget(componentStatus);footerBox->addLayout(connectionRow);
+ pgn::ui::bindWalletUpdates(inspectWallet,[guard=QPointer(componentStatus)]{if(guard)guard->openComponents();});
  // Connection internals remain available to diagnostic inspection; the public
  // footer has a single stable row for network and component status.
  status->setParent(footer);status->hide();hardwareNotice->setParent(footer);hardwareNotice->hide();box->addWidget(footer);window.setCentralWidget(shell);

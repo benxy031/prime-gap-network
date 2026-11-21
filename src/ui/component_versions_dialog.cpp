@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QCryptographicHash>
 #include <QCoreApplication>
+#include <QCloseEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -59,24 +60,21 @@ ComponentVersionsContext walletComponentVersionsContext(const QString& productRo
 }
 QByteArray componentProfileIdentity(const ComponentVersionsContext& context){
  if(context.coreProfilePath.isEmpty())return {};
- QFile profile(context.coreProfilePath);
- if(!profile.exists())return "absent";
- if(!profile.open(QIODevice::ReadOnly))return "unreadable";
- if(profile.size()>32768)return "oversized";
- return QCryptographicHash::hash(profile.readAll(),QCryptographicHash::Sha256);
+ return pgn::wallet::readInstalledCoreProfile(context.coreProfilePath).identity;
 }
 ComponentVersionsContext refreshComponentVersionsContext(ComponentVersionsContext context){
  if(context.coreProfilePath.isEmpty())return context;
  context.codeRoots.remove("core");context.primaryPrograms.remove("core");context.genesisHash.clear();
- const auto binding=pgn::wallet::installedCoreBinding(context.applicationRoot,context.coreProfilePath,context.testnet);
+ const auto profile=pgn::wallet::readInstalledCoreProfile(context.coreProfilePath);
+ context.profileIdentity=profile.identity;
+ const auto binding=pgn::wallet::installedCoreBinding(context.applicationRoot,profile,context.testnet);
  if(!binding.program.isEmpty()){
   context.genesisHash=binding.genesis;const QFileInfo executable(binding.program);
   context.codeRoots.insert("core",executable.canonicalPath());context.primaryPrograms.insert("core",executable.canonicalFilePath());
  }
  return context;
 }
-QJsonObject inspectLocalComponentVersions(const ComponentVersionsContext& original,ComponentInventory mode){
- const auto context=refreshComponentVersionsContext(original);
+static QJsonObject inspectResolvedLocalComponentVersions(const ComponentVersionsContext& context,ComponentInventory mode){
  QJsonObject snapshot{{"schema","PGN_LOCAL_COMPONENT_VIEW_V1"},{"manifest_state","absent"},{"components",QJsonArray{}},{"release_version",QJsonValue{}},{"published",QJsonValue{}}};QJsonObject declarations;QString reason="No local component manifest is present.";
  QFile file(context.manifestPath);
  if(file.exists()){
@@ -102,6 +100,9 @@ QJsonObject inspectLocalComponentVersions(const ComponentVersionsContext& origin
   }else if(root.isEmpty())observed.insert("reason","The local code root is unknown.");observed.insert("code_root",root);rows.append(observed);}
  snapshot.insert("inventory_mode",mode==ComponentInventory::Manifest?"manifest":"files");
  snapshot.insert("components",rows);return snapshot;
+}
+QJsonObject inspectLocalComponentVersions(const ComponentVersionsContext& context,ComponentInventory mode){
+ return inspectResolvedLocalComponentVersions(refreshComponentVersionsContext(context),mode);
 }
 ComponentVersionsDialog::ComponentVersionsDialog(ComponentVersionsContext context,QWidget* parent):QDialog(parent),context_(std::move(context)){
  setObjectName("pgn-component-versions");setWindowTitle("Software updates");resize(850,440);
@@ -135,8 +136,7 @@ ComponentVersionsDialog::ComponentVersionsDialog(ComponentVersionsContext contex
  });
  connect(recover_,&QPushButton::clicked,this,[this]{if(busy_||installStarted_||!ensureService())return;preparedRequest_=request("recover",{});installPrepared();});
  resultPoll_=new QTimer(this);resultPoll_->setInterval(500);connect(resultPoll_,&QTimer::timeout,this,[this]{
-  QFile file(property("pgn_update_result_file").toString());if(!file.open(QIODevice::ReadOnly)||file.size()>128*1024)return;
-  const auto value=QJsonDocument::fromJson(file.readAll()).object();
+  const auto value=pgn::update::readDetachedComponentInstallResult(property("pgn_update_result_file").toString());
   if(pgn::update::validComponentUpdateProgress(value)){presentProgress(value);return;}
   const auto schema=value.value("schema").toString();
   const bool stopped=schema=="PGN_UPDATE_INSTALL_RESULT_V1"
@@ -149,12 +149,34 @@ ComponentVersionsDialog::ComponentVersionsDialog(ComponentVersionsContext contex
    install_->hide();prepare_->show();updateRecovery();
    if(!stopped)status_->setText(value.value("error").toString("Installation could not finish. The previous version is retained."));
    else if(recover_->isHidden())status_->setText("Installation did not complete. Check for updates again.");
+   if(isHidden()&&testAttribute(Qt::WA_DeleteOnClose))deleteLater();
+   else if(recover_->isHidden()&&inventoryProfileIdentity_!=componentProfileIdentity(context_))refreshLocal();
   }
-  else if(schema=="PGN_UPDATE_RECOVERY_RESULT_V1"&&value.value("recovery_performed").toBool()){resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};install_->hide();refreshLocal();status_->setText("The previous version has been restored and verified.");}
+  else if(schema=="PGN_UPDATE_RECOVERY_RESULT_V1"&&value.value("recovery_performed").toBool()){
+   resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};install_->hide();
+   if(isHidden()&&testAttribute(Qt::WA_DeleteOnClose))deleteLater();
+   else refreshLocal();
+   status_->setText("The previous version has been restored and verified.");
+  }
  });
  QTimer::singleShot(0,this,[this]{refreshLocal();});
 }
 ComponentVersionsDialog::~ComponentVersionsDialog(){closing_=true;if(service_){service_->onResult={};service_->onError={};service_->onStatus={};service_->onProgress={};if(service_->busy())service_->cancel();}}
+void ComponentVersionsDialog::closeEvent(QCloseEvent* event){
+ if(resultPoll_->isActive()){
+  hide();
+  event->ignore();
+  return;
+ }
+ QDialog::closeEvent(event);
+}
+void ComponentVersionsDialog::reject(){
+ if(resultPoll_->isActive()){
+  hide();
+  return;
+ }
+ QDialog::reject();
+}
 QStringList ComponentVersionsDialog::selected()const{
  QStringList result;for(int row=0;row<components_->rowCount();++row){const auto* item=components_->item(row,0);if(item&&(item->flags()&Qt::ItemIsUserCheckable)&&item->checkState()==Qt::Checked)result.append(item->data(Qt::UserRole).toString());}return result;
 }
@@ -192,10 +214,21 @@ void ComponentVersionsDialog::updateRecovery(){
  recover_->setVisible(needed);if(needed){prepare_->setEnabled(false);install_->hide();status_->setText("An interrupted update needs recovery. Restore the previous version before installing another update. Wallets and results stay in their folders.");}
 }
 void ComponentVersionsDialog::refreshLocal(){
- if(localBusy_||busy_||installStarted_||closing_)return;context_=refreshComponentVersionsContext(context_);localBusy_=true;refresh_->setEnabled(false);localSummary_->setText("Checking installed files…");
+ if(localBusy_||busy_||installStarted_||closing_)return;
+ context_=refreshComponentVersionsContext(context_);
+ const auto profile=context_.profileIdentity;
+ if(preparedRequest_.value("action")=="install"&&preparedProfileIdentity_!=profile)invalidatePreparedUpdate();
+ localBusy_=true;refresh_->setEnabled(false);localSummary_->setText("Checking installed files…");
  auto* watcher=new QFutureWatcher<QJsonObject>(this);localWatcher_=watcher;const QPointer<ComponentVersionsDialog> weak(this);
- connect(watcher,&QFutureWatcher<QJsonObject>::finished,this,[weak,watcher]{if(!weak||weak->closing_)return;weak->localBusy_=false;weak->localWatcher_=nullptr;const auto value=watcher->result();watcher->deleteLater();weak->presentLocal(value);weak->refresh_->setEnabled(true);if(weak->context_.fetchOnOpen)weak->refreshPublished();});
- watcher->setFuture(QtConcurrent::run([context=context_]{return inspectLocalComponentVersions(context,ComponentInventory::Manifest);}));
+ connect(watcher,&QFutureWatcher<QJsonObject>::finished,this,[weak,watcher,profile]{
+  if(!weak||weak->closing_)return;
+  weak->localBusy_=false;weak->localWatcher_=nullptr;
+  const auto value=watcher->result();watcher->deleteLater();
+  if(componentProfileIdentity(weak->context_)!=profile){weak->invalidatePreparedUpdate();return;}
+  weak->inventoryProfileIdentity_=profile;weak->presentLocal(value);weak->refresh_->setEnabled(true);
+  if(weak->context_.fetchOnOpen)weak->refreshPublished();
+ });
+ watcher->setFuture(QtConcurrent::run([context=context_]{return inspectResolvedLocalComponentVersions(context,ComponentInventory::Manifest);}));
 }
 void ComponentVersionsDialog::presentLocal(const QJsonObject& snapshot){localSnapshot_=snapshot;if(onLocalSnapshot)onLocalSnapshot(snapshot);localSummary_->setText(snapshot.value("manifest_state")=="valid"?"Installed versions from the local manifest. Files are checked before an update is prepared.":"Some installed versions could not be verified. Their update controls stay unavailable.");updateRows();updateRecovery();}
 void ComponentVersionsDialog::updateRows(){
@@ -264,7 +297,7 @@ void ComponentVersionsDialog::prepareSelected(){
   weak->preparationInventory_.clear();
   weak->presentLocal(verified);weak->startPreparation(set);
  });
- inspection->setFuture(QtConcurrent::run([context=context_]{return inspectLocalComponentVersions(context);}));
+ inspection->setFuture(QtConcurrent::run([context=context_]{return inspectResolvedLocalComponentVersions(context,ComponentInventory::Files);}));
 }
 void ComponentVersionsDialog::startPreparation(const QStringList& wanted){
  const auto selectedNow=selected();
@@ -272,11 +305,24 @@ void ComponentVersionsDialog::startPreparation(const QStringList& wanted){
   presentUpdateFailure("The installed version of a selected component could not be verified. Check again before preparing the update.");
   return;
  }
+ if(inventoryProfileIdentity_!=componentProfileIdentity(context_)){invalidatePreparedUpdate();return;}
+ preparedProfileIdentity_=inventoryProfileIdentity_;
  status_->setText("Preparing the selected update…");
  if(!service_->start(request("prepare_install",wanted)))setBusy(false);
 }
+void ComponentVersionsDialog::invalidatePreparedUpdate(){
+ preparedRequest_={};
+ preparedProfileIdentity_.clear();
+ install_->hide();
+ prepare_->show();
+ presentUpdateFailure("The wallet profile changed. Check for updates again.");
+}
 void ComponentVersionsDialog::installPrepared(){
  if(busy_||preparedRequest_.isEmpty()||installStarted_)return;
+ if(preparedRequest_.value("action")=="install"&&preparedProfileIdentity_!=componentProfileIdentity(context_)){
+  invalidatePreparedUpdate();
+  return;
+ }
  try{const auto path=pgn::update::startDetachedComponentInstall(deployment_,preparedRequest_);setProperty("pgn_update_result_file",path);installStarted_=true;setBusy(true);status_->setText(preparedRequest_.value("action")=="recover"?"Restoring the previous version, then restarting Horizon…":"Verifying the installation, then restarting Horizon…");resultPoll_->start();}
  catch(const std::exception& error){status_->setText(QString::fromUtf8(error.what()));}
 }
