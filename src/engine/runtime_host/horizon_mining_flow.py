@@ -911,8 +911,14 @@ class MiningFlow:
                     break
                 self.worker.network_notice = str(error)[:400]
                 from horizon_coordination import PublicationPending
-                from horizon_audit_answers import AuditSealRecoveryPending, AuditSealRecoveryRequired
-                if isinstance(error, AuditSealRecoveryPending):
+                from horizon_audit_answers import AuditSealBindingMismatch, AuditSealRecoveryPending, AuditSealRecoveryRequired
+                if isinstance(error, AuditSealBindingMismatch):
+                    audit.last_error = None
+                    audit.recovery_pending = 'Saved response retained; rechecking its live audit assignment'
+                    # A branch or lease can change while this lane waits.
+                    # Revalidate on the next turn without reusing the seal.
+                    self.worker.quitting.wait(3)
+                elif isinstance(error, AuditSealRecoveryPending):
                     audit.last_error = None
                     audit.recovery_pending = str(error)[:300]
                     self.worker.quitting.wait(.1)

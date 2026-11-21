@@ -9,7 +9,7 @@ from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import audit_commitment, canonical_bytes
 from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged
-from horizon_audit_answers import AuditAnswers
+from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch
 from horizon_owner_reports import OwnerReports
 from horizon_audit_progress import partition_identity, presentation as audit_presentation
 from horizon_audit_snapshot import AnchoredAuditStates, identity
@@ -585,21 +585,34 @@ class NetworkAudits:
             if journal.stat().st_size > 262144:
                 raise ValueError("Current audit exceeds budget")
             audit = json.loads(journal.read_bytes())
-            restored = self.restore_reassigned_answer(audit)
-            if restored != audit:
-                save(journal, restored)
-            audit = restored
+            # A historic seal belongs only to its exact scientific work.
+            # Check the authoritative assignment before touching recovery,
+            # so an obsolete cursor cannot block a different live cycle.
             anchor = self.worker.rpc.call('getbestblockhash') if self.on_retired is not None else None
             current = self.state(audit["request_id"])
             job = next((j for j in current.get("jobs", []) if j["slot"] == audit["slot"] and j["attempt"] == audit["attempt"]), None)
-            if job and job['state'] == 'assigned' and (job.get('expired') is True
-                    or ('actor' in audit and job.get('actor') != audit['actor'])):
+            expired_or_foreign = job and job['state'] == 'assigned' and (
+                job.get('expired') is True or ('actor' in audit and job.get('actor') != audit['actor']))
+            if expired_or_foreign or (job is None and self.on_retired is not None):
                 from horizon_audit_recovery import retain_changed_assignment
                 if anchor is None:
                     anchor = self.worker.rpc.call('getbestblockhash')
                 retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc,
                     self.on_retired or (lambda value, block: None))
                 return 'retired'
+            try:
+                restored = self.restore_reassigned_answer(audit)
+            except AuditSealBindingMismatch:
+                if self.on_retired is None or not job or job["state"] not in ("passed", "failed"):
+                    raise
+                # Core finalized this slot. Its verdict cannot authenticate a
+                # differently bound local seal or stop the next cycle.
+                from horizon_audit_recovery import retain_changed_assignment
+                retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc, self.on_retired)
+                return 'retired'
+            if restored != audit:
+                save(journal, restored)
+            audit = restored
             if not job or job["state"] != "assigned":
                 if self.on_committed is not None:
                     if (job and job["state"] in ("committed", "passed", "failed")
