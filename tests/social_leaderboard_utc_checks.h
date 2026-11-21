@@ -4,6 +4,8 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QPushButton>
 #include <QTableWidget>
 #include <stdexcept>
@@ -63,24 +65,31 @@ inline void run(QApplication& app,const QString& path){
     view.refresh();const auto oldTotal=pending.last();window->setCurrentIndex(1);const auto firstDay=pending.last();
     expect(firstDay.request.window==Window::Day&&firstDay.request.cursor.isEmpty()&&table->rowCount()==0,"Changing period retained Total rows/cursor");
     answer(oldTotal,page());expect(table->rowCount()==0,"Late Total response replaced Today");
-    answer(firstDay,today());expect(table->rowCount()==1&&interval->text().contains("1970-01-01")&&interval->text().contains("1970-01-02")&&interval->toolTip().contains("canonical",Qt::CaseInsensitive),"Fixed half-open UTC interval is not visible");
+    const auto dateUtc=QDateTime::currentDateTimeUtc().date();
+    const auto utcDay=QDateTime(dateUtc,QTime(0,0),Qt::UTC).toSecsSinceEpoch();
+    const auto dayLabel=dateUtc.toString(Qt::ISODate);
+    const auto nextDayLabel=dateUtc.addDays(1).toString(Qt::ISODate);
+    const auto currentDay=today(page(),utcDay);
+    Snapshot current;
+    expect(decodeLeaderboard(firstDay.request,currentDay,current).isEmpty(),"Current-day UI fixture could not be decoded");
+    answer(firstDay,currentDay);
+    expect(table->rowCount()==1&&interval->text().contains(dayLabel)&&interval->text().contains(nextDayLabel)&&interval->toolTip().contains("canonical",Qt::CaseInsensitive),"Fixed half-open UTC interval is not visible");
     auto* more=control<QPushButton>(view,"pgn-social-more-3");more->click();const auto wrongDay=pending.last();
-    expect(wrongDay.request.cursor==QString(64,'c')+":1:0","UI pagination discarded UTC start");
-    Snapshot wrong;auto wrongRequest=wrongDay.request;wrongRequest.cursor.clear();expect(decodeLeaderboard(wrongRequest,today(page(1,false),86400),wrong).isEmpty()==false,"Invalid fixture offset was not refused");
-    wrong=sentinel;wrong.miners[0].id=QString(64,'4');wrong.leaderboardPeriod->utcStart=86400;wrong.nextCursor.clear();wrongDay.done(wrong,{});
-    expect(table->rowCount()==1&&view.property("pgn_social_state_3")=="error"&&interval->text().contains("1970-01-01"),"Service page mixed UTC intervals or erased retained snapshot");
-    more->click();wrong=sentinel;wrong.miners[0].id=QString(64,'4');wrong.leaderboardPeriod->height=101;wrong.nextCursor.clear();pending.last().done(wrong,{});
+    expect(wrongDay.request.cursor==QString(64,'c')+":1:"+QString::number(utcDay),"UI pagination discarded UTC start");
+    Snapshot wrong;auto wrongRequest=wrongDay.request;wrongRequest.cursor.clear();
+    expect(!decodeLeaderboard(wrongRequest,today(page(1,false),utcDay+86400),wrong).isEmpty(),"Invalid fixture offset was not refused");
+    wrong=current;wrong.miners[0].id=QString(64,'4');wrong.leaderboardPeriod->utcStart=utcDay+86400;wrong.nextCursor.clear();wrongDay.done(wrong,{});
+    expect(table->rowCount()==1&&view.property("pgn_social_state_3")=="error"&&interval->text().contains(dayLabel),"Service page mixed UTC intervals or erased retained snapshot");
+    more->click();wrong=current;wrong.miners[0].id=QString(64,'4');wrong.leaderboardPeriod->height=101;wrong.nextCursor.clear();pending.last().done(wrong,{});
     expect(table->rowCount()==1&&view.property("pgn_social_state_3")=="error","Service changed height for the same immutable anchor");
-    more->click();answer(pending.last(),today(page(1,false)));expect(table->rowCount()==2,"Pinned old-day valid continuation failed");
-    view.refresh();auto newDay=today(page(0,false),86400);newDay.insert("bestblockhash",QString(64,'d'));answer(pending.last(),newDay);
-    expect(table->rowCount()==1&&interval->text().contains("1970-01-03"),"Refresh did not establish the new UTC snapshot");
+    more->click();answer(pending.last(),today(page(1,false),utcDay));expect(table->rowCount()==2,"Anchored continuation failed");
+    view.refresh();auto newDay=today(page(0,false),utcDay);newDay.insert("bestblockhash",QString(64,'d'));answer(pending.last(),newDay);
+    expect(table->rowCount()==1&&interval->text().contains(nextDayLabel),"Refresh did not establish the replacement snapshot");
     view.refresh();const auto staleDay=pending.last();window->setCurrentIndex(0);answer(staleDay,newDay);
     expect(table->rowCount()==1&&interval->text().isEmpty(),"Returning to cached Total lost its rows or accepted late Today");
-    answer(pending.last(),page());expect(table->rowCount()==1&&interval->text().isEmpty(),"Total failed after leaving Today");
     window->setCurrentIndex(1);
-    expect(table->rowCount()==0,"A prior UTC day occupied the current window");
-    const auto utcDay=QDateTime(QDateTime::currentDateTimeUtc().date(),QTime(0,0),Qt::UTC).toSecsSinceEpoch();
-    auto freshDay=today(page(0,false),utcDay);answer(pending.last(),freshDay);
+    expect(table->rowCount()==1&&interval->text().contains(dayLabel),"Returning to Today lost the freshly cached rows");
+    auto freshDay=today(page(0,false),utcDay);
     const auto label=interval->text();
     expect(table->rowCount()==1&&!label.isEmpty(),"Fresh window did not populate");
     window->setCurrentIndex(0);
@@ -94,6 +103,7 @@ inline void run(QApplication& app,const QString& path){
         value.insert("supported_periods", QJsonArray{"today_utc", "month_utc", "week_utc", "hour_utc"});
         return value;
     };
+    view.refresh();
     answer(pending.last(),advertised(freshDay));
     auto* totalButton=control<QPushButton>(view,"pgn-social-period-total");
     auto* todayButton=control<QPushButton>(view,"pgn-social-period-today");
@@ -125,4 +135,154 @@ inline void run(QApplication& app,const QString& path){
     expect(table->rowCount()==0&&interval->text().isEmpty(),"Identity change retained old rows/UTC interval or accepted stale callback");
     view.close();
 }
+
+inline void runWarmPeriods(const QString& path){
+    using namespace social;
+    struct Pending{ReadRequest request;Services::Reply done;};
+    QVector<Pending> pending;
+    Services service;
+    service.read=[&](ReadRequest request,Services::Reply done){
+        if(request.section==Section::Miners)pending.append({request,std::move(done)});
+    };
+    ui::SocialView view(path,service);
+    view.resize(1366,900);
+    view.show();
+    const Identity identity{QString(64,'a'),"SYNTHETIC-PERIOD-CACHE"};
+    view.setIdentity(identity);
+    view.selectSection(Section::Miners);
+    auto* table=control<QTableWidget>(view,"pgn-social-miners");
+    auto* interval=control<QLabel>(view,"pgn-social-miner-interval");
+    auto* totalButton=control<QPushButton>(view,"pgn-social-period-total");
+    auto* todayButton=control<QPushButton>(view,"pgn-social-period-today");
+    auto* hourButton=control<QPushButton>(view,"pgn-social-period-hour");
+    auto* weekButton=control<QPushButton>(view,"pgn-social-period-week");
+    auto* monthButton=control<QPushButton>(view,"pgn-social-period-month");
+    const auto wait=[&](qsizetype count){
+        QElapsedTimer deadline;
+        deadline.start();
+        while(pending.size()<count&&deadline.elapsed()<2500){
+            QEventLoop loop;
+            QTimer::singleShot(25,&loop,&QEventLoop::quit);
+            loop.exec();
+        }
+        expect(pending.size()==count,"Expected one background request before answering Core");
+    };
+    const auto answer=[&](const Pending& call,bool all=true){
+        auto value=page(0,false);
+        if(all)value.insert("supported_periods", QJsonArray{"today_utc","month_utc","week_utc","hour_utc"});
+        const auto window=call.request.window;
+        const auto now=QDateTime::currentDateTimeUtc();
+        const auto day=now.toSecsSinceEpoch()/86400*86400;
+        qint64 start=day;
+        switch(window){
+        case Window::Hour:start=now.toSecsSinceEpoch()/3600*3600;break;
+        case Window::Week:start=day-(now.date().dayOfWeek()-1)*86400;break;
+        case Window::Month:start=day-(now.date().day()-1)*86400;break;
+        default:break;
+        }
+        if(window!=Window::AllTime){
+            value=today(value,start);
+            value.insert("period",leaderboardPeriodName(window));
+            value.insert("utc_end",*leaderboardWindowEnd(window,start));
+        }
+        auto row=value.value("rows").toArray().first().toObject();
+        row.insert("display_name",QString("Period %1").arg(static_cast<int>(window)));
+        value.insert("rows",QJsonArray{row});
+        Snapshot result;
+        const auto error=decodeLeaderboard(call.request,value,result);
+        expect(error.isEmpty(),"Clock-aligned period fixture is invalid");
+        call.done(std::move(result),error);
+    };
+    const auto shows=[&](Window window){
+        return table->rowCount()==1&&table->item(0,0)&&
+            table->item(0,0)->text().contains(QString("Period %1").arg(static_cast<int>(window)));
+    };
+    wait(1);
+    expect(pending[0].request.window==Window::AllTime,"Expected foreground Total before warmup");
+    answer(pending[0]);
+    expect(shows(Window::AllTime)&&interval->text().isEmpty(),"Expected authenticated first Total");
+    wait(2);
+    const auto warmDay=pending[1];
+    expect(warmDay.request.window==Window::Day,"Today was not the first background period");
+    todayButton->click();
+    expect(pending.size()==2&&table->rowCount()==0,"Click sent a duplicate Today query or showed Total");
+    const auto utcDay=QDateTime::currentSecsSinceEpoch()/86400*86400;
+    auto expired=today(page(0,false),utcDay-86400);
+    expired.insert("supported_periods",QJsonArray{"today_utc","month_utc","week_utc","hour_utc"});
+    const auto answerExpired=[&](const Pending& call){
+        Snapshot previous;
+        const auto error=decodeLeaderboard(call.request,expired,previous);
+        expect(error.isEmpty(),"Previous-day fixture failed structural validation");
+        call.done(std::move(previous),error);
+    };
+    answerExpired(warmDay);
+    expect(pending.size()==3&&pending.last().request.window==Window::Day&&
+           pending.last().request.cursor.isEmpty()&&table->rowCount()==0&&
+           view.property("pgn_social_state_3")=="loading",
+           "Expired warmup reached the table or did not schedule exactly one fresh first page");
+    const auto replacement=pending.last();
+    pending.removeLast(); // Keep the subsequent request-count assertions relative to the valid pages.
+    answer(replacement);
+    expect(shows(Window::Day)&&!interval->text().isEmpty(),"Replacement response did not reach the selected period");
+
+    wait(3);
+    const auto warmHour=pending[2];
+    expect(warmHour.request.window==Window::Hour,"Hour did not warm next");
+    answer(warmHour);
+    wait(4);
+    const auto warmWeek=pending[3];
+    expect(warmWeek.request.window==Window::Week,"Week did not warm next");
+    answer(warmWeek);
+    wait(5);
+    const auto warmMonth=pending[4];
+    expect(warmMonth.request.window==Window::Month,"Month did not warm next");
+    answer(warmMonth);
+
+    QElapsedTimer switches;
+    switches.start();
+    for(int round=0;round<5;++round){
+        totalButton->click();expect(shows(Window::AllTime),"Total did not switch synchronously");
+        monthButton->click();expect(shows(Window::Month),"Month did not switch synchronously");
+        weekButton->click();expect(shows(Window::Week),"Week did not switch synchronously");
+        hourButton->click();expect(shows(Window::Hour),"Hour did not switch synchronously");
+        todayButton->click();expect(shows(Window::Day),"Today did not switch synchronously");
+    }
+    const auto switchNanos=switches.nsecsElapsed();
+    expect(pending.size()==5,"A warm switch generated another backend request");
+    view.refresh();
+    wait(6);
+    const auto manualToday=pending[5];
+    warmDay.done({},"Repeated obsolete provider response");
+    expect(shows(Window::Day)&&view.property("pgn_social_state_3")=="loading",
+           "An older duplicate completion stole a newer refresh");
+    answerExpired(manualToday);
+    wait(7);
+    const auto failedRetry=pending.last();
+    answerExpired(failedRetry);
+    expect(pending.size()==7&&shows(Window::Day)&&view.property("pgn_social_state_3")=="error",
+           "A second expired page erased fresh rows or caused another retry");
+    view.refresh();
+    wait(8);
+    const auto stale=pending[7];
+    view.setIdentity({identity.genesis,"SYNTHETIC-PERIOD-CACHE-OTHER"});
+    answer(stale);
+    expect(table->rowCount()==0&&interval->text().isEmpty(),"Old identity restored cached rows");
+
+    const auto current=pending.last();
+    expect(current.request.identity!=identity,"New identity did not request its ranking");
+    answer(current,false);
+    totalButton->click();
+    if(pending.last().request.window==Window::AllTime)answer(pending.last(),false);
+    const auto beforeUnsupported=pending.size();
+    QEventLoop quiet;
+    QTimer::singleShot(350,&quiet,&QEventLoop::quit);
+    quiet.exec();
+    expect(!monthButton->isVisible()&&!weekButton->isVisible()&&!hourButton->isVisible()&&
+           pending.size()<=beforeUnsupported+1&&
+           (pending.size()==beforeUnsupported||pending.last().request.window==Window::Day),
+           "Warmup requested a period this Core did not advertise");
+    qInfo("Verified 25 synchronous warm period switches in %.3f ms; zero extra backend requests.",
+          double(switchNanos)/1e6);
+}
+
 }
