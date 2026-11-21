@@ -17,7 +17,7 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.20.34'
+VERSION='2026.11.21.35'
 
 
 def maintain_installation(cache,context,context_sha,result):
@@ -82,7 +82,8 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
     selected=request['selected']
     stage.require(type(selected)is list and 1<=len(selected)<=4 and all(type(x)is str and x in stage.IDS for x in selected)and len(set(selected))==len(selected),'Choose one to four unique component IDs')
     stage.require(type(request['cache'])is str and Path(request['cache']).is_absolute(),'Absolute owned update-cache path required')
-    client=AuthenticatedUpdates(Path(request['cache']),repository['root'].encode(),repository['root_sha256'],repository['metadata_url'],repository['targets_url'],context,context_sha,fetcher=fetcher)
+    writer_wait=90 if action in ('prepare','prepare_install','install') else 0
+    client=AuthenticatedUpdates(Path(request['cache']),repository['root'].encode(),repository['root_sha256'],repository['metadata_url'],repository['targets_url'],context,context_sha,fetcher=fetcher,cache_wait_seconds=writer_wait)
     if action in ('inspect_storage','clean_storage'):
         # These operations need no Internet and claim no fresh publisher check.
         # The installed helper and its build-pinned context are still verified.
@@ -113,7 +114,6 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             from horizon_linux_install import LinuxCohortLifecycle
             native_lifecycle=LinuxCohortLifecycle
         verify_running_base=lambda base:native_lifecycle.verify_running_base(store,base,request['activation'])
-    writer_wait=90 if action=='install' else 0
     candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),
                             verify_running_base=verify_running_base,
                             retain_download=action=='prepare_install',writer_wait=writer_wait)

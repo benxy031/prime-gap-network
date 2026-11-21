@@ -157,6 +157,27 @@ except OSError: sys.exit(16)
             self.assertEqual(result.returncode, 16, result.stderr.decode(errors='replace'))
             self.assertTrue(Path(receipt['stage']).is_dir())
 
+    def test_cli_passes_bounded_wait_to_download_cache(self):
+        import contextlib
+        request = dict(schema='PGN_UPDATE_REQUEST_V1', action='prepare', context=self.context,
+                       cache=str(self.root/'busy-prepare'), selected=['cpu'])
+        repository = dict(genesis_hash=self.context['genesis_hash'], compatibility_set=self.context['compatibility_set'],
+                          root=self.bootstrap.decode(), root_sha256=client_module.digest(self.bootstrap),
+                          metadata_url=self.base, targets_url=self.target)
+        actual_lock = client_module.locked_cache
+        waits = []
+
+        @contextlib.contextmanager
+        def observe_lock(path, *, wait_seconds=0):
+            waits.append(wait_seconds)
+            with actual_lock(path, wait_seconds=wait_seconds):
+                yield
+
+        with patch.object(client_module,'locked_cache',side_effect=observe_lock):
+            result = update_helper.run(request,repositories={'testnet': repository},fetcher=self.transport)
+        self.assertTrue(result['publisher_authenticated'])
+        self.assertIn(90, waits)
+
     def test_waiting_writer_resumes_after_another_process_releases_lock(self):
         store = self.root/'overlapping-install'
         store.mkdir()
