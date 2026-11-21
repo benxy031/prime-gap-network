@@ -46,7 +46,14 @@ void identifyInstalledCpu(ComponentVersionsContext& context,const QString& app){
 ComponentVersionsContext walletComponentVersionsContext(const QString& productRoot,const QString& runtimeDirectory,bool testnet){
  ComponentVersionsContext context;context.testnet=testnet;const auto app=QCoreApplication::applicationDirPath();context.manifestPath=QDir(app).filePath("components.json");context.codeRoots.insert("ui",codeDirectory(app));context.primaryPrograms.insert("ui",QCoreApplication::applicationFilePath());
  context.applicationRoot=pgn::app::cleanApplicationRoot(productRoot);context.mutableDataRoot=pgn::app::mutableDataRoot(productRoot);
- const auto engine=QDir(app).filePath("EngineRuntime");context.codeRoots.insert("gpu",codeDirectory(engine));identifyInstalledCpu(context,app);
+ const auto engine=QDir(app).filePath("EngineRuntime");
+ context.codeRoots.insert("gpu",codeDirectory(engine));
+ auto gpuHost=QDir(engine).filePath("network/horizon-engine-host");
+#ifdef Q_OS_WIN
+ gpuHost+=".exe";
+#endif
+ context.primaryPrograms.insert("gpu",gpuHost);
+ identifyInstalledCpu(context,app);
  context.coreProfilePath=QDir(runtimeDirectory).filePath("wallet-core.json");
  return refreshComponentVersionsContext(std::move(context));
 }
@@ -215,7 +222,7 @@ void ComponentVersionsDialog::presentPublished(const QJsonObject& value,const QS
    :unknown?QString("No updates found for verified components. Some local versions could not be verified.")
    :QString("All components are up to date.");
  }
- status_->setText(summary);updateRecovery();
+ status_->setText(summary);progress_->hide();updateRecovery();
 }
 void ComponentVersionsDialog::prepareSelected(){
  if(busy_||localBusy_||recover_->isVisible()||!publishedFresh_||selected().isEmpty()||!ensureService())return;

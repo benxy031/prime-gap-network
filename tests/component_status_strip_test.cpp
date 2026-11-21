@@ -7,6 +7,8 @@
 #include <QTemporaryDir>
 #include <QSaveFile>
 #include <QElapsedTimer>
+#include <QProgressBar>
+#include <QTableWidget>
 #include <QThread>
 #include <iostream>
 int main(int argc,char** argv){
@@ -28,6 +30,29 @@ int main(int argc,char** argv){
   if(!bind(root+"/missing-core")||!wait("unidentified"))return 34;
   if(!QFile::remove(context.coreProfilePath)||!bind(core)||!wait("matched_local_manifest"))return 35;
   std::cout<<"PASS atomic profile rebind: absent/valid/invalid/recreated; fresh primary hash binding without restart\n";return 0;
+ }
+ if(argc>=3&&QString::fromLocal8Bit(argv[1])=="--installed-gpu-updates"){
+  const auto expected=QString::fromLocal8Bit(argv[2]);
+  const auto root=QCoreApplication::applicationDirPath();
+  auto installed=pgn::ui::walletComponentVersionsContext(root,root+"/test-runtime",true);
+  installed.fetchOnOpen=false;
+  const auto manifest=pgn::ui::inspectLocalComponentVersions(installed,pgn::ui::ComponentInventory::Manifest);
+  const auto files=pgn::ui::inspectLocalComponentVersions(installed);
+  const auto localGpu=[](const QJsonObject& snapshot){
+   for(const auto& entry:snapshot.value("components").toArray())if(entry.toObject().value("id")=="gpu")return entry.toObject();
+   return QJsonObject{};
+  };
+  if(localGpu(manifest).value("state")!="reported_local_manifest"||localGpu(manifest).value("version").toString()!=expected)return 40;
+  if(localGpu(files).value("state")!="matched_local_manifest"||!localGpu(files).value("primary_bound").toBool())return 41;
+  pgn::ui::ComponentVersionsDialog dialog(installed);
+  dialog.presentLocal(manifest);
+  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","metadata"},{"component",""},{"completed",0},{"total",0}});
+  dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},
+     {"components",QJsonArray{QJsonObject{{"id","gpu"},{"version",expected}}}}});
+  auto* table=dialog.findChild<QTableWidget*>("pgn-components-table");
+  auto* progress=dialog.findChild<QProgressBar*>();
+  if(!table||table->item(2,1)->text()!=expected||table->item(2,3)->text()!="Up to date"||!progress||!progress->isHidden())return 42;
+  std::cout<<"PASS installed GPU manifest, executable binding and Updates row\n";return 0;
  }
  if(argc>=3&&QString::fromLocal8Bit(argv[1])=="--inspect-installed"){
   const auto product=QString::fromLocal8Bit(argv[2]);
