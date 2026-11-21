@@ -46,11 +46,16 @@
 namespace pgn::wallet {
 namespace {
 #ifdef Q_OS_WIN
-bool processIdentity(HANDLE handle,QString& birth,QString& image){
+QString windowsProcessBirth(HANDLE handle){
  FILETIME created,exited,kernel,user;
- if(!GetProcessTimes(handle,&created,&exited,&kernel,&user))return false;
+ if(!GetProcessTimes(handle,&created,&exited,&kernel,&user))return {};
  const quint64 ticks=(static_cast<quint64>(created.dwHighDateTime)<<32)|created.dwLowDateTime;
- birth=QString::number(ticks);wchar_t path[32768];DWORD count=32768;
+ return QString::number(ticks);
+}
+bool processIdentity(HANDLE handle,QString& birth,QString& image){
+ birth=windowsProcessBirth(handle);
+ if(birth.isEmpty())return false;
+ wchar_t path[32768];DWORD count=32768;
  if(!QueryFullProcessImageNameW(handle,0,path,&count))return false;
  image=QString::fromWCharArray(path,count);return true;
 }
@@ -67,6 +72,16 @@ bool processIdentity(qint64 pid,QString& birth,QString& image,bool* exited=nullp
 
 #endif
 
+bool coreRecoveryMemoryAvailable(){
+#ifdef Q_OS_WIN
+ MEMORYSTATUSEX memory{};
+ memory.dwLength=sizeof(memory);
+ return GlobalMemoryStatusEx(&memory)&&memory.ullAvailPhys>=CoreRecoveryPolicy::MemoryPhysicalReserve&&
+  memory.ullAvailPageFile>=CoreRecoveryPolicy::MemoryCommitReserve;
+#else
+ return false;
+#endif
+}
 QByteArray nativeFileIdentity(const QString& path,bool directory){
  const QFileInfo info(path);
  if(!info.exists()||info.isSymLink()||info.isDir()!=directory)return {};
@@ -189,6 +204,12 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
   if(!preparation.error.isEmpty()){failStart(preparation.error);return;}
   if(preparationAutomatic_&&(!recoveryBindingValid_||!recoveryBindingMatches(readRecoveryStorage(preparation.profile,runtimeDirectory_))||!departedOwnerAbsent())){
    failStart("Core recovery stopped: profile, data folder or storage identity changed");return;
+  }
+  if(preparationAutomatic_&&recovery_.memoryRecovery()&&!coreRecoveryMemoryAvailable()){
+   recovery_.deferMemoryLaunch();launching_=false;
+   if(ownershipLock_)ownershipLock_->unlock();
+   setLinkState(CoreLinkState::Stopped,"Core is waiting for stable memory headroom before restarting.");
+   return;
   }
   profile_=preparation.profile;if(!preparation.notice.isEmpty())report(preparation.notice);
   managedUpgradePending_=preparation.ownedUpgradePending;
@@ -349,13 +370,17 @@ bool CoreRuntime::recoverOwned(){
 #endif
 }
 bool CoreRuntime::processAlive(){
- bool confirmedExit=false,exitKindAllowed=true;
+ bool confirmedExit=false,exitKindAllowed=true,memoryExitKindAllowed=false;
 #ifdef Q_OS_WIN
  const auto wait=processHandle_?WaitForSingleObject(static_cast<HANDLE>(processHandle_),0):WAIT_FAILED;
  if(wait==WAIT_TIMEOUT)return true;
  if(wait==WAIT_OBJECT_0){
   DWORD code{};confirmedExit=true;
-  exitKindAllowed=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code)&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
+  const bool haveExitCode=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code);
+  exitKindAllowed=haveExitCode&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
+  // The Windows CRT can report terminate() as a fail-fast exit. Require
+  // the exact terminal message from this verified Core run as well.
+  memoryExitKindAllowed=haveExitCode&&(exitKindAllowed||code==0xC0000409u);
  }
  if(processHandle_){CloseHandle(static_cast<HANDLE>(processHandle_));processHandle_=nullptr;}
 #elif defined(Q_OS_LINUX)
@@ -369,6 +394,7 @@ bool CoreRuntime::processAlive(){
   const auto departed=coreOwnershipBinding(profile_,pid_,processBirth_);
   readRecoveryLog(true);
   const bool known=confirmedExit&&exitKindAllowed&&faultEvidence_.knownDiskFull();
+  const bool outOfMemory=confirmedExit&&memoryExitKindAllowed&&faultEvidence_.knownOutOfMemory();
   const bool same=recoveryBindingValid_&&recoveryBindingMatches(readRecoveryStorage(profile_,runtimeDirectory_));
   const auto databaseFailure=confirmedExit&&exitKindAllowed&&same?faultEvidence_.databaseFailure():CoreDatabaseFailure::None;
   ++identityGeneration_;pid_=0;processBirth_.clear();clock_.stop();connected_=false;checking_=false;stopping_=false;walletChecking_=walletReady_=false;
@@ -378,7 +404,7 @@ bool CoreRuntime::processAlive(){
       std::string_view(startupError->constData(),std::size_t(startupError->size())));
   const QString exitDetail=dataDirectoryRefused
       ?coreDataDirectoryRefusedDetail
-      :"The owned Core process exited";
+      :outOfMemory?"Core ran out of memory.":"The owned Core process exited";
   setLinkState(CoreLinkState::Stopped,exitDetail);
   if(onObservation)onObservation(std::nullopt);
   if(ownershipLock_)ownershipLock_->unlock();
@@ -387,10 +413,16 @@ bool CoreRuntime::processAlive(){
    restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
    const auto generation=recovery_.generation();
    QTimer::singleShot(0,this,[this,generation]{if(recovery_.permits(generation))begin(true);});
-  }else if(recovery_.diskExit(known,same,recoveryTime_.elapsed())){
+  }else if(outOfMemory?recovery_.memoryExit(true,same,recoveryTime_.elapsed()):
+                       recovery_.diskExit(known,same,recoveryTime_.elapsed())){
    departedOwner_=departed;recoveryClock_.start();
-   setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
-   report("CORE WAITING FOR STORAGE · automatic recovery is armed");
+   if(outOfMemory){
+    setLinkState(CoreLinkState::Stopped,"Core ran out of memory. Waiting for stable memory headroom before restarting.");
+    report("CORE WAITING FOR MEMORY · automatic recovery is armed");
+   }else{
+    setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
+    report("CORE WAITING FOR STORAGE · automatic recovery is armed");
+   }
   }else if(databaseFailure!=CoreDatabaseFailure::None&&recovery_.state()!=CoreRecoveryPolicy::State::Suppressed){
    recoveryClock_.stop();
    const auto reason=databaseFailure==CoreDatabaseFailure::Chainstate?
@@ -402,7 +434,7 @@ bool CoreRuntime::processAlive(){
    recoveryClock_.stop();
    if(recovery_.state()==CoreRecoveryPolicy::State::Suppressed)
     report("CORE STOPPED BY REQUEST · automatic restart is suspended");
-   else if(dataDirectoryRefused)
+   else if(dataDirectoryRefused||outOfMemory)
     report(exitDetail);
    else
     report("CORE STOPPED · cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
@@ -480,10 +512,12 @@ bool CoreRuntime::departedOwnerAbsent()const{
 #ifdef Q_OS_WIN
  HANDLE handle=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,DWORD(oldPid));
  if(!handle)return GetLastError()==ERROR_INVALID_PARAMETER;
- QString birth,image;const bool identified=processIdentity(handle,birth,image);
- const auto wait=WaitForSingleObject(handle,0);CloseHandle(handle);
- // A recycled PID is deliberately not an automatic-recovery witness.
- return identified&&birth==oldBirth&&wait==WAIT_OBJECT_0;
+ // The image path can become unavailable once the process object is signaled.
+ const bool departed=WaitForSingleObject(handle,0)==WAIT_OBJECT_0;
+ const auto birth=departed?windowsProcessBirth(handle):QString{};
+ CloseHandle(handle);
+ // The original creation time excludes a recycled PID.
+ return !birth.isEmpty()&&birth==oldBirth;
 #elif defined(Q_OS_LINUX)
  QString birth,image;bool exited{};
  if(processIdentity(oldPid,birth,image,&exited))return false;
@@ -506,7 +540,7 @@ void CoreRuntime::recoveryTick(){
   recovery_.attention();recoveryClock_.stop();
   report("Core recovery stopped: approved profile, process ownership or storage identity changed; no client launched");return;
  }
- if(recovery_.probe(now,sample.ready,true,true,sample.available))begin(true,true);
+ if(recovery_.probe(now,sample.ready,true,true,sample.available,coreRecoveryMemoryAvailable()))begin(true,true);
 }
 void CoreRuntime::report(const QString& text){if(onStatus)onStatus(text);}
 void CoreRuntime::setLinkState(CoreLinkState state,const QString& detail){
