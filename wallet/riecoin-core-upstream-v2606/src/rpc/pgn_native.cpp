@@ -36,6 +36,7 @@
 #include <set>
 #include <memory>
 #include <mutex>
+#include <tuple>
 using namespace pgn::core;
 namespace {
 void RequireNative(const ChainstateManager& manager){
@@ -889,6 +890,111 @@ RPCMethod getpgnticketatlas(){
    if(out.write().size()>524288)throw JSONRPCError(RPC_MISC_ERROR,"Atlas byte budget exceeded; request fewer bins");return out;
   }};
 }
+
+RPCMethod getpgnblockstorage(){
+ return RPCMethod{"getpgnblockstorage",
+  "Measure locally retained Gold and Coordination records on the active native chain. Uses the on-disk blk record lengths including their framing; excludes undo data, file padding, indexes and wallets.",
+  {{"start_height",RPCArg::Type::NUM,RPCArg::Default{0},"First ledger height measured"},
+   {"anchor_hash",RPCArg::Type::STR_HEX,RPCArg::Optional::OMITTED,"Continue measuring an active-chain snapshot; defaults to the tip"}},
+  RPCResult{RPCResult::Type::OBJ,"","Bounded storage measurement",{
+   {RPCResult::Type::STR,"schema","PGN_BLOCK_STORAGE_V1"},
+   {RPCResult::Type::STR_HEX,"genesis","Native genesis"},
+   {RPCResult::Type::STR_HEX,"anchor_hash","Hash of the active block at anchor_height"},
+   {RPCResult::Type::NUM,"anchor_height","Last height covered by this measurement"},
+   {RPCResult::Type::NUM,"start_height","Inclusive page start"},
+   {RPCResult::Type::STR_HEX,"start_parent_hash","Block before the page; empty from genesis"},
+   {RPCResult::Type::NUM,"end_height","Exclusive page end"},
+   {RPCResult::Type::NUM,"gold_bytes","Gold record bytes within this page"},
+   {RPCResult::Type::NUM,"coordination_bytes","Coordination record bytes within this page"},
+   {RPCResult::Type::NUM,"missing_blocks","Blocks without locally retained data within this page"}
+  }},RPCExamples{""},
+ [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
+  auto& manager=EnsureAnyChainman(request.context);
+  auto& blockman=manager.m_blockman;
+  const auto start=request.params[0].isNull()?0:request.params[0].getInt<int64_t>();
+  struct Record {int height; FlatFilePos pos; bool gold;};
+  std::vector<Record> records;
+  uint256 anchor_hash,genesis;
+  std::string start_parent_hash;
+  int64_t end{};
+  int anchor_height{};
+  std::vector<int> missing;
+  {
+   LOCK(cs_main);
+   RequireNative(manager);
+   const auto& chain=manager.ActiveChain();
+   const CBlockIndex* anchor;
+   if(request.params[1].isNull()){
+    anchor=&Tip(manager);
+   }else{
+    const auto requested=ParseHashV(request.params[1],"anchor_hash");
+    anchor=blockman.LookupBlockIndex(requested);
+    if(!anchor||!chain.Contains(*anchor))throw JSONRPCError(RPC_INVALID_PARAMETER,"Storage anchor left the active chain");
+   }
+   anchor_height=anchor->nHeight;
+   if(start<0||start>anchor_height)throw JSONRPCError(RPC_INVALID_PARAMETER,"Storage page outside the anchored chain");
+   end=std::min(start+2048,int64_t(anchor_height)+1);
+   anchor_hash=anchor->GetBlockHash();
+   genesis=manager.GetConsensus().hashGenesisBlock;
+   if(start>0)start_parent_hash=chain[start-1]->GetBlockHash().GetHex();
+   records.reserve(end-start);
+   for(auto height=start;height<end;++height){
+    const auto* index=chain[height];
+    const auto pos=index->GetBlockPos();
+    if(pos.IsNull())missing.push_back(static_cast<int>(height));
+    else records.push_back({static_cast<int>(height),pos,height>0&&index->nNonce==0});
+   }
+  }
+  std::sort(records.begin(),records.end(),[](const auto& lhs,const auto& rhs){
+   return std::tie(lhs.pos.nFile,lhs.pos.nPos)<std::tie(rhs.pos.nFile,rhs.pos.nPos);
+  });
+  uint64_t gold{},coordination{};
+  const auto magic=manager.GetParams().MessageStart();
+  try{
+   for(auto first=records.begin();first!=records.end();){
+    const int number=first->pos.nFile;
+    auto file=blockman.OpenBlockFile({number,0},/*fReadOnly=*/true);
+    if(file.IsNull())throw std::runtime_error("Local block file is unavailable");
+    const auto file_size=file.size();
+    for(;first!=records.end()&&first->pos.nFile==number;++first){
+     const auto& pos=first->pos;
+     if(pos.nPos<node::STORAGE_HEADER_BYTES)throw std::runtime_error("Invalid local block position");
+     file.seek(pos.nPos-node::STORAGE_HEADER_BYTES,SEEK_SET);
+     MessageStartChars record_magic;
+     unsigned int record_size{};
+     file>>record_magic>>record_size;
+     if(record_magic!=magic||!record_size||record_size>MAX_SIZE||int64_t(pos.nPos)+record_size>file_size)
+      throw std::runtime_error("Local block record length unavailable");
+     (first->gold?gold:coordination)+=uint64_t(record_size)+node::STORAGE_HEADER_BYTES;
+    }
+   }
+  }catch(const std::exception& error){throw JSONRPCError(RPC_MISC_ERROR,error.what());}
+  {
+   LOCK(cs_main);
+   const auto& chain=manager.ActiveChain();
+   if(chain.Height()<anchor_height||chain[anchor_height]->GetBlockHash()!=anchor_hash)
+    throw JSONRPCError(RPC_MISC_ERROR,"Storage anchor changed while reading");
+   for(const auto height:missing)if(!chain[height]->GetBlockPos().IsNull())
+    throw JSONRPCError(RPC_MISC_ERROR,"Local block retention changed while reading");
+   for(const auto& record:records)if(chain[record.height]->GetBlockPos()!=record.pos)
+    throw JSONRPCError(RPC_MISC_ERROR,"Local block retention changed while reading");
+  }
+  UniValue result{UniValue::VOBJ};
+  result.pushKV("schema","PGN_BLOCK_STORAGE_V1");
+  result.pushKV("genesis",genesis.GetHex());
+  result.pushKV("anchor_hash",anchor_hash.GetHex());
+  result.pushKV("anchor_height",anchor_height);
+  result.pushKV("start_height",start);
+  result.pushKV("start_parent_hash",start_parent_hash);
+  result.pushKV("end_height",end);
+  result.pushKV("gold_bytes",gold);
+  result.pushKV("coordination_bytes",coordination);
+  result.pushKV("missing_blocks",uint64_t(missing.size()));
+  return result;
+ }};
+}
+
+
 RPCMethod getpgnnetworkmetrics(){
  return RPCMethod{"getpgnnetworkmetrics","Read bounded chain-derived merit, reported search throughput and durable audit queue statistics. Reported throughput is not proof of audited work or online hardware.",{
   {"maximum_points",RPCArg::Type::NUM,RPCArg::Default{96},"Sample budget, 2 through 256"},
@@ -932,6 +1038,6 @@ RPCMethod getpgnnetworkmetrics(){
 std::shared_ptr<const pgn::core::NativeLeaderboardSnapshot>
 pgn::core::ReadNativeSocialIdentitySnapshot(ChainstateManager& manager){return ReadLeaderboardSnapshot(manager,std::nullopt);}
 void RegisterPgnNativeRPCCommands(CRPCTable& table){
- static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
+ static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"blockchain",&getpgnblockstorage},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
  for(const auto& command:commands)table.appendCommand(command.name,&command);
 }
