@@ -2,7 +2,7 @@ name: Build the qualified Windows recovery changes together
 on:
   workflow_dispatch:
   push:
-    branches: [qualification/horizon-next-recovery-build]
+    branches: [qualification/ui196-clean-release]
 permissions:
   contents: read
 concurrency:
@@ -89,17 +89,28 @@ jobs:
 
       - name: Build the Windows application from the qualified sources
         run: |
+          set -euo pipefail
           cmake -S . -B build-app -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-app --target PGN-Horizon --parallel 4
+          cmake --build build-app --target PGN-Horizon pgn-core-recovery-test pgn-canvas-controls-test pgn-component-status-strip-test --parallel 4
+          QT_QPA_PLATFORM=offscreen ctest --test-dir build-app --output-on-failure --no-tests=error -R '^(core-recovery|canvas-controls|component-status-strip)$'
+          mkdir -p dialog-fixture/EngineRuntime/network
+          cp build-app/pgn-component-status-strip-test.exe dialog-fixture/
+          cp build-app/pgn-component-status-strip-test.exe dialog-fixture/EngineRuntime/network/horizon-engine-host.exe
+          gpu_digest="$(sha256sum dialog-fixture/EngineRuntime/network/horizon-engine-host.exe | cut -d ' ' -f1)"
+          printf '{"schema":"PGN_COMPONENT_MANIFEST_V1","published":true,"network":"testnet","components":[{"id":"gpu","version":"2026.11.21.95","files":[{"path":"network/horizon-engine-host.exe","sha256":"%s"}]}]}\n' "$gpu_digest" > dialog-fixture/components.json
+          QT_QPA_PLATFORM=offscreen dialog-fixture/pgn-component-status-strip-test.exe --installed-gpu-updates 2026.11.21.95 > installed-gpu-dialog-test.txt
           mkdir -p horizon-next-recovery
+          cp build-app/pgn-component-status-strip-test.exe installed-gpu-dialog-test.txt horizon-next-recovery/
           cp build-app/PGN-Horizon.exe horizon-next-recovery/
           printf '%s\n' "$GITHUB_SHA" > horizon-next-recovery/SOURCE.txt
           qmake6 -query QT_VERSION > horizon-next-recovery/QT_VERSION.txt
+          g++ --version > horizon-next-recovery/TOOLCHAIN.txt
+          cp build-app/Testing/Temporary/LastTest.log horizon-next-recovery/CORE-RECOVERY-TEST.txt
           sha256sum horizon-next-recovery/*.exe > horizon-next-recovery/SHA256SUMS.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: success()
         with:
-          name: horizon-next-recovery-windows
+          name: horizon-ui201-gpu-inventory-windows
           path: horizon-next-recovery
           if-no-files-found: error
           retention-days: 7
