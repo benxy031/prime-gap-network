@@ -54,5 +54,16 @@ int main(int argc,char** argv){
  auto inbound=peer;inbound.insert("connection_type","inbound");if(projectNativeSynchronization(*quietValue.observation,QJsonArray{inbound},endpoint).synchronizing)return 19;
  if(projectNativeSynchronization(*quietValue.observation,QJsonArray{peer},{}).synchronizing)return 20;
  auto other=peer;other.insert("addr","127.0.0.1:32101");if(projectNativeSynchronization(*quietValue.observation,QJsonArray{other},endpoint).synchronizing!=true)return 21;
+ auto measured=peer;measured.insert("synced_headers",12);measured.insert("inflight",QJsonArray{11,12});
+ const auto diagnostic=projectNativeSynchronization(*quietValue.observation,QJsonArray{measured},endpoint);
+ const QJsonObject expected{{"announced_height",10},{"syncing",false},{"synced_headers",12},{"inflight_count",2},{"first_inflight_height",11}};
+ if(diagnostic.nativePeerDiagnostic!=expected||!diagnostic.nativePeerCaughtUp)return 22;
+ const auto malformed=projectNativeSynchronization(diagnostic,QJsonArray{measured,"malformed"},endpoint);
+ if(!malformed.nativePeerDiagnostic.isEmpty()||malformed.synchronizing||malformed.nativePeerCaughtUp)return 23;
+ const auto duplicate=projectNativeSynchronization(diagnostic,QJsonArray{measured,peer},endpoint);
+ if(!duplicate.nativePeerDiagnostic.isEmpty()||!duplicate.nativePeerCaughtUp||duplicate.synchronizing!=false)return 24;
+ auto partial=peer;partial.insert("inflight",QJsonArray{1.5});partial.insert("synced_blocks",9007199254740992.0);
+ const auto sanitized=projectNativeSynchronization(diagnostic,QJsonArray{partial},endpoint);
+ if(sanitized.nativePeerDiagnostic.size()!=2||sanitized.nativePeerDiagnostic.contains("addr"))return 25;
  std::cout<<"PASS owned chain identity, exact heights, stale rejection, quiet-native catchup preserving raw CoreIBD, pending/unknown/foreignbridge holds\n";
 }

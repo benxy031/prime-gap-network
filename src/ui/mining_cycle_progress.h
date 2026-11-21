@@ -6,6 +6,11 @@
 #include <cmath>
 #include <optional>
 namespace pgn::ui {
+inline QString auditCompletionStatus(const QJsonObject& frame){
+ if(frame.value("phase")!="Completing audits")return {};
+ const auto detail=frame.value("message").toString().trimmed().left(400);
+ return detail.isEmpty()?QStringLiteral("Finalizing audit results"):detail;
+}
 // The worker can still attest the active audit and its completed prefix
 // while the next partition has no sample. That view has no source age or rate.
 inline bool retainedAuditPartitionBoundary(const QJsonObject& frame){

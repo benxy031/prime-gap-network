@@ -1,4 +1,5 @@
 #include "app/horizon_user_paths.h"
+#include <QFileInfo>
 #include "ui/mining_results_view.h"
 #include "ui/merit_palette.h"
 #include "ui/gap_rosette.h"
@@ -45,7 +46,7 @@ class MiningResultsView final:public QWidget {
     QSet<QString> eligibleRecords_;QHash<QString,double> rowTargets_;bool mixedTargets_{};
     science::MiningScopeArchive sessionArchive_,localArchive_,ticketArchive_{QString{},true};
     int fittedRows_{10};bool fittingQueued_{};
-    bool direct_{};QJsonObject directPacket_,presentedDirect_;QMap<quint32,qint64> cumulative_;
+    bool direct_{};QJsonObject directPacket_,presentedDirect_,retainedHistory_;QMap<quint32,qint64> cumulative_;
     QFutureWatcher<ResultsTurn> work_;std::shared_ptr<std::atomic_bool> cancel_;
     science::MiningResults latest_;
     void fitStatistics(){
@@ -155,14 +156,16 @@ class MiningResultsView final:public QWidget {
     }
     void presentStatisticsScope(){
         const auto selected=sessionSummary_->selectedScope();setProperty("pgn_statistics_scope",selected);
-        if(!direct_){presentStatistics(latest_,cumulative_,mixedTargets_,target_,false);return;}
-        const auto stats=directPacket_.value("scopes").toObject().value(selected).toObject().value("statistics").toObject();
+        const bool archivedHistory=!direct_&&selected=="history"&&!retainedHistory_.isEmpty();
+        if(!direct_&&!archivedHistory){presentStatistics(latest_,cumulative_,mixedTargets_,target_,false);return;}
+        const auto data=archivedHistory?retainedHistory_:directPacket_.value("scopes").toObject().value(selected).toObject();
+        const auto stats=data.value("statistics").toObject();
         setProperty("pgn_statistics_available",!stats.isEmpty());
         if(stats.isEmpty()){gapStatistics_->setRowCount(0);meritStatistics_->setRowCount(0);return;}
-        science::MiningResults data;data.points=stats.value("count_total").toVariant().toLongLong();data.atOrAboveTarget=stats.value("at_or_above_target").toVariant().toLongLong();
+        science::MiningResults results;results.points=stats.value("count_total").toVariant().toLongLong();results.atOrAboveTarget=stats.value("at_or_above_target").toVariant().toLongLong();
         QMap<quint32,qint64> cumulative;const auto thresholds=stats.value("threshold_counts").toObject();for(auto it=thresholds.begin();it!=thresholds.end();++it)cumulative.insert(it.key().toUInt(),it.value().toVariant().toLongLong());
-        const auto bands=stats.value("merit_band_counts").toObject();for(auto it=bands.begin();it!=bands.end();++it)data.meritBands.insert(it.key().toInt(),it.value().toVariant().toLongLong());
-        const auto target=stats.value("statistics_target");presentStatistics(data,cumulative,stats.value("mixed_targets").toBool(),target.isDouble()?std::optional<double>(target.toDouble()):std::nullopt,true);
+        const auto bands=stats.value("merit_band_counts").toObject();for(auto it=bands.begin();it!=bands.end();++it)results.meritBands.insert(it.key().toInt(),it.value().toVariant().toLongLong());
+        const auto target=stats.value("statistics_target");presentStatistics(results,cumulative,stats.value("mixed_targets").toBool(),target.isDouble()?std::optional<double>(target.toDouble()):std::nullopt,true);
     }
     void present(const ResultsTurn& turn){
         latest_=turn.data;
@@ -179,6 +182,8 @@ class MiningResultsView final:public QWidget {
         const auto scope=scopeKey();auto requests=scope=="session"?sessionRequests_:QStringList{request_};requests.removeAll(QString{});
         auto known=scope=="session"?sessionRuns_:QStringList{run_};known.removeAll(QString{});
         const bool whole=scope=="history";
+        const auto database=pgn::app::mutableDataRoot(root_)+"/runtime/scientific-history.sqlite";
+        if(!whole&&requests.isEmpty()&&known.isEmpty()&&!retainedHistory_.isEmpty()&&!QFileInfo(database).isFile())return;
         const auto key=scope+"/"+requests.join(',')+"/"+known.join(',')+"/"+revision_+"/"+QString::number(fittedRows_)+"/"+(target_?QString::number(*target_,'g',17):QString{});
         const auto selection=scope+"/"+requests.join(',')+"/"+known.join(',')+"/"+(target_?QString::number(*target_,'g',17):QString{});
         if(selectionKey_!=selection){selectionKey_=selection;best_->setRowCount(0);recent_->setRowCount(0);gapStatistics_->setRowCount(0);meritStatistics_->setRowCount(0);setProperty("pgn_results_points",QVariant{});}
@@ -187,15 +192,15 @@ class MiningResultsView final:public QWidget {
         if(activeKey_==key)return;activeKey_=key;cancel_=std::make_shared<std::atomic_bool>(false);
         state_->setText("Loading "+scopeLabel().toLower()+"…");setProperty("pgn_results_loading",true);
         const auto root=root_,genesis=genesis_;const int limit=fittedRows_;const auto target=target_;const auto cancel=cancel_;
-        work_.setFuture(QtConcurrent::run([root,genesis,known,requests,key,whole,limit,target,cancel]{
+        work_.setFuture(QtConcurrent::run([root,genesis,known,requests,key,whole,limit,target,cancel,database]{
             ResultsTurn turn;turn.key=key;
             try{turn.runs=known;if(!whole&&!requests.isEmpty())turn.runs+=science::ticketSourceRuns(pgn::app::mutableDataRoot(root)+"/runtime/local-bookings.sqlite",requests,genesis);turn.runs.removeDuplicates();
-                turn.data=science::readMiningResults(pgn::app::mutableDataRoot(root)+"/runtime/scientific-history.sqlite",turn.runs,whole,limit,target,cancel.get());}
+                turn.data=science::readMiningResults(database,turn.runs,whole,limit,target,cancel.get());}
             catch(const std::exception& e){turn.data.error=QString::fromUtf8(e.what());}return turn;
         }));
     }
 public:
-    explicit MiningResultsView(QString root,QWidget* parent):QWidget(parent),root_(std::move(root)),localArchive_(pgn::app::mutableDataRoot(root_)+"/testnet/mining-scope-archive.json"){
+    explicit MiningResultsView(QString root,QWidget* parent,bool testnet):QWidget(parent),root_(std::move(root)),localArchive_(pgn::app::mutableDataRoot(root_)+(testnet?"/testnet/":"/mainnet/")+"mining-scope-archive.json"){
         setObjectName("pgn-mining-results");setStyleSheet(dataPanelStyle()+"QGroupBox{border:1px solid #1c424b;border-radius:9px;margin-top:12px;}QGroupBox::title{subcontrol-origin:margin;left:10px;padding:0 5px;color:#b5e5df;font-weight:600;}");auto* box=new QVBoxLayout(this);box->setContentsMargins(12,4,12,4);box->setSpacing(6);
         auto* top=new QHBoxLayout;heading_=new QLabel("CURRENT TICKET · waiting for source context");heading_->setStyleSheet("font-weight:600;color:#69efc5");heading_->setWordWrap(true);top->addWidget(heading_,1);box->addLayout(top);
 
@@ -220,6 +225,11 @@ public:
         section("GAP SIZE · cumulative",gapStatistics_);auto* horizontal=new QFrame;horizontal->setFrameShape(QFrame::HLine);horizontal->setStyleSheet("color:#2b5961;");column->addWidget(horizontal);section("MERIT · separate bands",meritStatistics_);statLayout->addWidget(distributions,1);auto* divider=new QFrame;divider->setFrameShape(QFrame::VLine);divider->setStyleSheet("color:#27515b");statLayout->addWidget(divider);sessionSummary_=new MiningSessionSummary;statLayout->addWidget(sessionSummary_,1);statistics->setTitle("STATISTICS · "+sessionSummary_->selectedScope());sessionSummary_->onScopeChanged=[this,statistics](const QString& selected){statistics->setTitle("STATISTICS · "+selected);presentStatisticsScope();};statistics->setMinimumWidth(330);statistics->setMinimumHeight(0);statistics->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Ignored);panels->addWidget(statistics);panels->setSizes({420,420,380});box->addWidget(panels,1);
         state_=new QLabel("Awaiting ticket results");state_->setWordWrap(true);box->addWidget(state_);state_->hide();
         connect(&work_,&QFutureWatcher<ResultsTurn>::finished,this,[this]{const auto result=work_.result();setProperty("pgn_results_loading",false);if(!direct_&&result.key==wantedKey_&&!result.data.cancelled)present(result);if(result.key!=wantedKey_||result.data.cancelled){activeKey_.clear();refresh();}});
+        retainedHistory_=localArchive_.scope();
+        if(!retainedHistory_.isEmpty()){
+            sessionSummary_->present({},retainedHistory_,{});
+            presentStatisticsScope();
+        }
     }
     ~MiningResultsView()override{if(cancel_)cancel_->store(true);}
     bool eventFilter(QObject* watched,QEvent* event)override{
@@ -231,7 +241,7 @@ public:
     void presentDirect(){
         const auto scope=scopeKey();const auto data=directPacket_.value("scopes").toObject().value(scope).toObject();
         sessionSummary_->present(directPacket_.value("scopes").toObject().value("session").toObject(),directPacket_.value("scopes").toObject().value("history").toObject(),directPacket_);auto ticketSummary=data;if(ticketArchive_.currentSource(directPacket_))ticketSummary=ticketArchive_.currentScope();else{for(const auto* key:{"positions","tests"})if(directPacket_.contains(key))ticketSummary.insert(key,directPacket_.value(key));}if(directPacket_.value("work_role")=="audit"){ticketSummary.remove("observed_golds");ticketSummary.remove("completed_tickets");}sessionSummary_->presentTicket(ticketSummary);presentStatisticsScope();
-        if(data.isEmpty()){presentedDirect_={};latest_={};fill(best_,{});fill(recent_,{});setProperty("pgn_results_best_rows",0);setProperty("pgn_results_recent_rows",0);presentStatisticsScope();setProperty("pgn_results_points",QVariant{});state_->setText("Awaiting "+scopeLabel().toLower()+" data");return;}
+        if(data.isEmpty()){presentedDirect_={};latest_={};fill(best_,{});fill(recent_,{});setProperty("pgn_results_best_rows",0);setProperty("pgn_results_recent_rows",0);presentStatisticsScope();setProperty("pgn_results_points",QVariant{});setProperty("pgn_results_error",QString{});state_->show();state_->setStyleSheet("color:#9ec7c1");state_->setText("Awaiting "+scopeLabel().toLower()+" data");return;}
         // Progress/rates still reach the summary on every input. The result
         // tables only need work when their data, identity or layout changes.
         const QJsonObject presentation{{"ticket",directPacket_.value("ticket_id")},{"scope",scopeKey()},
@@ -291,7 +301,7 @@ public:
     void index(const QJsonObject& packet){if(packet.value("complete")!=true)return;revision_=QString::number(packet.value("all").toObject().value("length").toObject().value("revision").toInteger());refresh();}
 };
 }
-QWidget* createMiningResultsView(const QString& root,QWidget* parent){return new MiningResultsView(root,parent);}
+QWidget* createMiningResultsView(const QString& root,QWidget* parent,bool testnet){return new MiningResultsView(root,parent,testnet);}
 void presentMiningRecordEligibility(QWidget* widget,const QJsonArray& pairs){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->recordEligibility(pairs);}
 void presentMiningResultsSource(QWidget* widget,const FrontierTelemetrySnapshot& lane){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->source(lane);}
 void presentMiningTicketData(QWidget* widget,const QJsonObject& packet){if(auto* view=dynamic_cast<MiningResultsView*>(widget))view->ticketData(packet);}

@@ -1,3 +1,4 @@
+#include "wallet/chain_bootstrap_import.h"
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
 #include "wallet/audit_activity_snapshot.h"
@@ -518,6 +519,59 @@ void CoreRuntime::launch(){
  if(launching_||verifier_.isRunning()){report("The owned Core preparation is still in progress");return;}
  recovery_.explicitStart();begin(true);
 }
+
+void CoreRuntime::applyChainBootstrap(std::function<void(qint64,const QString&,bool)> notify){
+ if(chainBootstrap_){
+  notify(0,"The testnet bootstrap is already running.",false);return;
+ }
+ const auto usable=[this]{
+  return connected_&&!stopping_&&!managedUpgradePending_&&
+    recovery_.state()!=CoreRecoveryPolicy::State::Suppressed&&processAlive();
+ };
+ if(!usable()||profile_.genesisHash!=ChainBootstrapGenesis){
+  notify(0,"Connect the verified testnet Core before applying a bootstrap.",true);return;
+ }
+ setProperty("pgn_chain_bootstrap_running",true);
+ const auto owner=epoch();
+ const auto lifecycle=recovery_.generation();
+ const auto active=[this,owner,lifecycle,usable]{
+  return lifecycle==recovery_.generation()&&owner.matches(epoch())&&usable()&&profile_.genesisHash==ChainBootstrapGenesis;
+ };
+ chainBootstrap_=new ChainBootstrapImport(this,
+  [this,active](const QString& method,const QJsonArray& params,ChainBootstrapImport::Reply reply){
+   if(!active()){reply({},"Core connection changed");return;}
+   rpc(method,params,[active,reply=std::move(reply)](QJsonValue value,QString error){
+    if(!active()){reply({},"Core connection changed");return;}
+    reply(value,error);
+   });
+  },
+  [this,active](const QJsonArray& requests,std::function<void(QJsonArray,QString)> done){
+   if(!active()){done({},"Core connection changed");return;}
+   QFile cookie(profile_.networkDataDirectory()+"/.cookie");
+   if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){done({},"Core credentials unavailable");return;}
+   QNetworkRequest request{QUrl("http://127.0.0.1:"+QString::number(profile_.rpcPort)+"/")};
+   request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
+   request.setRawHeader("Authorization","Basic "+cookie.readAll().trimmed().toBase64());
+   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
+   auto* reply=network_.post(request,QJsonDocument(requests).toJson(QJsonDocument::Compact),60000);
+   readBoundedCoreRpcReply(reply,this,65536,[reply,active,done=std::move(done)](QByteArray bytes,bool oversized){
+    const auto failed=reply->error()!=QNetworkReply::NoError;
+    reply->deleteLater();
+    const auto decoded=QJsonDocument::fromJson(bytes);
+    if(!active()||failed||oversized||!decoded.isArray()){done({},"Core submission unavailable");return;}
+    done(decoded.array(),{});
+   });
+  },
+  [this,notify=std::move(notify)](qint64 height,const QString& message,bool finished){
+   if(finished){
+    chainBootstrap_.clear();
+    setProperty("pgn_chain_bootstrap_running",false);
+   }
+   notify(height,message,finished);
+  });
+ chainBootstrap_->start();
+}
+
 void CoreRuntime::reattach(){
  if(QFileInfo::exists(runtimeDirectory_+"/wallet-owned.json")){recovery_.explicitStart();begin(false);}
 }
@@ -942,7 +996,9 @@ void CoreRuntime::readTicketDetails(const QString& request,std::function<void(QJ
  });
 }
 void CoreRuntime::readBlockAtHeight(int height,std::function<void(QJsonObject,QString)> consume){
- if(height<0||!connected_||!processAlive()){consume({},"Valid current-chain height required");return;}const auto owner=epoch();rpc("getblockhash",{height},[this,owner,consume=std::move(consume)](QJsonValue hash,QString error){if(!error.isEmpty()||!owner.matches(epoch())){consume({},error.isEmpty()?QString("Core epoch changed"):error);return;}readBlockDetails(hash.toString(),std::move(consume));});
+ const auto owner=epoch();
+ readExplorerBlockAtHeight(height,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},
+  [this](const QString& method,const QJsonArray& params,TransactionReply done){rpc(method,params,std::move(done));},std::move(consume));
 }
 void CoreRuntime::readBlockPage(int height,std::function<void(QJsonObject,QString)> consume){
  if(!connected_||!processAlive()){consume({},"Verified Core connection required");return;}const auto owner=epoch();rpc("getpgnstate",{},[this,owner,height,consume=std::move(consume)](QJsonValue value,QString error){
@@ -1108,6 +1164,7 @@ void CoreRuntime::inspect(){
 void CoreRuntime::suspendRecoveryForMaintenance(){
  recovery_.suppress();recoveryClock_.stop();restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
  managedUpgradeRetry_.invalidate();
+ if(chainBootstrap_)chainBootstrap_->cancel("Bootstrap interrupted for Core maintenance. Reconnect to resume.");
 }
 void CoreRuntime::stop(){
  suspendRecoveryForMaintenance();stopOwned();

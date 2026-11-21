@@ -60,6 +60,17 @@ int main(int argc,char** argv){
    const auto expected=state=="Paused"?QString("Audit paused"):state=="Stopping"?QString("Stopping"):state=="Report ready"?QString("Audit computed"):state;
    check(rail.property("pgn_ticket_display_phase").toString()==expected,"Cycle caption concealed the real stop/wait/publication state");
   }
+  auto publishing=second;
+  publishing["phase"]="Completing audits";
+  publishing["message"]="Audit 2/2: result publication pending";
+  publishing["positions"]=publishing.value("positions_total");
+  render(publishing,"captures/preparation-publication.png");
+  const auto publication=rail.property("pgn_ticket_work_presentation").toJsonObject();
+  check(publication.value("status")=="Audit 2/2: result publication pending","Publication appeared as compute progress");
+  check(publication.value("remaining").toString().isEmpty(),"Publication advertised compute ETA");
+  check(rail.toolTip().contains("result publication pending"),"Publication reason is unavailable when elided");
+  publishing.remove("message");
+  check(auditCompletionStatus(publishing)=="Finalizing audit results","Publication with no message lacks a caption");
   render(second,"captures/preparation-second.png");
   render(search,"captures/assigned-search.png");
   check(rail.property("pgn_ticket_progress_scope").toString()=="ticket_cycle","Actual widget did not switch to assigned cycle");

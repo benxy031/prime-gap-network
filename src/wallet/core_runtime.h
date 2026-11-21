@@ -10,6 +10,7 @@
 #include "wallet/peer_bootstrap.h"
 #include "wallet/core_recovery_policy.h"
 #include <QObject>
+#include <QPointer>
 #include <QJsonArray>
 #include <QProcess>
 #include <QTimer>
@@ -20,6 +21,7 @@
 #include <functional>
 namespace pgn::social {class RpcQueue;enum class NameLinkSide;}
 namespace pgn::wallet {
+class ChainBootstrapImport;
 // No mining headers, candidate subscriptions, per-gap hash or wallet calls.
 // Only this owned child may be stopped; the GPU process is never an input.
 class CoreRuntime final : public QObject {
@@ -28,6 +30,7 @@ public:
  ~CoreRuntime() override;
  void launch();
  void reattach();
+ void applyChainBootstrap(std::function<void(qint64,const QString&,bool)>);
  void stop();
  // Suspend background recovery before update code takes any early-return path.
  // This never stops or kills a process; stop() still uses verified native RPC.
@@ -148,6 +151,7 @@ private:
  bool checking_{},connected_{},launching_{},stopping_{},allowNew_{},orphanedStart_{};
  bool managedUpgradePending_{},restartAfterManagedUpgrade_{};
  QElapsedTimer managedUpgradeRetry_;
+ QPointer<ChainBootstrapImport> chainBootstrap_;
  CoreRpcDiagnosticHistory diagnosticRpcHistory_;
  bool walletChecking_{},walletReady_{};
  // UI/application network context is immutable; profiles cannot select it.

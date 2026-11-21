@@ -4,7 +4,7 @@
 #include <QJsonArray>
 struct FrontierTelemetrySnapshot;
 namespace pgn::ui {
-QWidget* createMiningResultsView(const QString& productRoot,QWidget* parent=nullptr);
+QWidget* createMiningResultsView(const QString& productRoot,QWidget* parent=nullptr,bool testnet=true);
 void presentMiningRecordEligibility(QWidget*,const QJsonArray&);
 void presentMiningResultsSource(QWidget*,const FrontierTelemetrySnapshot&);
 void presentMiningTicketData(QWidget*,const QJsonObject&);

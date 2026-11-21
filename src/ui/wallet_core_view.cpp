@@ -143,6 +143,12 @@ public:
     componentDialog_=new ComponentVersionsDialog(walletComponentVersionsContext(root,runtime_->runtimeDirectory(),testnet),this);
     componentDialog_->setAttribute(Qt::WA_DeleteOnClose);componentDialog_->open();
    };
+   if(testnet)management_->onChainBootstrap=[this]{
+    const QPointer<WalletManagementPanel> panel(management_);
+    runtime_->applyChainBootstrap([panel](qint64,const QString& status,bool finished){
+     if(panel)panel->setChainBootstrapStatus(status,finished);
+    });
+   };
    const auto presentSetup=[this]{
     QFile file(runtime_->runtimeDirectory()+"/wallet-core.json");QJsonObject config;
     if(file.open(QIODevice::ReadOnly)&&file.size()<=32768)config=QJsonDocument::fromJson(file.readAll()).object();
@@ -251,7 +257,7 @@ public:
  ~WalletCoreView() override = default;
 private:
  void refreshNetwork(){
-  networkBusy_=true;runtime_->readNetworkSnapshot([this](QJsonObject state,QString error){networkBusy_=false;networkExplorer_->presentSnapshot(state,error);if(!error.isEmpty())return;networkDone_=state.value("bestblockhash").toString();setProperty("pgn_network_block_rows",state.value("blocks"));setProperty("pgn_network_leases",state.value("leases"));setProperty("pgn_network_height",state.value("height"));setProperty("pgn_network_gold_blocks",state.value("gold_blocks"));setProperty("pgn_network_ticket_width",state.value("ticket_width").toString());});
+  networkBusy_=true;runtime_->readNetworkSnapshot([this](QJsonObject state,QString error){networkBusy_=false;networkExplorer_->presentSnapshot(state,error);if(!error.isEmpty())return;networkDone_=state.value("bestblockhash").toString();setProperty("pgn_network_block_rows",state.value("blocks"));setProperty("pgn_network_leases",state.value("leases"));setProperty("pgn_network_height",state.value("height"));const auto gold=state.value("gold_blocks").toInteger(-1);setProperty("pgn_network_gold_tip",networkDone_);setProperty("pgn_network_gold_blocks",gold>=0?QVariant(gold):QVariant{});setProperty("pgn_network_ticket_width",state.value("ticket_width").toString());});
  }
  void attach(){
   if(!runtime_->connected())return;

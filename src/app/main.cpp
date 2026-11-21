@@ -453,30 +453,38 @@ int main(int argc,char** argv) {
     return;
    }
    const auto peers=anchor->peers?QString::number(*anchor->peers):QStringLiteral("—");
-   const bool idleChain=anchor->nativePeerCaughtUp&&anchor->oldTipAt(QDateTime::currentDateTimeUtc());
+   const bool idleChain=condition==Condition::Current&&anchor->nativePeerCaughtUp&&anchor->oldTipAt(now);
    const bool syncing=condition==Condition::Syncing;
    const auto state=condition==Condition::NoPeers?QStringLiteral("NO PEERS"):
      condition==Condition::PeersUnknown?QStringLiteral("PEER STATUS UNAVAILABLE"):
      condition==Condition::SyncUnknown?QStringLiteral("SYNC UNKNOWN"):
      syncing?QStringLiteral("SYNCING"):
-     idleChain?QStringLiteral("CHAIN IDLE"):QStringLiteral("UP TO DATE");
+     idleChain?QStringLiteral("NO RECENT BLOCK"):QStringLiteral("UP TO DATE");
    const bool attention=condition==Condition::NoPeers||condition==Condition::PeersUnknown||
      condition==Condition::SyncUnknown||idleChain;
    const auto networkStyle=QString("QLabel{color:%1;font:12px Consolas;padding:3px 8px;}").arg(attention?"#ffbd69":syncing?"#8dccff":"#69efc5");
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
    networkSummary->setBusy(syncing);
-   const bool localLedgerBehind=condition==Condition::NoPeers&&anchor->headerHeight&&*anchor->headerHeight>anchor->height;
-   if(localLedgerBehind){
-    networkSummary->setText(QString("%1 · LEDGER %2 / %3 · %4")
-      .arg(testnetMode?QStringLiteral("TESTNET"):QStringLiteral("NETWORK"))
-      .arg(anchor->height).arg(*anchor->headerHeight).arg(state));
+   const bool headersAhead=anchor->headerHeight&&*anchor->headerHeight>anchor->height;
+   const auto coordinationHeight=headersAhead
+      ?QString("%1 / %2").arg(anchor->height).arg(*anchor->headerHeight)
+      :QString::number(anchor->height);
+   if(testnetMode){
+    const bool sameTip=inspectWallet&&!anchor->tipHash.isEmpty()&&
+       inspectWallet->property("pgn_network_gold_tip").toString()==anchor->tipHash;
+    const auto gold=sameTip?inspectWallet->property("pgn_network_gold_blocks"):QVariant{};
+    const auto goldCount=gold.isValid()?QString::number(gold.toLongLong()):QStringLiteral("—");
+    networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
+       .arg(goldCount,coordinationHeight,peersLabel,state));
    }else{
-    if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
-    else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
-    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
+    networkSummary->setText(QString("NETWORK · COORDINATION BLOCKS %1 · %2 · %3")
+       .arg(coordinationHeight,peersLabel,state));
    }
-   networkSummary->setToolTip(QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4").arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height));
+   const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
+      .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
+   const auto idleHint=QStringLiteral("Core is caught up with the configured peer. The verified local chain tip is more than 24 hours old.\n\n");
+   networkSummary->setToolTip(idleChain?idleHint+verifiedTip:verifiedTip);
   };
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
  walletButton->setToolTip("Native PGN wallet integrated here, with verified chain identity and protected local keys.");
@@ -488,7 +496,7 @@ int main(int argc,char** argv) {
   pgn::ui::configureMiningDashboard(canvas);miningLayout->addWidget(canvas);auto* ticketProgressRail=new pgn::ui::MiningTicketProgress;miningLayout->addWidget(ticketProgressRail);ticketProgressRail->bindSourceCanvas(canvas);
   auto* miningStartupNotice=new QLabel(miningPage);miningStartupNotice->setObjectName("pgn-mining-startup-notice");miningStartupNotice->setTextFormat(Qt::PlainText);miningStartupNotice->setWordWrap(true);miningStartupNotice->setStyleSheet("QLabel{color:#ffbd69;font-size:13px;padding:8px 14px;}");miningStartupNotice->hide();miningLayout->addWidget(miningStartupNotice);
   auto* testnetSummary=new QLabel("TESTNET · connecting to the mining engine",miningPage);testnetSummary->setObjectName("pgn-testnet-mining-summary");testnetSummary->setStyleSheet("font:12px monospace;color:#69efc5;padding:14px 18px;");testnetSummary->setWordWrap(true);auto* miningToggle=new QPushButton("Start mining",miningPage);miningToggle->setObjectName("pgn-testnet-mining-toggle");miningToggle->setCheckable(true);miningToggle->setMinimumHeight(36);miningToggle->hide();auto* testnetProgress=new QProgressBar(miningPage);testnetProgress->setObjectName("pgn-testnet-ticket-progress");testnetProgress->setRange(0,1000);testnetProgress->setFormat("Ticket progress · %p%");testnetSummary->hide();testnetProgress->hide();
-  auto* miningResults=pgn::ui::createMiningResultsView(root);ticketProgressRail->bindResultsView(miningResults);auto* resultScroll=new QScrollArea;resultScroll->setObjectName("pgn-mining-results-scroll");resultScroll->setWidgetResizable(true);resultScroll->setFrameShape(QFrame::NoFrame);resultScroll->setWidget(miningResults);
+  auto* miningResults=pgn::ui::createMiningResultsView(root,nullptr,testnetMode);ticketProgressRail->bindResultsView(miningResults);auto* resultScroll=new QScrollArea;resultScroll->setObjectName("pgn-mining-results-scroll");resultScroll->setWidgetResizable(true);resultScroll->setFrameShape(QFrame::NoFrame);resultScroll->setWidget(miningResults);
   // In a short window the content keeps its readable minimum and scrolls;
   // the viewport itself may shrink so expanded Records never crosses footer.
   resultScroll->setMinimumHeight(0);resultScroll->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Ignored);miningLayout->addWidget(resultScroll,1);
@@ -718,9 +726,9 @@ int main(int argc,char** argv) {
    ".exe"
 #endif
    ;
-  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkObservation,&window]{
+  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkSummary,networkObservation,&window]{
    const auto select=[](const QJsonObject& source,std::initializer_list<const char*> keys){QJsonObject value;for(const auto* key:keys)if(source.contains(key))value.insert(key,source.value(key));return value;};
-   QJsonObject network{{"status",canvas->property("pgn_global_network_status").toString()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
+   QJsonObject network{{"status",networkSummary->text()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
    if(*networkObservation){
     const auto& observation=**networkObservation;
     network.insert("height",observation.height);network.insert("genesis",observation.genesis);
@@ -728,6 +736,10 @@ int main(int argc,char** argv) {
     network.insert("synchronizing",observation.synchronizing?QJsonValue(*observation.synchronizing):QJsonValue{});
     network.insert("verified_utc",observation.observedUtc.toString(Qt::ISODateWithMs));
     if(observation.headerHeight)network.insert("headers",*observation.headerHeight);
+    const auto link=pgn::wallet::coreLinkState(inspectWallet->property("pgn_core_link_state").toString());
+    if(pgn::wallet::verifiedCoreOnline(link,*networkObservation,QDateTime::currentDateTimeUtc())&&
+       !observation.nativePeerDiagnostic.isEmpty())
+     network.insert("native_peer",observation.nativePeerDiagnostic);
     if(observation.coreInitialBlockDownload)network.insert("initial_block_download",*observation.coreInitialBlockDownload);
     if(observation.tipTime)network.insert("tip_unix_time",*observation.tipTime);
    }

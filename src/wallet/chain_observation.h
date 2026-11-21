@@ -23,6 +23,7 @@ struct ChainObservation {
     std::optional<bool> coreInitialBlockDownload;
     std::optional<qint64> tipTime;
     bool nativePeerCaughtUp{};
+    QJsonObject nativePeerDiagnostic;
     bool oldTipAt(const QDateTime& now)const {
         return tipTime&&now.isValid()&&now.toSecsSinceEpoch()-*tipTime>24*60*60;
     }
@@ -67,15 +68,40 @@ inline ChainObservationResult projectChainObservation(const CoreEpoch& owner,con
 // peer bridge; it never changes Core validation or claims monetary acceptance.
 inline ChainObservation projectNativeSynchronization(ChainObservation value,const QJsonArray& peers,const QString& endpoint){
     value.nativePeerCaughtUp=false;
+    value.nativePeerDiagnostic={};
     if(endpoint.isEmpty()||peers.size()>512||!value.coreInitialBlockDownload||!value.headerHeight||*value.headerHeight<value.height){value.synchronizing.reset();return value;}
-    bool found=false,pending=*value.headerHeight>value.height;
+    bool found=false,ambiguous=false,pending=*value.headerHeight>value.height;
+    QJsonObject candidate;
+    const auto knownHeight=[](const QJsonValue& entry,qint64 floor){
+        const auto n=entry.toInteger(floor-1);
+        return n>=floor&&n<=9007199254740991LL;
+    };
     for(const auto& entry:peers){
         if(!entry.isObject()){value.synchronizing.reset();return value;}
         const auto peer=entry.toObject();if(peer.value("addr").toString()!=endpoint)continue;
         const auto height=peer.value("pgn_announced_height"),sync=peer.value("pgn_syncing");const auto number=height.toDouble(-1);
         if(peer.value("connection_type")!="manual"||!height.isDouble()||!std::isfinite(number)||number<0||number>9007199254740991.0||std::trunc(number)!=number||!sync.isBool()){value.synchronizing.reset();return value;}
+        ambiguous=ambiguous||found;
+        if(!found){
+            candidate={{"announced_height",height},{"syncing",sync}};
+            for(const auto* key:{"synced_headers","synced_blocks"}){
+                const auto observed=peer.value(key);
+                if(knownHeight(observed,-1))candidate.insert(key,observed);
+            }
+            const auto inFlight=peer.value("inflight");
+            if(inFlight.isArray()){
+                const auto heights=inFlight.toArray();
+                bool valid=heights.size()<=512;
+                for(const auto& requested:heights)valid=valid&&knownHeight(requested,0);
+                if(valid){
+                    candidate.insert("inflight_count",heights.size());
+                    if(!heights.isEmpty())candidate.insert("first_inflight_height",heights.first());
+                }
+            }
+        }
         found=true;pending=pending||sync.toBool()||value.height<height.toInteger();
     }
+    if(found&&!ambiguous)value.nativePeerDiagnostic=std::move(candidate);
     value.synchronizing=!found||pending||value.height<1;
     value.nativePeerCaughtUp=found&&!pending&&value.height>0;
     return value;

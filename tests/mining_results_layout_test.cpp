@@ -1,4 +1,6 @@
 #include "ui/mining_results_view.h"
+#include "science/mining_scope_archive.h"
+#include <QPushButton>
 #include <QApplication>
 #include <QHeaderView>
 #include <QImage>
@@ -89,6 +91,60 @@ int main(int argc,char** argv){
             }
         }
         need(most>least,"window enlargement did not add usable rows");
+        {
+            const auto root=temp.path()+"/archive-reopen";
+            auto frame=packet("160696461657079905863");
+            auto scopes=frame.value("scopes").toObject();
+            auto ticket=scopes.value("ticket").toObject();
+            auto stats=ticket.value("statistics").toObject();
+            stats.insert("count_total",7);
+            stats.insert("threshold_counts",QJsonObject{{"954",7}});
+            ticket.insert("statistics",stats);
+            for(const auto* name:{"best","recent"})ticket.insert(name,QJsonArray{ticket.value(name).toArray().first()});
+            scopes.insert("ticket",ticket);
+            frame.insert("scopes",scopes);
+            frame.insert("stream_id","archived-stream");
+            frame.insert("local_sequence",1);
+            frame.insert("positions","100");
+            {
+                pgn::science::MiningScopeArchive archive(root+"/data/testnet/mining-scope-archive.json");
+                need(archive.observe(frame),"archive fixture was rejected");
+                archive.flush();
+                need(archive.error().isEmpty(),"archive fixture could not be persisted");
+            }
+            QSettings().setValue("mining/statisticsScope","history");
+            std::unique_ptr<QWidget> reopened(pgn::ui::createMiningResultsView(root));
+            reopened->resize(1380,900);
+            reopened->show();
+            settle(reopened.get());
+            auto* history=reopened->findChild<QTableWidget*>("pgn-results-gap-statistics");
+            auto* live=reopened->findChild<QTableWidget*>("pgn-results-best");
+            auto* ticketTab=reopened->findChild<QPushButton*>("pgn-summary-ticket");
+            auto* historyTab=reopened->findChild<QPushButton*>("pgn-summary-history");
+            need(history&&live&&ticketTab&&historyTab,"archive result controls unavailable");
+            need(reopened->property("pgn_statistics_scope")=="history"&&history->item(0,1)&&history->item(0,1)->text()=="7",
+                 "retained History is missing at reopen before the first worker packet");
+            need(!live->item(0,0)&&reopened->property("pgn_results_error").toString().isEmpty(),
+                 "history populated a live ticket or reported a missing source with no work");
+            ticketTab->click();
+            historyTab->click();
+            need(history->item(0,1)&&history->item(0,1)->text()=="7","History lost its source when returning from Ticket");
+            ticketTab->click();
+            pgn::ui::presentMiningTicketData(reopened.get(),frame);
+            settle(reopened.get());
+            need(live->item(0,0)&&reopened->property("pgn_results_best_rows").toInt()==1&&history->item(0,1)&&history->item(0,1)->text()=="7","live ticket could not replace the idle display");
+            historyTab->click();
+            need(history->item(0,1)&&history->item(0,1)->text()=="7"&&live->item(0,0)&&reopened->property("pgn_results_best_rows").toInt()==1,"switching History changed results of the live ticket");
+            reopened.reset();
+            {
+                std::unique_ptr<QWidget> mainnet(pgn::ui::createMiningResultsView(root,nullptr,false));
+                mainnet->resize(1380,900);
+                mainnet->show();
+                settle(mainnet.get());
+                need(!mainnet->property("pgn_statistics_available").toBool(),"mainnet imported the same explicit root's testnet history");
+            }
+        }
+
         std::cout<<"PASS "<<checks<<" real result-widget checks: twelve size/domain cases, full columns and rows, color membership/tiers, inline legend, selection preserved; no RPC/GPU/mining\n";
     }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}
 }
