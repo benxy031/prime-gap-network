@@ -9,7 +9,7 @@
 #include <vector>
 namespace pgn::wallet {class CoreRuntime;}
 namespace pgn::ui {
-// A single bounded in-memory snapshot serves both wallet overview and history.
+// Keep one bounded, verified in-memory snapshot for the wallet chart.
 class NetworkMetricsHub final:public QObject {
 public:
     using Reader=std::function<void(int,std::function<void(QJsonObject,QString)>)>;
@@ -28,7 +28,7 @@ private:
     QString genesis_,tipHash_;
     qint64 tipHeight_{-1};
     quint64 branchGeneration_{};
-    int span_{86400};bool busy_{},pending_{};
+    int span_{604800};bool busy_{},pending_{};
 };
-QWidget* createNetworkMetricsView(NetworkMetricsHub*,bool compact=false);
+QWidget* createNetworkMetricsView(NetworkMetricsHub*);
 }

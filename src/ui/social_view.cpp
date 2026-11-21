@@ -207,13 +207,13 @@ SocialView::SocialView(QString path,social::Services services,QWidget* parent)
         QWidget* target=i==3?static_cast<QWidget*>(p.ranking):static_cast<QWidget*>(p.list);target->setContextMenuPolicy(Qt::CustomContextMenu);connect(target,&QWidget::customContextMenuRequested,this,[this,i](QPoint pos){contextMenu(i,pos);});
         if(i==3){QWidget::setTabOrder(p.refresh,p.ranking->horizontalHeader());QWidget::setTabOrder(p.ranking->horizontalHeader(),p.ranking);}
     }
-    auto* nav=HorizonCoinNavigation(tabs_,{{"01  CHAT","GLOBAL CHANNEL"},{"02  PUBLICATIONS","IDEAS + UPDATES"},{"03  FORUM","TOPICS + REPLIES"},{"04  MINERS","VERIFIED ACTIVITY"}},this);
+    auto* nav=HorizonCoinNavigation(tabs_,{{"01 CHAT","GLOBAL CHANNEL"},{"02 PUBLICATIONS","IDEAS + UPDATES"},{"03 FORUM","TOPICS + REPLIES"},{"04 MINERS","VERIFIED ACTIVITY"}},this);
     // Retain legacy pages/drafts, remove them from every user navigation route.
     tabs_->setTabVisible(1,false);tabs_->setTabVisible(2,false);tabs_->setTabText(3,"Leaderboard");
     for(const int legacy:{1,2}){tabs_->widget(legacy)->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Ignored);tabs_->widget(legacy)->setMinimumSize(0,0);}
     if(auto* group=nav->findChild<QButtonGroup*>()){
         group->button(1)->hide();group->button(2)->hide();
-        group->button(3)->setText("02  LEADERBOARD\nVERIFIED ACTIVITY");
+        group->button(3)->setText("02 LEADERBOARD\nVERIFIED ACTIVITY");
     }
     box->addWidget(nav);
     auto* context=new QWidget;context->setProperty("socialSurface",true);context->setProperty("socialChrome",true);context->setFixedHeight(30);auto* contextBox=new QHBoxLayout(context);contextBox->setContentsMargins(14,2,14,2);contextBox->setSpacing(12);

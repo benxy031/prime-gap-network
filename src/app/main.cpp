@@ -318,8 +318,18 @@ int main(int argc,char** argv) {
      const bool coreWarmingUp=receipt.value("pgn_core_link_state")=="warming_up";
      receipt.insert("pgn_core_warming_up",coreWarmingUp);
      if(coreWarmingUp)receipt.insert("pgn_core_link_state","rpc_unavailable");
-     const auto* history=inspectWallet->findChild<QWidget*>("pgn-wallet-difficulty-history");if(!history)history=inspectWallet->findChild<QWidget*>("pgn-network-metrics-history");
-     if(history){auto source=history->property("pgn_network_metrics_snapshot").toJsonObject();const auto points=source.take("points").toArray();receipt.insert("pgn_network_metrics_summary",source);receipt.insert("pgn_network_metrics_points",points.size());receipt.insert("pgn_network_metrics_last",points.isEmpty()?QJsonObject{}:points.last().toObject());receipt.insert("pgn_network_metrics_error",history->property("pgn_network_metrics_error").toString());receipt.insert("pgn_merit_plot_bounds",QJsonValue::fromVariant(history->property("pgn_merit_plot_bounds")));receipt.insert("pgn_rate_plot_bounds",QJsonValue::fromVariant(history->property("pgn_rate_plot_bounds")));}
+     const auto* history=inspectWallet->findChild<QWidget*>("pgn-network-metrics-overview");
+     if(history){auto source=history->property("pgn_network_metrics_snapshot").toJsonObject();const auto points=source.take("points").toArray();receipt.insert("pgn_network_metrics_summary",source);receipt.insert("pgn_network_metrics_points",points.size());receipt.insert("pgn_network_metrics_last",points.isEmpty()?QJsonObject{}:points.last().toObject());receipt.insert("pgn_network_metrics_error",history->property("pgn_network_metrics_error").toString());if(const auto* chart=history->findChild<QWidget*>("pgn-wallet-network-chart")){
+      for(const auto* key:{"pgn_merit_plot_bounds","pgn_rate_plot_bounds"}){
+       auto bounds=chart->property(key).toList();
+       // The diagnostic receipt has always expressed Unix time in seconds.
+       if(bounds.size()==4){
+        bounds[0]=bounds[0].toDouble()/1000.;
+        bounds[1]=bounds[1].toDouble()/1000.;
+       }
+       receipt.insert(QString::fromLatin1(key),QJsonValue::fromVariant(bounds));
+      }
+     }}
      receipt.insert("pgn_wallet_difficulty_view_present",history!=nullptr);
      if(history)for(const auto* name:{"pgn_wallet_difficulty_points","pgn_wallet_difficulty_missing","pgn_wallet_difficulty_frame_points","pgn_wallet_difficulty_observed_utc","pgn_wallet_difficulty_source_error"})receipt.insert(QString::fromLatin1(name),QJsonValue::fromVariant(history->property(name)));
     }
@@ -537,7 +547,7 @@ int main(int argc,char** argv) {
  auto* lensTabs=new QTabWidget;lensTabs->setObjectName("pgn-number-lens-subtabs");lensTabs->tabBar()->hide();
  lensTabs->addTab(lensGraph,"Distribution");lensTabs->addTab(lensArchive,"Exact records");
  auto* lens=new QWidget;auto* lensBox=new QVBoxLayout(lens);lensBox->setContentsMargins(0,0,0,0);lensBox->setSpacing(0);
- lensBox->addWidget(HorizonCoinNavigation(lensTabs,{{"01  DISTRIBUTION","TIME / LENGTH / MERIT"},{"02  EXACT RECORDS","SOURCE + EXPORT"}},lens));lensBox->addWidget(lensTabs,1);
+ lensBox->addWidget(HorizonCoinNavigation(lensTabs,{{"01 DISTRIBUTION","TIME / LENGTH / MERIT"},{"02 EXACT RECORDS","SOURCE + EXPORT"}},lens));lensBox->addWidget(lensTabs,1);
  tabs->addTab(lens,"Number lens");
  auto* benchmark=pgn::ui::createBenchmarkView(root);tabs->addTab(benchmark,"Benchmark");
  // Removed inherited navigation does not erase the underlying PGN tools.
@@ -815,15 +825,15 @@ int main(int argc,char** argv) {
  // Build the shared navigation after every page is present. The temporary
  // testnet recorder has its own page and remains idle until explicitly started.
  auto* miningNavigation=testnetMode
-  ? HorizonCoinNavigation(tabs,{{"01  MINING","LIVE SEARCH"},{"02  NETWORK WORK","TICKETS + AUDITS"},{"03  NUMBER LENS","SCIENCE + EXACT RECORDS"},{"04  BENCHMARK","HARDWARE LAB"},{"05  DIAGNOSTICS","RECORD + EXPORT"}},miningWorkspace)
-  : HorizonCoinNavigation(tabs,{{"01  MINING","LIVE SEARCH"},{"02  COMMUNITY","SHARED ORBIT"},{"03  NUMBER LENS","SCIENCE + EXACT RECORDS"},{"04  BENCHMARK","HARDWARE LAB"}},miningWorkspace);
+  ? HorizonCoinNavigation(tabs,{{"01 MINING","LIVE SEARCH"},{"02 NETWORK WORK","TICKETS + AUDITS"},{"03 NUMBER LENS","SCIENCE + EXACT RECORDS"},{"04 BENCHMARK","HARDWARE LAB"},{"05 DIAGNOSTICS","RECORD + EXPORT"}},miningWorkspace)
+  : HorizonCoinNavigation(tabs,{{"01 MINING","LIVE SEARCH"},{"02 COMMUNITY","SHARED ORBIT"},{"03 NUMBER LENS","SCIENCE + EXACT RECORDS"},{"04 BENCHMARK","HARDWARE LAB"}},miningWorkspace);
  miningBox->insertWidget(0,miningNavigation);
 
- if(networkWork){networkWork->onOpenBlock=[major,walletButton,toolsButton,inspectWallet](const QString& hash){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();if(auto* pages=inspectWallet->findChild<QTabWidget*>("pgn-wallet-subtabs"))pages->setCurrentIndex(1);pgn::ui::inspectWalletBlock(inspectWallet,hash);};networkWork->onOpenAudits=[major,walletButton,toolsButton,inspectWallet]{major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();if(auto* pages=inspectWallet->findChild<QTabWidget*>("pgn-wallet-subtabs"))pages->setCurrentIndex(4);};}
+ if(networkWork){networkWork->onOpenBlock=[major,walletButton,toolsButton,inspectWallet](const QString& hash){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();if(auto* pages=inspectWallet->findChild<QTabWidget*>("pgn-wallet-subtabs"))pages->setCurrentIndex(1);pgn::ui::inspectWalletBlock(inspectWallet,hash);};networkWork->onOpenAudits=[networkWork,inspectWallet]{pgn::ui::openWalletAuditExplorer(inspectWallet,networkWork);};}
  auto* primaryGroup=new QButtonGroup(&window);primaryGroup->setExclusive(true);primaryGroup->addButton(pgn,0);primaryGroup->addButton(walletButton,1);primaryGroup->addButton(socialButton,2);
  QObject::connect(primaryGroup,&QButtonGroup::idClicked,major,[major,toolsButton](int id){major->setCurrentIndex(id);toolsButton->show();});
  pgn::ui::bindWalletStartupAttention(inspectWallet,[major,walletButton,toolsButton](QString){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();});
-  showOwned=[&window,root,testnetMode,major,tabs,pgn,walletButton,socialButton,social,toolsButton,canvas,miningPage,records,community,lens,lensGraph,benchmark,engineConfiguration](const QString& section){
+  showOwned=[&window,root,testnetMode,major,tabs,pgn,walletButton,socialButton,social,toolsButton,canvas,miningPage,records,community,lens,lensGraph,benchmark,engineConfiguration,networkWork,inspectWallet](const QString& section){
   if(section=="MiningCpuAuditValidation"||section=="MiningCpuAttachValidation")return QJsonObject{{"error","Standalone CPU audit execution is retired; CPU qualification uses the normal-ticket cycle"},{"network_accepted",false}};
    const auto resizeMatch=QRegularExpression("^Mining-([0-9]{3,4})x([0-9]{3,4})$").match(section);
   const auto cpuAction=QRegularExpression("^MiningCpu([0-7])(On|Off|Threads([0-9]{1,2}))$").match(section);
@@ -914,7 +924,23 @@ int main(int argc,char** argv) {
   // the hidden/minimized state before acknowledging the owned show command.
   if(window.isMinimized())window.showNormal();if(section=="MiningMaximize")window.showMaximized();else if(!window.isMaximized())window.showNormal();window.raise();window.activateWindow();
    if(section=="Social"||section=="SocialMiners"){major->setCurrentIndex(2);socialButton->setChecked(true);toolsButton->show();social->selectSection(section=="Social"?pgn::social::Section::Chat:pgn::social::Section::Miners);social->refresh();}
-   else if(section=="Wallet"||section=="Audits"||section=="AuditsRegistry"||section=="Difficulty"||section=="Vanity"||section=="Network"){major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();if(auto* pages=major->widget(1)->findChild<QTabWidget*>("pgn-wallet-subtabs"))pages->setCurrentIndex((section=="Audits"||section=="AuditsRegistry")?4:section=="Difficulty"?3:section=="Vanity"?2:section=="Network"?1:0);}
+   else if(section=="Audits"||section=="AuditsRegistry"){
+    if(networkWork&&networkWork->onOpenAudits){
+     major->setCurrentIndex(0);pgn->setChecked(true);tabs->setCurrentWidget(networkWork);
+     networkWork->onOpenAudits();
+    }else{
+     major->setCurrentIndex(1);walletButton->setChecked(true);
+     if(auto* pages=inspectWallet->findChild<QTabWidget*>("pgn-wallet-subtabs"))pages->setCurrentIndex(1);
+     if(auto* pages=inspectWallet->findChild<QTabWidget*>("pgn-wallet-network-tabs"))pages->setCurrentIndex(3);
+    }
+    toolsButton->show();
+   }
+   else if(section=="Wallet"||section=="Difficulty"||section=="Vanity"||section=="Network"){
+    major->setCurrentIndex(1);walletButton->setChecked(true);toolsButton->show();
+    if(auto* pages=major->widget(1)->findChild<QTabWidget*>("pgn-wallet-subtabs"))
+     pages->setCurrentIndex(section=="Vanity"?2:section=="Network"?1:0);
+    if(section=="Difficulty")pgn::ui::showWalletNetworkChart(inspectWallet);
+   }
    else{major->setCurrentIndex(0);pgn->setChecked(true);toolsButton->show();if(section!="Configuration")engineConfiguration->window()->hide();if(cpuAction.hasMatch()||section.startsWith("MiningTotal")||section.startsWith("MiningGroup")||section=="Mining"||section=="MiningMaximize"||section=="MiningOn"||section=="MiningOff"||section=="MiningExpand"||section=="MiningCollapse"||miningGraphAction||resizeAction||recordsAction)tabs->setCurrentWidget(miningPage);else if(section=="Community"||section=="TicketFirst"||section=="TicketDomain"||section=="TicketActive"||communityAction)tabs->setCurrentWidget(community);else if(section=="NumberLens"||lensAction)tabs->setCurrentWidget(lens);else if(section=="Benchmark"||section=="BenchmarkMeasure")tabs->setCurrentWidget(benchmark);
    else if(section.startsWith("Diagnostics")){auto* capture=window.findChild<QWidget*>("pgn-test-diagnostics");if(!capture)return QJsonObject{{"error","Testnet diagnostics are unavailable"}};tabs->setCurrentWidget(capture);if(section=="DiagnosticsStart"||section=="DiagnosticsStop"){const auto name=section=="DiagnosticsStart"?"pgn-diagnostics-start":"pgn-diagnostics-stop";if(auto* button=capture->findChild<QPushButton*>(name))button->click();}else if(section=="DiagnosticsExport"){QDir().mkpath(root+"/evidence");pgn::ui::saveDiagnosticCapture(capture,root+"/evidence/diagnostic-"+QString::number(QCoreApplication::applicationPid())+".zip");}}
    else if(auto* dialog=qobject_cast<QDialog*>(engineConfiguration->parentWidget())){dialog->show();dialog->raise();}}

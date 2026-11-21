@@ -20,9 +20,13 @@ static void require(bool okay,const char* message){if(!okay)throw std::runtime_e
 int main(int argc,char** argv){
     QApplication app(argc,argv);app.setStyleSheet(dataPanelStyle()+HorizonWorkspaceControlStyle());std::deque<std::pair<int,std::function<void(QJsonObject,QString)>>> pending;
     NetworkMetricsHub hub([&](int span,auto callback){pending.push_back({span,std::move(callback)});});
-    auto* home=createNetworkMetricsView(&hub,true);auto* history=createNetworkMetricsView(&hub,false);
+    auto* home=createNetworkMetricsView(&hub);auto* history=createNetworkMetricsView(&hub);
     home->resize(700,260);history->resize(1100,600);home->show();history->show();app.processEvents();
     require(pending.size()==1,"Two views opened duplicate parallel requests");
+    require(pending.front().first==604800,"Wallet chart did not open on seven days");
+    require(home->findChild<QPushButton*>("pgn-network-metrics-span-604800")->isChecked()&&
+            !home->findChild<QPushButton*>("pgn-network-metrics-span-3600"),
+            "Wallet period controls lost the seven-day default or expose one hour");
     QJsonArray points;for(int i=0;i<3;++i)points.append(QJsonObject{{"time",1793550000+i*300},{"height",i+1},
         {"gold_count",i},{"hash",QString(64,QChar(u'a'+i))},{"merit_target_q16",28*65536+i*137},{"window_seconds",600},{"reported_positions","600000000000000"},{"audited_positions","200000000000000"}});
     QJsonObject snapshot{{"height",3},{"bestblockhash",QString(64,'c')},{"points",points}};
@@ -84,7 +88,7 @@ int main(int argc,char** argv){
         const auto hover=walletChart->property("pgn_network_chart_hover").toJsonObject();
         require(hover["sample_index"].toInt()==1&&hover["reported_positions"]==points[1].toObject()["reported_positions"],
                 "Wallet hover did not retain an actual observation");
-        require(walletChart->toolTip().contains("Smoothed estimate")&&walletChart->toolTip().contains("Exact target"),
+        require(walletChart->toolTip().contains("Smoothed estimate")&&walletChart->toolTip().contains("Exact target")&&walletChart->toolTip().contains("Audited:"),
                 "Wallet tooltip conflates exact and smoothed values");
         if(argc>1)require(image.save(QString::fromLocal8Bit(argv[1])+QString("/wallet-%1.png").arg(width)),"Wallet render receipt failed");
     }
@@ -134,12 +138,14 @@ int main(int argc,char** argv){
     auto* week = home->findChild<QPushButton*>("pgn-network-metrics-span-604800");
     auto* homeDay = home->findChild<QPushButton*>("pgn-network-metrics-span-86400");
     homeDay->click();
+    require(pending.size()==1&&pending.front().first==86400,"Wallet period did not dispatch the shared request");
     week->click();
-    require(pending.size()==1&&pending.front().first==604800,"Wallet period did not dispatch the shared request");
-    homeDay->click();
     answer(noisySnapshot);
-    require(pending.size()==1&&pending.front().first==86400,"Superseded Wallet period response was not discarded");
+    require(pending.size()==1&&pending.front().first==604800,"Superseded Wallet period response was not discarded");
     require(home->property("pgn_network_metrics_snapshot").toJsonObject()==noisySnapshot,"Stale period replaced Wallet frame");
+    answer(noisySnapshot);
+    homeDay->click();
+    require(pending.size()==1&&pending.front().first==86400,"Wallet could not select a day after a week");
 
     QJsonArray daily;
     for(int i=0;i<133;++i){
@@ -174,50 +180,18 @@ int main(int argc,char** argv){
 
     hub.refresh();answer(snapshot);draw(home);
 
-    for(auto* view:{history})for(const auto width:{520,800,1400}){
-        view->resize(width,view==home?260:600);app.processEvents();QImage image(view->size(),QImage::Format_ARGB32);image.fill(Qt::transparent);view->render(&image);
-        const auto merit=view->property("pgn_merit_plot_bounds").toList(),rate=view->property("pgn_rate_plot_bounds").toList();
-        require(merit.size()==4&&rate.size()==4&&merit[3].toDouble()>merit[2].toDouble()&&rate[3].toDouble()>0,"Valid data produces a blank or degenerate graph");
-        require(merit[3].toDouble()-merit[2].toDouble()<1,"Merit scale flattened against an unrelated unit range");
-        const auto charts=view->property("pgn_network_chart_geometry").toJsonArray();require(charts.size()==2,"Both chart axes must expose actual geometry");
-        const auto rateGeometry=charts[1].toObject();
-        const auto pixelsAt=[&](double value,bool primary){
-            const auto height=rateGeometry["height"].toDouble();
-            const int row=int(rateGeometry["y"].toDouble()+height*(1-value/rate[3].toDouble()));
-            const auto x=rateGeometry["x"].toDouble(), width=rateGeometry["width"].toDouble();
-            int hits=0;
-            for(int y=row-2;y<=row+2;++y){
-                for(int px=int(x+width*.20);px<=int(x+width*.80);++px){
-                    const auto c=image.pixelColor(px,y);
-                    if(primary?c.green()>160&&c.green()-c.red()>50&&c.green()>c.blue():
-                        c.blue()>160&&c.blue()-c.green()>25&&c.blue()-c.red()>70)++hits;
-                }
-            }
-            return hits;
-        };
-        require(pixelsAt(1e12,true)>12,"Measured curve disagrees with reported positions over chain time");
-        require(pixelsAt(2e14/600.,false)==0,"A second audited hashrate curve is still drawn");
-        for(int chart=0;chart<2;++chart){const auto g=charts[chart].toObject();require(g.value("axis_font_px").toInt()>=11&&g.value("vertical_ticks").toInt()>=3&&g.value("horizontal_ticks").toInt()>=2,"Axes lack readable value/time graduations");require(g.value("samples").toInt()==points.size(),"Sample annotation fabricates precision");
-            const QPointF at(g.value("x").toDouble()+g.value("width").toDouble()/2,g.value("y").toDouble()+g.value("height").toDouble()/2);
-            QMouseEvent move(QEvent::MouseMove,at,view->mapToGlobal(at.toPoint()),Qt::NoButton,Qt::NoButton,Qt::NoModifier);QCoreApplication::sendEvent(view,&move);app.processEvents();
-            const auto hover=view->property("pgn_network_chart_hover").toJsonObject();require(hover.value("chart").toInt()==chart&&hover.value("sample_index").toInt()==1&&hover.value("time")==points[1].toObject().value("time"),"Crosshair must select a real nearest sample, never interpolated data");require(hover.value("reported_positions")==points[1].toObject().value("reported_positions")&&hover.value("merit_target_q16")==points[1].toObject().value("merit_target_q16"),"Hover exact source values changed");
-            if(chart==1)require(view->toolTip().contains("Audited:"),"Audited value is missing from sample details");
-            require(view->toolTip().contains("Exact target: "+QString::number(points[1].toObject().value("merit_target_q16").toInteger())+"/65536")&&view->toolTip().contains("Target merit: ≈ "),"Rounded merit lacks approximation or exact source ratio");
-        }
-        QEvent leave(QEvent::Leave);QCoreApplication::sendEvent(view,&leave);require(view->toolTip().isEmpty()&&view->property("pgn_network_chart_hover").toJsonObject().isEmpty(),"Stale hover remains outside chart");
-        if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));require(image.save(QString::fromLocal8Bit(argv[1])+QString("/%1-%2.png").arg(view==home?"overview":"history").arg(width)),"Render receipt failed");}
-    }
     hub.refresh();answer({},"Injected connection loss");require(home->property("pgn_network_metrics_snapshot").toJsonObject()==snapshot,"Read failure erased the last verified frame");
-    auto* hour=history->findChild<QPushButton*>("pgn-network-metrics-span-3600");hour->click();
-    require(pending.size()==1&&pending.front().first==3600,"History button did not select its bounded request");
-    auto* day=history->findChild<QPushButton*>("pgn-network-metrics-span-86400");day->click();answer(snapshot);
+    auto* day=history->findChild<QPushButton*>("pgn-network-metrics-span-86400");
+    auto* historyWeek=history->findChild<QPushButton*>("pgn-network-metrics-span-604800");historyWeek->click();
+    require(pending.size()==1&&pending.front().first==604800,"History button did not select its bounded request");
+    day->click();answer(snapshot);
     require(pending.size()==1&&pending.front().first==86400,"Stale history response was not replaced");answer(snapshot);
-    require(day->isChecked()&&!hour->isChecked(),"Span selection is ambiguous");
+    require(day->isChecked()&&!historyWeek->isChecked(),"Span selection is ambiguous");
     // A full bounded source history stays exact; no resampling/interpolation is
     // promoted to a data observation. The first real sample also renders.
     QJsonArray dense;for(int i=0;i<256;++i){auto point=points[0].toObject();point.insert("time",1793550000+i*60);point.insert("height",i+1);point.insert("merit_target_q16",28*65536+i);dense.append(point);}
     auto render=[&](QWidget* view){app.processEvents();QImage image(view->size(),QImage::Format_ARGB32);image.fill(Qt::transparent);view->render(&image);return image;};
-    hub.refresh();answer(QJsonObject{{"height",256},{"points",dense}});render(history);require(history->property("pgn_network_chart_geometry").toJsonArray()[0].toObject().value("samples")==256,"Dense bounded history lost source points");require(history->property("pgn_network_chart_hover").toJsonObject().isEmpty(),"Changed snapshot retained old sample hover");
+    hub.refresh();answer(QJsonObject{{"height",256},{"points",dense}});render(home);require(walletChart->property("pgn_network_chart_geometry").toJsonArray()[0].toObject().value("samples")==256,"Dense bounded history lost source points");require(walletChart->property("pgn_network_chart_hover").toJsonObject().isEmpty(),"Changed snapshot retained old sample hover");
     hub.refresh();answer(QJsonObject{{"height",1},{"points",QJsonArray{points.first()}}});render(home);require(walletChart->property("pgn_rate_plot_bounds").toList()[3].toDouble()>0,"Single-sample rate is degenerate");
     hub.refresh();answer(QJsonObject{{"height",0},{"points",QJsonArray{}}});render(home);require(walletChart->property("pgn_merit_plot_bounds").toList().isEmpty()&&walletChart->property("pgn_rate_plot_bounds").toList().isEmpty(),"Empty source kept old data bounds");
     delete home;delete history;hub.refresh();answer(snapshot); // Closing subscribers cannot leave dangling callbacks.
@@ -262,5 +236,5 @@ int main(int argc,char** argv){
     const QJsonObject verifiedNewSnapshot{{"genesis",genesis},{"height",12},{"bestblockhash",QString(64,'e')}};
     runBranchRead(verifiedNewSnapshot);
     require(deliveries==3&&delivered==verifiedNewSnapshot,"Verified metrics at a different height must flow during catch-up");
-    std::cout<<"PASS wallet network chart and graph hub: shared frame, three dual-axis wallet renders, three detailed renders, exact tooltip, pointer-anchored zoom, live pan, smoothing and raw mode, readable value/time axes, exact-sample crosshair/leave/change,256point history,single/empty source, retained error frame, stale response, exclusive selection, destroyed subscriber\n";
+    std::cout<<"PASS wallet network chart and graph hub: shared frame, three dual-axis wallet renders, exact tooltip, pointer-anchored zoom, live pan, smoothing and raw mode, readable value/time axes, exact-sample crosshair/leave/change,256point history,single/empty source, retained error frame, stale response, exclusive selection, destroyed subscriber\n";
 }

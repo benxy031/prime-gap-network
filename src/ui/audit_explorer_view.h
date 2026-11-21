@@ -439,14 +439,16 @@ public:
     }
 
     explicit AuditExplorerView(pgn::wallet::CoreRuntime* runtime, QWidget* parent = nullptr)
-        : AuditExplorerView([runtime](int offset, Result consume) {
-            if (!runtime->connected()) { consume({}, "Verified Core connection required"); return; }
-            runtime->readAuditSnapshot(offset, std::move(consume));
-        }, [runtime](int offset, Result consume) {
-            runtime->readParticipantPage(offset, std::move(consume));
+        : AuditExplorerView([core=QPointer<pgn::wallet::CoreRuntime>(runtime)](int offset, Result consume) {
+            if (!core || !core->connected()) { consume({}, "Verified Core connection required"); return; }
+            core->readAuditSnapshot(offset, std::move(consume));
+        }, [core=QPointer<pgn::wallet::CoreRuntime>(runtime)](int offset, Result consume) {
+            if (!core) { consume({}, "Verified Core connection required"); return; }
+            core->readParticipantPage(offset, std::move(consume));
         }, parent) {
-            numberReader_=[runtime](const QString& number,Result consume){
-                runtime->readTicketNumber(number,std::move(consume));
+            numberReader_=[core=QPointer<pgn::wallet::CoreRuntime>(runtime)](const QString& number,Result consume){
+                if (!core) { consume({}, "Verified Core connection required"); return; }
+                core->readTicketNumber(number,std::move(consume));
             };
             ticketSearch_->show();
         }

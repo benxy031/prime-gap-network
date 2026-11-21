@@ -31,6 +31,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QMessageBox>
+#include <QDialog>
 #include <QInputDialog>
 #include <QClipboard>
 #include <QScrollArea>
@@ -79,7 +80,7 @@ public:
   auto* cards=new QGridLayout;
   for(int i=0;i<3;++i){auto* frame=new QFrame;frame->setStyleSheet("QFrame{background:#08262d;border:1px solid #256573;border-radius:9px;}QLabel{border:0;background:transparent;}");auto* card=new QVBoxLayout(frame);
    card->addWidget(new QLabel(QStringList{"AVAILABLE","PENDING","IMMATURE"}[i]));balances_[i]=new QLabel("— "+unit_);balances_[i]->setStyleSheet("font:700 23px monospace;color:#5ff2ce");card->addWidget(balances_[i]);cards->addWidget(frame,0,i);}
-  overviewBox->addLayout(cards);auto* controls=new QHBoxLayout;auto* refresh=new QPushButton("Refresh wallet");auto* unlock=new QPushButton("Unlock…");auto* lock=new QPushButton("Lock wallet");controls->addWidget(refresh);controls->addWidget(unlock);controls->addWidget(lock);controls->addStretch();overviewBox->addLayout(controls);overviewBox->addWidget(createNetworkMetricsView(metrics,true),1);tabs_->addTab(overview,"Balances");
+  overviewBox->addLayout(cards);auto* controls=new QHBoxLayout;auto* refresh=new QPushButton("Refresh wallet");auto* unlock=new QPushButton("Unlock…");auto* lock=new QPushButton("Lock wallet");controls->addWidget(refresh);controls->addWidget(unlock);controls->addWidget(lock);controls->addStretch();overviewBox->addLayout(controls);overviewBox->addWidget(createNetworkMetricsView(metrics),1);tabs_->addTab(overview,"Balances");
   auto* sendPage=new QWidget;auto* sendBox=new QFormLayout(sendPage);recipient_=new QLineEdit;recipient_->setPlaceholderText("Recipient "+unit_+" address");amount_=new QLineEdit;amount_->setPlaceholderText("Amount in "+unit_);send_=new QPushButton("Review payment…");send_->setEnabled(false);sendBox->addRow("Recipient",recipient_);sendBox->addRow("Amount",amount_);sendBox->addRow(send_);tabs_->addTab(sendPage,"Send");
   auto* receivePage=new QWidget;auto* receiveBox=new QVBoxLayout(receivePage);auto* receiveRow=new QHBoxLayout;label_=new QLineEdit;label_->setPlaceholderText("Optional address label");auto* generate=new QPushButton("Create receiving address");receiveRow->addWidget(label_,1);receiveRow->addWidget(generate);receiveBox->addLayout(receiveRow);auto* addressRow=new QHBoxLayout;address_=new QLineEdit;address_->setReadOnly(true);address_->setPlaceholderText("Select an address below, or create one");auto* copy=new QPushButton("Copy address");addressRow->addWidget(address_,1);addressRow->addWidget(copy);receiveBox->addLayout(addressRow);
   addresses_=table({"Label","Receiving address","Received · "+unit_});receiveBox->addWidget(addresses_,1);tabs_->addTab(receivePage,"Receive");
@@ -140,7 +141,8 @@ public:
   status_->setStyleSheet("color:#ffad4a;font:10px monospace");status_->setWordWrap(true);headerBox->addWidget(status_);
   auto* workspace=new QTabWidget;workspace->setObjectName("pgn-wallet-subtabs");auto* walletPage=new QWidget;auto* walletPageBox=new QVBoxLayout(walletPage);walletPageBox->setContentsMargins(0,0,0,0);auto* walletScroll=new QScrollArea;walletScroll->setObjectName("pgn-wallet-content-scroll");walletScroll->setWidgetResizable(true);walletScroll->setFrameShape(QFrame::NoFrame);auto* walletContent=new QWidget;viewport_=new QVBoxLayout(walletContent);viewport_->setContentsMargins(0,0,0,0);walletScroll->setWidget(walletContent);auto* walletPages=new QStackedWidget(walletPage);walletPages->setObjectName("pgn-wallet-pages");walletPageBox->addWidget(walletPages);walletPages->addWidget(walletScroll);auto* managementScroll=new QScrollArea;managementScroll->setObjectName("pgn-wallet-management-scroll");managementScroll->setWidgetResizable(true);managementScroll->setFrameShape(QFrame::NoFrame);managementScroll->setAlignment(Qt::AlignTop);auto* managementContent=new QWidget;auto* managementBox=new QVBoxLayout(managementContent);managementBox->setContentsMargins(20,8,20,16);managementBox->setSpacing(10);auto* backToOverview=new QPushButton("← Back to overview");backToOverview->setObjectName("pgn-wallet-overview");managementBox->addWidget(backToOverview,0,Qt::AlignLeft);managementScroll->setWidget(managementContent);walletPages->addWidget(managementScroll);walletPages->setCurrentIndex(0);connect(manageWallets,&QPushButton::clicked,this,[walletPages]{walletPages->setCurrentIndex(1);});connect(backToOverview,&QPushButton::clicked,this,[walletPages]{walletPages->setCurrentIndex(0);});workspace->addTab(walletPage,"Wallet");
   runtime_=new pgn::wallet::CoreRuntime(root,this,testnet,pgn::wallet::coreRuntimeDirectory(root,testnet));metrics_=new NetworkMetricsHub([this](int span,auto consume){runtime_->readNetworkMetrics(span,std::move(consume));},this);networkExplorer_=new BlockExplorerView(runtime_);
-  networkPages_=new QTabWidget;networkPages_->setObjectName("pgn-wallet-network-tabs");networkPages_->addTab(networkExplorer_,"Blocks");networkPages_->addTab(new WalletPeersView([runtime=QPointer(runtime_)](auto done){if(runtime)runtime->readPeerSnapshot(std::move(done));else done({},"Core is unavailable");}),"Peers");networkPages_->addTab(new WalletConsoleView([runtime=QPointer(runtime_)](QString method,QByteArray params,bool wallet,auto done){if(runtime)runtime->consoleRequest(method,params,wallet,std::move(done));else done({},"Core is unavailable");}),"Console");workspace->addTab(networkPages_,"Explorer");
+  networkPages_=new QTabWidget;networkPages_->setObjectName("pgn-wallet-network-tabs");networkPages_->addTab(networkExplorer_,"Blocks");networkPages_->addTab(new WalletPeersView([runtime=QPointer(runtime_)](auto done){if(runtime)runtime->readPeerSnapshot(std::move(done));else done({},"Core is unavailable");}),"Peers");networkPages_->addTab(new WalletConsoleView([runtime=QPointer(runtime_)](QString method,QByteArray params,bool wallet,auto done){if(runtime)runtime->consoleRequest(method,params,wallet,std::move(done));else done({},"Core is unavailable");}),"Console");if(!testnet)networkPages_->addTab(new AuditExplorerView(runtime_),"Audit reports");
+  workspace->addTab(networkPages_,"Explorer");
    management_=new WalletManagementPanel(runtime_->walletManager(),managementContent,pgn::wallet::installedCoreGenesis(root,testnet));managementBox->addWidget(management_);managementBox->addStretch();
    management_->onComponents=[this,root,testnet]{
     if(openUpdates_){openUpdates_();return;}
@@ -186,19 +188,18 @@ public:
     });
     verification->setFuture(QtConcurrent::run([root,testnet]{return pgn::wallet::readCoreBundle(root,testnet?QString("test"):QString("main"));}));
    };
-  auto* historyView=createNetworkMetricsView(metrics_);layout->addWidget(workspace,1);
+  layout->addWidget(workspace,1);
   auto* reloadHistory=new QPushButton("Refresh network graphs");reloadHistory->setObjectName("pgn-wallet-difficulty-reload");
   headingRow->addWidget(reloadHistory);
   connect(reloadHistory,&QPushButton::clicked,this,[this]{metrics_->refresh();});
   placeholder_=new QLabel("Connecting the verified native wallet…",this);
   qobject_cast<QLabel*>(placeholder_)->setWordWrap(true);
   viewport_->addWidget(placeholder_,1);
-  workspace->addTab(createVanityView(root,runtime_,{},testnet),"Vanity");workspace->addTab(historyView,"Difficulty history");
-  workspace->addTab(new AuditExplorerView(runtime_),"Audits");
-  const auto contextualHeader=[heading,reloadHistory,manageWallets,workspace,walletPages](int){const int page=workspace->currentIndex();const bool managing=page==0&&walletPages->currentIndex()==1;heading->setText(managing?"Wallet management":"PGN WALLET");heading->setVisible(page==0);manageWallets->setVisible(page==0&&!managing);reloadHistory->setVisible((page==0&&!managing)||page==3);};connect(workspace,&QTabWidget::currentChanged,this,contextualHeader);connect(walletPages,&QStackedWidget::currentChanged,this,contextualHeader);contextualHeader(workspace->currentIndex());
+  workspace->addTab(createVanityView(root,runtime_,{},testnet),"Vanity");
+  const auto contextualHeader=[heading,reloadHistory,manageWallets,workspace,walletPages](int){const int page=workspace->currentIndex();const bool managing=page==0&&walletPages->currentIndex()==1;heading->setText(managing?"Wallet management":"PGN WALLET");heading->setVisible(page==0);manageWallets->setVisible(page==0&&!managing);reloadHistory->setVisible(page==0&&!managing);};connect(workspace,&QTabWidget::currentChanged,this,contextualHeader);connect(walletPages,&QStackedWidget::currentChanged,this,contextualHeader);contextualHeader(workspace->currentIndex());
   auto* navigation=HorizonCoinNavigation(workspace,{
    {"01 WALLET","BALANCES + PAYMENTS"},{"02 NETWORK","BLOCKS + ACTIVITY"},
-   {"03 VANITY","PERSONAL ADDRESS"},{"04 DIFFICULTY","CHAIN HISTORY"},{"05 AUDITS","REPORTS + VERIFICATION"}},this);
+   {"03 VANITY","PERSONAL ADDRESS"}},this);
   navigation->setProperty("pgn_navigation_role","wallet");layout->insertWidget(0,navigation);
 
   accountPanel_=new WalletAccountPanel(runtime_,metrics_,testnet,walletPage);accountPanel_->setEnabled(false);viewport_->addWidget(accountPanel_,1);placeholder_->hide();
@@ -340,6 +341,31 @@ void readWalletTicketNumber(QWidget* widget,const QString& id,std::function<void
  else consume({},"Wallet network view unavailable");
 }
 void readWalletTicketAtlas(QWidget* widget,const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readTicketAtlas(start,end,bins,std::move(consume));else consume({},"Wallet network atlas unavailable");}
+void showWalletNetworkChart(QWidget* wallet){
+ if(!wallet)return;
+ if(auto* pages=wallet->findChild<QStackedWidget*>("pgn-wallet-pages"))pages->setCurrentIndex(0);
+ if(auto* account=wallet->findChild<QWidget*>("pgn-wallet-account"))
+  if(auto* balances=account->findChild<QTabWidget*>())balances->setCurrentIndex(0);
+ auto* scroll=wallet->findChild<QScrollArea*>("pgn-wallet-content-scroll");
+ auto* chart=wallet->findChild<QWidget*>("pgn-wallet-network-chart");
+ if(scroll&&chart)scroll->ensureWidgetVisible(chart,0,8);
+}
+void openWalletAuditExplorer(QWidget* widget,QWidget* owner){
+ auto* wallet=dynamic_cast<WalletCoreView*>(widget);
+ if(!wallet||!owner)return;
+ const QString name="pgn-network-audit-explorer-dialog";
+ if(auto* existing=owner->findChild<QDialog*>(name,Qt::FindDirectChildrenOnly)){
+    existing->show();existing->raise();existing->activateWindow();return;
+ }
+ auto* dialog=new QDialog(owner);
+ dialog->setObjectName(name);
+ dialog->setWindowTitle("Audit reports and auditor registry");
+ dialog->resize(1000,680);
+ auto* layout=new QVBoxLayout(dialog);
+ layout->setContentsMargins(0,0,0,0);
+ layout->addWidget(new AuditExplorerView(wallet->networkRuntime(),dialog));
+ dialog->show();
+}
 void readWalletAuditActivity(QWidget* widget,qint64 height,const QString& hash,const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditActivity(height,hash,watched,std::move(consume));else consume({},"Wallet network activity unavailable");}
 void readWalletAuditDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditDetails(id,std::move(consume));else consume({},"Wallet audit view unavailable");}
 void bindWalletStartupAttention(QWidget* widget,std::function<void(QString)> receive){if(auto* view=dynamic_cast<WalletCoreView*>(widget)){view->startupAttention=std::move(receive);if(view->property("pgn_wallet_setup_required").toBool()&&view->startupAttention)view->startupAttention("Wallet connection requires attention");}}

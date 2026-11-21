@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QLabel>
+#include <QDialog>
 #include <QButtonGroup>
 #include <QDir>
 #include <QFileInfo>
@@ -18,13 +19,13 @@ int main(int argc,char** argv){
  QApplication app(argc,argv);QTemporaryDir empty;
  std::unique_ptr<QWidget> view(pgn::ui::createWalletCoreView(empty.path()));view->resize(1380,800);view->show();app.processEvents();
  auto* outer=view->findChild<QTabWidget*>("pgn-wallet-subtabs");auto* account=view->findChild<QWidget*>("pgn-wallet-account");
- if(!outer||outer->count()!=5||!account||account->isEnabled()||view->property("pgn_wallet_frontend_loaded").toBool())return 1;
+ if(!outer||outer->count()!=3||!account||account->isEnabled()||view->property("pgn_wallet_frontend_loaded").toBool())return 1;
  auto* pages=account->findChild<QTabWidget*>();if(!pages||pages->count()!=4)return 2;
  auto* nav=view->findChild<QFrame*>("horizonNavigation");if(!nav||!outer->tabBar()->isHidden())return 3;
- auto* group=nav->findChild<QButtonGroup*>();if(!group||group->buttons().size()!=5)return 4;
- for(int i=0;i<5;++i){group->button(i)->click();app.processEvents();if(outer->currentIndex()!=i)return 5;}
- const QStringList expected{"Wallet","Explorer","Vanity","Difficulty history","Audits"};for(int i=0;i<expected.size();++i)if(outer->tabText(i)!=expected[i])return 11;
- auto* network=view->findChild<QTabWidget*>("pgn-wallet-network-tabs");if(!network||network->count()!=3||network->tabText(0)!="Blocks"||network->tabText(1)!="Peers"||network->tabText(2)!="Console"||!network->findChild<QTableWidget*>("pgn-wallet-peers")||!network->findChild<QLineEdit*>("pgn-console-method")||!network->findChild<QPushButton*>("pgn-console-execute"))return 12;
+ auto* group=nav->findChild<QButtonGroup*>();if(!group||group->buttons().size()!=3)return 4;
+ for(int i=0;i<3;++i){group->button(i)->click();app.processEvents();if(outer->currentIndex()!=i)return 5;}
+ const QStringList expected{"Wallet","Explorer","Vanity"};for(int i=0;i<expected.size();++i)if(outer->tabText(i)!=expected[i])return 11;
+ auto* network=view->findChild<QTabWidget*>("pgn-wallet-network-tabs");if(!network||network->count()!=4||network->tabText(3)!="Audit reports"||network->tabText(0)!="Blocks"||network->tabText(1)!="Peers"||network->tabText(2)!="Console"||!network->findChild<QTableWidget*>("pgn-wallet-peers")||!network->findChild<QLineEdit*>("pgn-console-method")||!network->findChild<QPushButton*>("pgn-console-execute"))return 12;
  bool placeholder=false;for(auto* label:account->findChildren<QLabel*>())if(label->text()==QString::fromUtf8("— PGN"))placeholder=true;
  if(!placeholder||QFileInfo::exists(empty.path()+"/data/runtime/wallet-owned.json"))return 6;
  for(auto* input:account->findChildren<QLineEdit*>())if(input->placeholderText().contains("Select an address")&&!input->isReadOnly())return 7;
@@ -33,6 +34,26 @@ int main(int argc,char** argv){
  if(!walletPages||!manage||!back||!management||walletPages->currentIndex()!=1||!management->isVisible()||manage->isVisible())return 8;
  back->click();app.processEvents();if(walletPages->currentIndex()!=0||management->isVisible()||!account->isVisible())return 10;
  manage->click();app.processEvents();if(walletPages->currentIndex()!=1||!management->isVisible()||account->isVisible())return 9;
+ pages->setCurrentIndex(1);
+ pgn::ui::showWalletNetworkChart(view.get());
+ app.processEvents();
+ if(walletPages->currentIndex()!=0||pages->currentIndex()!=0||
+     !view->findChild<QWidget*>("pgn-wallet-network-chart")->isVisible())return 14;
+ pages->setCurrentIndex(1);
+ pgn::ui::showWalletNetworkChart(view.get());
+ if(pages->currentIndex()!=0)return 15;
+ QWidget networkWork;
+ pgn::ui::openWalletAuditExplorer(view.get(),&networkWork);
+ pgn::ui::openWalletAuditExplorer(view.get(),&networkWork);
+ auto dialogs=networkWork.findChildren<QDialog*>("pgn-network-audit-explorer-dialog",Qt::FindDirectChildrenOnly);
+ if(dialogs.size()!=1||!dialogs.front()->findChild<QWidget*>("pgn-audit-explorer")||
+     !dialogs.front()->findChild<QWidget*>("pgn-audit-registry-table"))return 13;
+ dialogs.front()->close();
  if(argc>1)view->grab().save(QString::fromLocal8Bit(argv[1]));
- std::cout<<"WALLET_NATIVE_HORIZON_PASS: actual five-workspace/four-account widget tree, shared navigation, absent Core holds operations and unknown balances, no process/window/key/node created\n";return 0;
+ view.reset();
+ dialogs.front()->show();
+ app.processEvents();
+ auto* browser=dialogs.front()->findChild<QWidget*>("pgn-audit-explorer");
+ if(!browser||!browser->isVisible())return 16;
+ std::cout<<"WALLET_NATIVE_HORIZON_PASS: actual three-workspace/four-account widget tree, shared navigation, absent Core holds operations and unknown balances, no process/window/key/node created\n";return 0;
 }
