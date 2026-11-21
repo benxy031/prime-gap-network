@@ -32,17 +32,30 @@ public:
    auto* profileClock=new QTimer(this);profileClock->setInterval(1000);profileClock->setTimerType(Qt::CoarseTimer);
    connect(profileClock,&QTimer::timeout,this,[this]{
     const auto identity=componentProfileIdentity(context_);if(identity==profileIdentity_)return;
-    profileIdentity_=identity;++profileRevision_;context_=refreshComponentVersionsContext(context_);
-    updateRequest_={};refreshLocal();if(dialog_)dialog_->refreshLocal();
+    profileIdentity_=identity;++profileRevision_;
+    const auto previousGenesis=context_.genesisHash;context_=refreshComponentVersionsContext(context_);
+    if(previousGenesis!=context_.genesisHash){
+     remoteFresh_=false;lastFailure_.clear();
+     setProperty("pgn_component_authenticated_catalog",QVariant{});
+     setProperty("pgn_component_last_checked_utc",QVariant{});
+    }
+    resetUpdateRetries();refreshLocal();if(dialog_)dialog_->refreshLocal();
    });profileClock->start();
   }
   // A running client must discover a later release without reopening the menu.
   // Signed metadata only: optional installation is never triggered by this clock.
   if(context_.fetchOnOpen){
+   retry_=new QTimer(this);retry_->setObjectName("pgn-component-update-retry");
+   retry_->setSingleShot(true);
+   connect(retry_,&QTimer::timeout,this,[this]{checkSignedUpdates();});
    auto* refresh=new QTimer(this);refresh->setObjectName("pgn-component-update-refresh");
    refresh->setTimerType(Qt::CoarseTimer);refresh->setInterval(10*60*1000);
-   connect(refresh,&QTimer::timeout,this,[this]{if(!dialog_)checkSignedUpdates();});
+   connect(refresh,&QTimer::timeout,this,[this]{
+    if(dialog_||checkInProgress())return;
+    resetUpdateRetries();checkSignedUpdates();
+   });
    refresh->start();
+   QTimer::singleShot(0,this,[this]{checkSignedUpdates();});
   }
  }
  void refreshLocal(){
@@ -53,7 +66,7 @@ public:
    localBusy_=false;const auto value=watcher->result();watcher->deleteLater();
    if(revision==profileRevision_)presentLocal(value);
    if(localAgain_||revision!=profileRevision_){localAgain_=false;refreshLocal();return;}
-   if(context_.fetchOnOpen)checkSignedUpdates();
+   if(context_.fetchOnOpen&&!remoteFresh_&&!(retry_&&retry_->isActive()))checkSignedUpdates();
   });
   watcher->setFuture(QtConcurrent::run([context=context_]{return inspectLocalComponentVersions(context);}));
  }
@@ -66,6 +79,7 @@ public:
   setProperty("pgn_component_release_catalog",catalog);
   if(catalog.value("schema")=="PGN_AUTHENTICATED_COMPONENT_VIEW_V1"&&catalog.value("publisher_authenticated").toBool()){
    remoteFresh_=true;
+   resetUpdateRetries();lastFailure_.clear();
    setProperty("pgn_component_authenticated_catalog",catalog);
    setProperty("pgn_component_last_checked_utc",catalog.value("checked_at_utc").toString());
    QMap<QString,QString> available;
@@ -93,35 +107,64 @@ public:
  }
  void presentUpdateChecking(){
   remoteFresh_=false;
-  presentUpdateStatus("Updates · checking","checking");
+  presentUpdateStatus("Updates · checking","checking","Checking signed published versions."+checkDateHint());
  }
  void presentUpdateFailure(const QString& error){
-  remoteFresh_=false;
-  const auto checked=property("pgn_component_last_checked_utc").toString();
-  presentUpdateStatus(error.contains("GitHub update service")?"Updates · GitHub unavailable":
-     error.contains("Internet connection")?"Updates · connection failed":"Updates · check failed","stale",
-     error+(checked.isEmpty()?QString("\nNo successful version check yet."):QString("\nLast successful check: ")+checked));
+  lastFailure_=error;remoteFresh_=false;
+  const bool github=error.startsWith("GitHub update service is temporarily unavailable");
+  const bool offline=error.startsWith("Cannot reach the update server");
+  if(!github&&!offline)resetUpdateRetries();
+  scheduleRetry();
+  presentUpdateStatus(github?"Updates · GitHub unavailable":offline?"Updates · connection failed":"Updates · check failed",
+      "stale",error+checkDateHint()+(retry_&&retry_->isActive()?"\nA background retry is scheduled.":""));
  }
  void checkSignedUpdates(){
-  try{
-   const auto root=QFileInfo(context_.manifestPath).absolutePath();auto deployment=pgn::update::componentUpdateDeployment(root,context_.testnet);
-   if(!context_.genesisHash.isEmpty()&&context_.genesisHash!=deployment.context.value("genesis_hash").toString())throw std::runtime_error("Update deployment differs from the active Core epoch");
-   updateRequest_=pgn::update::componentUpdateRequest(deployment,property("pgn_component_local_snapshot").toJsonObject(),root,context_.mutableDataRoot,"check",{"ui","core","gpu","cpu"});
-   if(!updateService_){
-    updateService_=new pgn::update::ComponentUpdateService(std::move(deployment),this);
-    updateService_->onResult=[this](const QJsonObject& value){presentPublished(value);};
-    updateService_->onError=[this](const QString& error){presentUpdateFailure(error);};
-   }
-   if(updateService_->start(updateRequest_))presentUpdateChecking();
-  }catch(const std::exception& error){presentUpdateFailure(QString::fromUtf8(error.what()));}
+  if(dialog_||checkInProgress())return;
+  if(retry_)retry_->stop();
+  preparingCheck_=true;const auto revision=profileRevision_;
+  presentUpdateChecking();
+  auto* watcher=new QFutureWatcher<PreparedCheck>(this);
+  connect(watcher,&QFutureWatcher<PreparedCheck>::finished,this,[this,watcher,revision]{
+   auto check=watcher->result();watcher->deleteLater();preparingCheck_=false;
+   if(revision!=profileRevision_){if(!localBusy_)checkSignedUpdates();return;}
+   if(dialog_)return;
+   if(!check.error.isEmpty()){presentUpdateFailure(check.error);return;}
+   if(updateService_)updateService_->deleteLater();
+   updateService_=new pgn::update::ComponentUpdateService(std::move(check.deployment),this);
+   updateService_->onResult=[this,revision](const QJsonObject& value){
+    if(revision==profileRevision_&&!dialog_)presentPublished(value);
+    else if(revision!=profileRevision_&&!localBusy_)checkSignedUpdates();
+   };
+   updateService_->onError=[this,revision](const QString& error){
+    if(revision==profileRevision_&&!dialog_)presentUpdateFailure(error);
+    else if(revision!=profileRevision_&&!localBusy_)checkSignedUpdates();
+   };
+   if(!updateService_->start(check.request))presentUpdateFailure("The signed update check could not start.");
+  });
+  watcher->setFuture(QtConcurrent::run([context=context_,installed=property("pgn_component_local_snapshot").toJsonObject()]{
+   PreparedCheck check;
+   try{
+    const auto root=QFileInfo(context.manifestPath).absolutePath();
+    check.deployment=pgn::update::componentUpdateDeployment(root,context.testnet);
+    if(!context.genesisHash.isEmpty()&&context.genesisHash!=check.deployment.context.value("genesis_hash").toString())
+     throw std::runtime_error("Update deployment differs from the active Core epoch");
+    check.request=pgn::update::componentUpdateRequest(check.deployment,installed,root,context.mutableDataRoot,"check",{"ui","core","gpu","cpu"});
+   }catch(const std::exception& error){check.error=QString::fromUtf8(error.what());}
+   return check;
+  }));
  }
  void openComponents(){
   if(dialog_){dialog_->show();dialog_->raise();dialog_->activateWindow();return;}
+  if(retry_)retry_->stop();
   dialog_=new ComponentVersionsDialog(context_,this);dialog_->setAttribute(Qt::WA_DeleteOnClose);
   const QPointer<ComponentStatusStrip> guard(this);
-  dialog_->onLocalSnapshot=[guard](const QJsonObject& value){if(guard)guard->presentLocal(value);};
+  dialog_->onLocalSnapshot=[guard](const QJsonObject& value){if(guard&&value.value("inventory_mode")!="manifest")guard->presentLocal(value);};
   dialog_->onPublishedCatalog=[guard](const QJsonObject& value){if(guard)guard->presentPublished(value);};
   dialog_->onPublishedFailure=[guard](const QString& error){if(guard)guard->presentUpdateFailure(error);};
+  connect(dialog_,&QObject::destroyed,this,[this]{QTimer::singleShot(0,this,[this]{
+   if(context_.fetchOnOpen&&!remoteFresh_&&lastFailure_.isEmpty())checkSignedUpdates();
+   else scheduleRetry();
+  });});
   dialog_->show();
  }
 private:
@@ -154,8 +197,22 @@ private:
   updateDetail_=detail;
   refreshTooltip();
  }
+ struct PreparedCheck {pgn::update::ComponentUpdateDeployment deployment;QJsonObject request;QString error;};
+ QString checkDateHint()const{
+  const auto checked=property("pgn_component_last_checked_utc").toString();
+  return checked.isEmpty()?QString("\nNo successful version check yet."):QString("\nLast successful check: ")+checked;
+ }
+ bool checkInProgress()const{return preparingCheck_||(updateService_&&updateService_->busy());}
+ void resetUpdateRetries(){if(retry_)retry_->stop();retryAttempt_=0;}
+ void scheduleRetry(){
+  static constexpr int delays[]{2000,5000,15000};
+  const bool transient=lastFailure_.startsWith("GitHub update service is temporarily unavailable")||
+                       lastFailure_.startsWith("Cannot reach the update server");
+  if(retry_&&!dialog_&&!retry_->isActive()&&transient&&retryAttempt_<3)
+   retry_->start(delays[retryAttempt_++]);
+ }
  ComponentVersionsContext context_;QToolButton* updates_{};QPointer<ComponentVersionsDialog> dialog_;
- QString updateDetail_;
- pgn::update::ComponentUpdateService* updateService_{};QJsonObject updateRequest_;bool remoteFresh_{},localBusy_{},localAgain_{};QByteArray profileIdentity_;quint64 profileRevision_{};
+ pgn::update::ComponentUpdateService* updateService_{};QTimer* retry_{};int retryAttempt_{};QString lastFailure_,updateDetail_;
+ bool remoteFresh_{},localBusy_{},localAgain_{},preparingCheck_{};QByteArray profileIdentity_;quint64 profileRevision_{};
 };
 }

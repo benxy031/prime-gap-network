@@ -365,7 +365,14 @@ void SocialView::setIdentity(social::Identity identity){
     const QStringList periodIds{"total","today","week","month","hour"};
     if(auto* button=findChild<QPushButton*>("pgn-social-period-"+periodIds.value(ranking.filter->currentIndex())))button->setChecked(true);
     updateAccess();for(int i=0;i<3;++i)loadEditor(i);read(tabs_->currentIndex());
-    if(ranking.leaderboardSaved && tabs_->currentIndex()!=3)read(3);
+    if(tabs_->currentIndex()!=3&&identity_.valid()&&identity_.genesis==leaderboardCacheGenesis_){
+        const auto generation=leaderboardIdentityGeneration_;
+        QTimer::singleShot(0,this,[this,generation]{
+            const auto& ranking=pages_[3];
+            if(leaderboardIdentityGeneration_==generation&&identity_.valid()&&
+               identity_.genesis==leaderboardCacheGenesis_&&(!ranking.loaded||ranking.leaderboardSaved))read(3);
+        });
+    }
 }
 void SocialView::pageState(int i,QString state,QString message,QString detail){
     auto& p=pages_[i];p.state=std::move(state);p.statusText=std::move(message);if(detail.isEmpty())detail=p.statusText;
@@ -570,15 +577,16 @@ void SocialView::fetchLeaderboard(const social::ReadRequest& request,social::Ser
 }
 
 void SocialView::warmLeaderboard(){
-    if(!isVisible()||tabs_->currentIndex()!=3||pages_[3].busy||leaderboardWarmInFlight_||
-       !services_.read||!identity_.valid())return;
+    if(pages_[3].busy||leaderboardWarmInFlight_||!services_.read||!identity_.valid())return;
+    const bool visible=isVisible()&&tabs_->currentIndex()==3;
+    if(!visible&&identity_.genesis!=leaderboardCacheGenesis_)return;
     const auto now=QDateTime::currentSecsSinceEpoch();
     const auto active=static_cast<social::Window>(pages_[3].filter->currentIndex());
     for(const auto window:{social::Window::Day,social::Window::Hour,social::Window::Week,
                           social::Window::Month,social::Window::AllTime}){
         const auto index=static_cast<int>(window);
         const auto& cached=leaderboardCache_.at(index);
-        if(window==active||!leaderboardWindows_.contains(window)||
+        if(window==active||!leaderboardWindows_.contains(window)||(!visible&&window!=social::Window::Day)||
            !leaderboardWaiters_.at(index).isEmpty()||now<leaderboardWarmAfter_.at(index)||
            (cached&&leaderboardFresh(*cached,now)))continue;
         leaderboardWarmAfter_.at(index)=now+60;
@@ -673,7 +681,13 @@ void SocialView::present(int i,const social::Snapshot& data,bool append){
             auto* chat=static_cast<SocialChatList*>(p.list);
             if(merged.size()<=LoadedLimit||chat->followingLatest()){const bool older=!p.entries.isEmpty()&&(data.entries.isEmpty()||p.entries.first().createdUtc<data.entries.first().createdUtc||(p.entries.first().createdUtc==data.entries.first().createdUtc&&p.entries.first().id<data.entries.first().id));p.entries=std::move(merged);if(older)p.nextCursor=previousCursor;}
             else p.nextCursor=previousCursor; // Keep the reader's bounded window; Jump latest requests the current page.
-            if(data.participants){QMap<QString,QString> labels;for(const auto& member:*data.participants)labels.insert(member.id,member.name);for(auto& entry:p.entries)entry.author=labels.value(entry.authorId,entry.authorId);}
+            QMap<QString,QString> labels;
+            for(const auto& entry:data.entries)labels.insert(entry.authorId,entry.author);
+            if(data.participants)for(const auto& member:*data.participants)labels.insert(member.id,member.name);
+            for(auto& entry:p.entries){
+                const auto name=labels.constFind(entry.authorId);
+                if(name!=labels.cend())entry.author=name.value();
+            }
         }else if(append)p.entries+=data.entries;else p.entries=data.entries;
         std::stable_sort(p.entries.begin(),p.entries.end(),[i](const auto& a,const auto& b){const auto x=i==2&&a.lastActivity.isValid()?a.lastActivity:a.createdUtc,y=i==2&&b.lastActivity.isValid()?b.lastActivity:b.createdUtc;return x==y?a.id<b.id:i==0?x<y:x>y;});
         if(i==0&&p.entries.size()>LoadedLimit){p.entries.remove(0,p.entries.size()-LoadedLimit);p.nextCursor=p.entries.first().id;}

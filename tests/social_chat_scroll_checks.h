@@ -3,6 +3,7 @@
 #include "ui/social_chat_list.h"
 #include <QApplication>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QDir>
 #include <QImage>
@@ -58,7 +59,9 @@ inline void run(const QString& path,const QString& captures={}){
  auto* notice=new QLabel("REVISION ONLY · synthetic interaction fixture · no network messages or rights");notice->setStyleSheet("font:12px 'Segoe UI';color:#e6bd64;padding:6px 14px;");box->addWidget(notice);
  ui::SocialView view(path,services);box->addWidget(&view,1);shell.resize(1366,990);view.setIdentity(identity);shell.show();settle();
  QJsonArray rendered;const auto capture=[&](QString state){if(captures.isEmpty())return;expect(QDir().mkpath(captures),"Capture directory unavailable");const auto file=QString("chat-%1x%2-%3.png").arg(shell.width()).arg(shell.height()).arg(state);expect(shell.grab().save(captures+"/"+file),"Qt interaction capture failed");rendered.append(QJsonObject{{"file",file},{"width",shell.width()},{"height",shell.height()},{"window_state",int(shell.windowState())},{"normal_window",!shell.isMaximized()&&!shell.isFullScreen()},{"source","Explicit synthetic UI interaction fixture; actual SocialView"}});};
- auto* list=view.findChild<QListWidget*>("pgn-social-list-0");expect(list&&list->count()==80,"Scroll fixture did not load real chronology widget");expect(bottom(list),"Initial chronology did not settle at latest message");
+ auto* list=view.findChild<QListWidget*>("pgn-social-list-0");expect(list&&list->count()==80,"Scroll fixture did not load real chronology widget");QElapsedTimer layoutWait;layoutWait.start();
+ while(!bottom(list)&&layoutWait.elapsed()<600)settle();
+ expect(bottom(list),"Initial chronology did not settle at latest message");
  records.append(entry(100));view.refresh();settle();expect(bottom(list),"Incoming message moved a reader who was following the bottom");
  userScrollTo(list,list->verticalScrollBar()->maximum()/3+7);settle();const auto historical=anchor(list);expect(!historical.first.isEmpty()&&!bottom(list),"History interaction fixture did not leave latest");
  records.append(entry(101));view.refresh();settle();expect(anchor(list)==historical,"Incoming message changed historical message/pixel anchor after layout");

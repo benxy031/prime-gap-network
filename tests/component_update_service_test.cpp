@@ -99,6 +99,23 @@ int main(int argc,char** argv){
   require(service.start(request("delay")),"Cancellation fixture refused");app.processEvents();service.cancel();wait();require(lastError.contains("cancelled"),"Cancellation was not distinct");
   require(service.start(request()),"Request after cancellation refused");wait();require(results==2,"Cancellation poisoned the next request");
   service.onStatus=[&](const QString&){service.cancel();};require(service.start(request()),"Reentrant cancellation refused");wait();service.onStatus={};require(lastError.contains("cancelled"),"Status callback cancellation launched an unintended operation");
+  {
+   const QJsonObject snapshot{{"components",QJsonArray{
+      QJsonObject{{"id","ui"},{"state","reported_local_manifest"},{"version","1.2.3"}},
+      QJsonObject{{"id","gpu"},{"state","unidentified"},{"version","9.0"}}}}};
+   const auto state=[&](const QString& action){
+       return pgn::update::componentUpdateRequest(resolved,snapshot,temp.path(),
+           temp.path()+"/user-data",action,{"ui"}).value("context").toObject().value("installed").toArray();
+   };
+   require(state("check").isEmpty(),"Read-only check carried a local version floor");
+#ifdef Q_OS_WIN
+   const auto floor=state("prepare_install");
+   require(floor.size()==1&&floor[0].toObject().value("version")=="1.2.3",
+           "Windows helper did not receive the declared version for verification");
+#else
+   require(state("prepare_install").isEmpty(),"A non-Windows preparation carried an unverified version");
+#endif
+  }
   require(!service.start(QJsonObject{{"action","execute"}}),"Arbitrary execution operation admitted");
   {pgn::update::ComponentUpdateService missing({temp.path()+"/missing.exe",{}});int failed=0;missing.onError=[&](const QString&){++failed;};require(missing.start(request()),"Failed-start fixture refused");QElapsedTimer clock;clock.start();while(missing.busy()&&clock.elapsed()<5000){app.processEvents();QThread::msleep(5);}require(!missing.busy()&&failed==1,"Failed start did not settle exactly once");}
   {

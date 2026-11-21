@@ -35,13 +35,29 @@ int main(int argc,char** argv){
  dialog.presentLocal({{"manifest_state","valid"},{"components",newerLocal}});dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",olderPublic}});
  check(!download->isEnabled()&&table->item(0,3)->text()=="Newer local build");check(dialog.findChild<QLabel*>("pgn-components-status")->text().contains("newer than the published"));
  dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",newerLocal}});check(dialog.findChild<QLabel*>("pgn-components-status")->text()=="All components are up to date.");
- dialog.presentUpdateFailure("HTTP error occurred with status 504");check(table->item(0,3)->text()=="Last check outdated"&&table->item(0,2)->text()=="3.0"&&!download->isEnabled());check(dialog.findChild<QLabel*>("pgn-components-status")->text().contains("GitHub update service")&&dialog.findChild<QLabel*>("pgn-components-status")->text().contains("Last successful check:"));
+ dialog.presentUpdateFailure("HTTP error occurred with status 504");
+ check(table->item(0,3)->text()=="Last check outdated"&&table->item(0,2)->text()=="3.0"&&!download->isEnabled());
+ auto* retryStatus=dialog.findChild<QLabel*>("pgn-components-status");
+ check(retryStatus->text().contains("GitHub update service")&&retryStatus->text().contains("Last successful check:"));
+ check(retryStatus->toolTip().contains("GitHub update service"));
+ dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",newerLocal}});
+ check(retryStatus->text()=="All components are up to date."&&retryStatus->toolTip().isEmpty());
  dialog.presentLocal({{"manifest_state","valid"},{"components",installed}});dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",available}});
  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","verify"},{"component","ui"},{"completed",2048},{"total",4096}});
- auto* componentProgress=qobject_cast<QProgressBar*>(table->cellWidget(0,4));check(componentProgress&&componentProgress->value()==2048&&componentProgress->maximum()==4096);
+ auto* progressCell=table->cellWidget(0,4);check(progressCell);
+ auto* componentProgress=progressCell->findChild<QProgressBar*>("pgn-component-row-progress");check(componentProgress&&componentProgress->value()==2048&&componentProgress->maximum()==4096);
  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","download"},{"component",""},{"completed",73400320},{"total",204265081}});
  auto* globalProgress=dialog.findChild<QProgressBar*>("pgn-components-progress");check(globalProgress&&globalProgress->value()==73400320&&globalProgress->maximum()==204265081);
  if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));check(dialog.grab().save(QString::fromLocal8Bit(argv[1])+"/component-updates.png"));}
+ dialog.presentUpdateFailure("Cannot reach the update server. "+QString(500,'A'));
+ app.processEvents();
+ check(table->columnCount()==4&&!globalProgress->isVisible()&&!dialog.property("pgn_update_progress").isValid());
+ auto* status=dialog.findChild<QLabel*>("pgn-components-status");
+ check(status&&status->parentWidget()->mapTo(&dialog,QPoint{}).y()<
+       download->mapTo(&dialog,QPoint{}).y());
+ check(table->mapTo(&dialog,table->rect().bottomLeft()).y()<
+       status->parentWidget()->mapTo(&dialog,QPoint{}).y());
+
  // An interrupted installation stays visible even when no update catalogue
  // can be fetched. The fixture uses a unique test-mode application directory.
  context.genesisHash=QString(64,'5');const auto store=pgn::update::updateStateDirectory(context.genesisHash)+"/installation";check(QDir().mkpath(store));

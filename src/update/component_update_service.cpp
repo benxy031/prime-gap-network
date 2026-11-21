@@ -88,6 +88,8 @@ std::optional<int> componentVersionComparison(QString installed,QString availabl
 }
 QString componentUpdateFailureMessage(const QString& detail){
  const auto value=detail.left(512);
+ if(value.startsWith("Cannot reach the update server.")||
+    value.startsWith("GitHub update service is temporarily unavailable"))return value;
  const auto http=QRegularExpression("\\b(?:status|HTTP)\\D{0,32}(5[0-9]{2}|429)\\b",QRegularExpression::CaseInsensitiveOption).match(value);
  if(http.hasMatch())return "GitHub update service is temporarily unavailable (HTTP "+http.captured(1)+"). Version status could not be checked. Try again later.";
  if(QRegularExpression("getaddrinfo|name.?resolution|connection.*(?:failed|refused|reset)|timed? ?out|network.*unreachable|WinError (?:10060|10061|11001)",QRegularExpression::CaseInsensitiveOption).match(value).hasMatch())
@@ -110,7 +112,13 @@ QJsonObject componentUpdateRequest(const ComponentUpdateDeployment& deployment,c
     // Catalogue discovery is read-only and must also describe an older public
     // build. Preparation/installation retain the actual verified version floor.
     for(const auto& value:(action=="check"||action=="inspect_storage"||action=="clean_storage")?QJsonArray{}:snapshot.value("components").toArray()){
-        const auto item=value.toObject();if(item.value("state")!="matched_local_manifest")continue;
+        const auto item=value.toObject();
+        const auto status=item.value("state");
+        if(status!="matched_local_manifest"
+#ifdef Q_OS_WIN
+            &&status!="reported_local_manifest"
+#endif
+            )continue;
         installed.append(QJsonObject{{"id",item.value("id")},{"version",item.value("version")},{"abi",config.value("abi")}});
     }
     for(const auto& id:selected)selection.append(id);

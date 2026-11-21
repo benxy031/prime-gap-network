@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     struct Pending {int offset; View::Result reply;};
     std::deque<Pending> pending;
     View view(View::PageReader{[&](int offset, View::Result reply) {pending.push_back({offset,std::move(reply)});}});
-    view.resize(1100,700); view.show(); app.processEvents(); view.hide();
+    view.resize(1100,700); view.show(); app.processEvents(); view.hide(); view.hide();
     auto answer=[&](int offset,QJsonObject snapshot,QString error={}) {
         require(!pending.empty() && pending.front().offset==offset,"Wrong requested page");
         auto callback=std::move(pending.front().reply);pending.pop_front();callback(snapshot,error);app.processEvents();
@@ -45,6 +45,19 @@ int main(int argc, char** argv) {
     auto* next=view.findChild<QPushButton*>("pgn-audit-next");
     auto* previous=view.findChild<QPushButton*>("pgn-audit-previous");
     auto snapshot=page(1,100);answer(0,snapshot);
+    if(argc==2&&QString::fromLocal8Bit(argv[1])=="--sorted-only"){
+    table->sortItems(1,Qt::DescendingOrder);
+    app.processEvents();
+    require(table->item(0,0)->data(Qt::UserRole).toString()==report(100).value("request_id").toString(),"Fixture must reverse the original report order");
+    table->setCurrentCell(0,0);table->selectRow(0);app.processEvents();
+    require(view.property("pgn_audit_selected_request")==table->item(0,0)->data(Qt::UserRole),"Sorted audit selection points to another request");
+
+
+
+        std::cout<<"PASS sorted clicks use the displayed report identity and its own audit details\n";
+        return 0;
+    }
+
     require(table->rowCount()==100,"Initial page missing");
     require(table->item(0,2)->text()=="Assigned"&&table->item(0,2)->foreground().color()==pgn::ui::ticketStagePresentation("audits_assigned").color&&!table->item(0,2)->icon().isNull(),"Assigned audit lacks persistent color/icon");
     require(table->item(0,3)->foreground().color()==pgn::ui::ticketStagePresentation("pending_audits").color,"Missing auditor must remain awaiting");

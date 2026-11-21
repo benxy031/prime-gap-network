@@ -155,20 +155,25 @@ int main(int argc,char** argv){
 
     struct Pending{social::ReadRequest request;social::Services::Reply reply;};QVector<Pending> pending;
     social::Services services{[&](auto request,auto reply){pending.append({request,std::move(reply)});}};
+    const auto chatRequest=[&]{
+        for(auto turn=pending.crbegin();turn!=pending.crend();++turn)
+            if(turn->request.section==social::Section::Chat)return *turn;
+        throw std::runtime_error("The fixture has no pending Chat request");
+    };
     auto* view=new ui::SocialView(temp.path()+"/remote/drafts.json",services);view->resize(1280,677);view->show();app.processEvents();
     check(pending.isEmpty(),"Network read inferred without identity");view->setIdentity(A());view->refresh();check(pending.size()==1,"Overlapping reads admitted");
-    auto invalid=snapshot(pending.last().request);invalid.authenticated=false;invalid.entries={entry("x",{})};pending.last().reply(invalid,{});
+    auto invalid=snapshot(chatRequest().request);invalid.authenticated=false;invalid.entries={entry("x",{})};chatRequest().reply(invalid,{});
     check(find<QListWidget>(*view,"pgn-social-list-0")->count()==0&&view->property("pgn_social_state_0")=="error","Unauthenticated content accepted");
-    view->refresh();const auto old=pending.last();view->setIdentity(C());old.reply(snapshot(old.request),{});
+    view->refresh();const auto old=chatRequest();view->setIdentity(C());old.reply(snapshot(old.request),{});
     check(find<QListWidget>(*view,"pgn-social-list-0")->count()==0,"Late wrong-genesis response accepted");
     auto* focus=find<QPlainTextEdit>(*view,"pgn-social-draft-body-0");focus->setFocus();app.processEvents();
-    auto chat=snapshot(pending.last().request);chat.entries={entry("new",{},10),entry("old",{},90)};pending.last().reply(chat,{});
+    auto chat=snapshot(chatRequest().request);chat.entries={entry("new",{},10),entry("old",{},90)};chatRequest().reply(chat,{});
     check(QApplication::focusWidget()==focus,"Arriving content stole composer focus");
     auto* messages=find<QListWidget>(*view,"pgn-social-list-0");check(messages->count()==2&&messages->item(0)->text().contains("<script>literal only</script>"),"Chat is not safe plain text");
     check(!view->findChild<QTextBrowser*>("pgn-social-detail-0"),"Chat has a duplicate reading panel");
-    view->setIdentity(A());pending.last().reply(snapshot(pending.last().request),{});
-    auto validChat=snapshot(pending.last().request);validChat.entries={entry("kept",{},10)};
-    view->refresh();pending.last().reply(validChat,{});view->refresh();auto duplicate=validChat;duplicate.entries.append(validChat.entries[0]);pending.last().reply(duplicate,{});
+    view->setIdentity(A());chatRequest().reply(snapshot(chatRequest().request),{});
+    auto validChat=snapshot(chatRequest().request);validChat.entries={entry("kept",{},10)};
+    view->refresh();chatRequest().reply(validChat,{});view->refresh();auto duplicate=validChat;duplicate.entries.append(validChat.entries[0]);chatRequest().reply(duplicate,{});
     check(messages->count()==1&&view->property("pgn_social_state_0")=="error","Malformed refresh erased valid chat");
     const int beforeHidden=pending.size();
     for(const auto hidden:{social::Section::Publications,social::Section::Forum})view->selectSection(hidden);

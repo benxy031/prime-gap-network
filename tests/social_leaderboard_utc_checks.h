@@ -293,6 +293,22 @@ inline void runWarmPeriods(const QString& path){
 inline void runStartupCache(const QString& scratch)
 {
     using namespace social;
+    {
+        for(const bool matching:{true,false}){
+            int warmed=0;
+            Services service;
+            service.read=[&](ReadRequest request,Services::Reply){
+                if(request.section==Section::Miners)++warmed;
+            };
+            ui::SocialView startup(scratch+"/prewarm/drafts.json",service);
+            const Identity bound{QString(64,'a'),"SYNTHETIC-STARTUP"};
+            startup.setLeaderboardCacheScope(scratch+"/new-net-ranking",
+                                             matching?bound.genesis:QString(64,'b'));
+            startup.setIdentity(bound);
+            QApplication::processEvents();
+            expect(warmed==(matching?1:0),"first hidden read ignored the verified network scope");
+        }
+    }
     const auto dir = QDir(scratch).filePath("startup-cache-" + QUuid::createUuid().toString(QUuid::Id128));
     expect(QDir().mkpath(dir), "Cannot create isolated cache fixture");
     const Identity oldIdentity{QString(64, 'a'), "OLD-WALLET-SUBJECT"};
