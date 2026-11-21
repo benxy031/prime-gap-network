@@ -57,7 +57,8 @@ public:
  void signSocialAccessConsent(const QString& sessionScript,const QString& genesis,const QString& script,const QString& community,const QByteArray& command,std::function<void(QString,QString)>);
  void socialRequest(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
  void readLocalConnection(std::function<void(QJsonObject,QString)>);
- void readNetworkSnapshot(std::function<void(QJsonObject,QString)>);
+ void readNetworkSnapshot(std::function<void(QJsonObject,QString)>,
+     std::function<void(const QJsonObject&)> observeTipState={});
  void readPeerSnapshot(std::function<void(QJsonArray,QString)>);
  void consoleRequest(const QString&,const QByteArray&,bool displayedWallet,std::function<void(QByteArray,QString)>);
  void readTicketPage(int offset,std::function<void(QJsonObject,QString)>);

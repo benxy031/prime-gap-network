@@ -125,6 +125,9 @@ class WalletCoreView final : public QWidget {
 public:
  std::function<void(QString)> startupAttention;
  pgn::wallet::CoreRuntime* networkRuntime()const{return runtime_;}
+ std::optional<pgn::wallet::GoldBlockReading> goldBlockReading(const pgn::wallet::ChainObservation& tip,const QDateTime& now)const{
+  return goldStatus_.reading(tip,now);
+ }
  void observeNetworkMetrics(QWidget* owner,std::function<void(const QJsonObject&,const QString&)> receive){metrics_->subscribe(owner,std::move(receive));}
  void inspectBlock(const QString& hash){if(networkPages_)networkPages_->setCurrentWidget(networkExplorer_);networkExplorer_->inspectHash(hash); }
  explicit WalletCoreView(const QString& root,WalletObservationSink observe,bool testnet){
@@ -224,9 +227,10 @@ public:
    else accountPanel_->setEnabled(runtime_->displayWalletReady()&&!runtime_->walletManager()->busy());
   };
   runtime_->onObservation=[this,observe=std::move(observe)](const auto& anchor){
+   if(anchor&&goldStatus_.observe(*anchor))networkDone_.clear();
    if(observe)observe(anchor);
    refreshBlockStorage(anchor);
-   if(anchor&&anchor->tipHash!=networkDone_&&!networkBusy_)refreshNetwork();
+   if(anchor&&anchor->tipHash!=networkDone_&&!networkBusy_)refreshNetwork(anchor->owner);
    if(anchor)metrics_->observeTip(anchor->genesis,anchor->tipHash,anchor->height);
   };
   runtime_->onStatus=[this](const QString& text){const bool unconfigured=!QFileInfo::exists(runtime_->runtimeDirectory()+"/wallet-core.json");const auto setupError=management_->setupError();status_->setText(unconfigured?(!setupError.isEmpty()?setupError:setupOpen_?QString("Checking PGN Core files…"):QString("No wallet is connected yet. Click Create node and wallet below to use the suggested folder and connect.")):text);status_->setStyleSheet(runtime_->connected()?"color:#69efc5;font:11px monospace":"color:#ffbd69;font:11px monospace");};
@@ -285,8 +289,22 @@ private:
  }
 
 
- void refreshNetwork(){
-  networkBusy_=true;runtime_->readNetworkSnapshot([this](QJsonObject state,QString error){networkBusy_=false;networkExplorer_->presentSnapshot(state,error);if(!error.isEmpty())return;networkDone_=state.value("bestblockhash").toString();setProperty("pgn_network_block_rows",state.value("blocks"));setProperty("pgn_network_leases",state.value("leases"));setProperty("pgn_network_height",state.value("height"));const auto gold=state.value("gold_blocks").toInteger(-1);setProperty("pgn_network_gold_tip",networkDone_);setProperty("pgn_network_gold_blocks",gold>=0?QVariant(gold):QVariant{});setProperty("pgn_network_ticket_width",state.value("ticket_width").toString());});
+ void refreshNetwork(const pgn::wallet::CoreEpoch& owner){
+  networkBusy_=true;
+  const auto branch=goldStatus_.branch();
+  runtime_->readNetworkSnapshot([this,owner,branch](QJsonObject state,QString error){
+   networkBusy_=false;
+   networkExplorer_->presentSnapshot(state,error);
+   if(!error.isEmpty())return;
+   goldStatus_.observeConfirmedState(state,owner,branch,QDateTime::currentDateTimeUtc());
+   networkDone_=state.value("bestblockhash").toString();
+   setProperty("pgn_network_block_rows",state.value("blocks"));
+   setProperty("pgn_network_leases",state.value("leases"));
+   setProperty("pgn_network_height",state.value("height"));
+   setProperty("pgn_network_ticket_width",state.value("ticket_width").toString());
+  },[this,owner](const QJsonObject& state){
+   goldStatus_.observeState(state,owner,QDateTime::currentDateTimeUtc());
+  });
  }
  void attach(){
   if(!runtime_->connected())return;
@@ -297,6 +315,7 @@ private:
  }
  pgn::wallet::CoreRuntime* runtime_{};QLabel* status_{};QWidget* placeholder_{};
  BlockExplorerView* networkExplorer_{};QTabWidget* networkPages_{};bool networkBusy_{};QString networkDone_;
+ pgn::wallet::GoldBlockStatus goldStatus_;
  QVBoxLayout* viewport_{};WalletAccountPanel* accountPanel_{};WalletManagementPanel* management_{};QPointer<ComponentVersionsDialog> componentDialog_;bool setupOpen_{};quint64 displayGeneration_{};
  QTimer attachClock_;int attempts_{};
 
@@ -367,6 +386,11 @@ void signWalletSocialAccess(QWidget* widget,const QString& session,const QString
 void signWalletSocial(QWidget* widget,const QString& address,const QString& genesis,const QString& script,const QByteArray& message,std::function<void(QJsonValue,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->signSocialEnvelope(address,genesis,script,message,std::move(consume));else consume({},"Wallet Social signer unavailable");}
 void verifyWalletSocial(QWidget* widget,const QString& genesis,const QString& script,const QByteArray& message,const QString& signature,std::function<void(bool,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->verifySocialEnvelope(genesis,script,message,signature,std::move(consume));else consume(false,"Wallet Social verifier unavailable");}
 void inspectWalletBlock(QWidget* widget,const QString& hash){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->inspectBlock(hash);}
+std::optional<pgn::wallet::GoldBlockReading> walletGoldBlockReading(const QWidget* widget,
+    const pgn::wallet::ChainObservation& tip,const QDateTime& now){
+ if(const auto* view=dynamic_cast<const WalletCoreView*>(widget))return view->goldBlockReading(tip,now);
+ return {};
+}
 void bindWalletNetworkMetrics(QWidget* widget,QWidget* owner,std::function<void(const QJsonObject&,const QString&)> receive){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->observeNetworkMetrics(owner,std::move(receive));else receive({},"Wallet network view unavailable");}
 
 }

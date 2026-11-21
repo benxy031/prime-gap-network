@@ -38,6 +38,66 @@ struct ChainObservation {
         const auto age=observedUtc.msecsTo(now);return age>=0&&age<=maximumAgeMs;
     }
 };
+struct GoldBlockReading {
+    qint64 count{};
+    qint64 height{};
+    bool atTip{};
+};
+
+class GoldBlockStatus {
+public:
+    quint64 branch()const {return branch_;}
+    bool observe(const ChainObservation& tip) {
+        if(!tip.valid()||tip.tipHash.isEmpty())return false;
+        const bool changed=lastTip_&&(!lastTip_->owner.matches(tip.owner)||lastTip_->genesis!=tip.genesis||
+            tip.height<lastTip_->height||(tip.height==lastTip_->height&&tip.tipHash!=lastTip_->tipHash));
+        if(changed){++branch_;sample_.reset();}
+        lastTip_=tip;
+        if(pending_){
+            if(!sameCore(*pending_,tip)||pending_->height<tip.height)pending_.reset();
+            else if(atTip(*pending_,tip)){sample_=pending_;pending_.reset();}
+        }
+        return changed;
+    }
+    void observeState(const QJsonObject& state,const CoreEpoch& owner,const QDateTime& now) {
+        const auto candidate=project(state,owner,now);
+        if(!candidate)return;
+        if(atTip(*candidate,*lastTip_)){sample_=candidate;pending_.reset();}
+        else if(candidate->height>=lastTip_->height)pending_=candidate;
+    }
+    void observeConfirmedState(const QJsonObject& state,const CoreEpoch& owner,quint64 requestedBranch,const QDateTime& now) {
+        const auto candidate=project(state,owner,now);
+        if(!candidate)return;
+        if(atTip(*candidate,*lastTip_)||(requestedBranch==branch_&&candidate->height<lastTip_->height&&
+            (!sample_||candidate->height>=sample_->height)))sample_=candidate;
+    }
+    std::optional<GoldBlockReading> reading(const ChainObservation& tip,const QDateTime& now)const {
+        if(!sample_||!tip.freshAt(now)||tip.tipHash.isEmpty()||!sameCore(*sample_,tip))return {};
+        const bool exact=atTip(*sample_,tip);
+        const auto age=sample_->at.msecsTo(now);
+        if(!exact&&(sample_->height>=tip.height||age<0||age>90000))return {};
+        return GoldBlockReading{sample_->count,sample_->height,exact};
+    }
+private:
+    struct Sample {CoreEpoch owner;QString genesis,hash;qint64 height,count;QDateTime at;};
+    static bool sameCore(const Sample& sample,const ChainObservation& tip){
+        return sample.owner.matches(tip.owner)&&sample.genesis==tip.genesis;
+    }
+    static bool atTip(const Sample& sample,const ChainObservation& tip){
+        return sample.height==tip.height&&sample.hash==tip.tipHash;
+    }
+    std::optional<Sample> project(const QJsonObject& state,const CoreEpoch& owner,const QDateTime& now)const{
+        static const QRegularExpression hashPattern("^[0-9a-f]{64}$");
+        if(!lastTip_||!lastTip_->freshAt(now)||!owner.matches(lastTip_->owner)||state.value("genesis")!=lastTip_->genesis)return {};
+        const auto height=state.value("height").toInteger(-1),count=state.value("gold_blocks").toInteger(-1);
+        const auto hash=state.value("bestblockhash").toString();
+        if(height<0||height>9007199254740991LL||count<0||count>height||!hashPattern.match(hash).hasMatch())return {};
+        return Sample{owner,lastTip_->genesis,hash,height,count,now};
+    }
+    std::optional<Sample> sample_,pending_;
+    std::optional<ChainObservation> lastTip_;
+    quint64 branch_{};
+};
 struct ChainObservationResult {std::optional<ChainObservation> observation;QString error;};
 inline ChainObservationResult projectChainObservation(const CoreEpoch& owner,const CoreProfile& profile,
     const QJsonObject& chain,const QString& genesis,const QDateTime& observedUtc){

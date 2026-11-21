@@ -473,13 +473,12 @@ int main(int argc,char** argv) {
       :QString::number(anchor->height);
    const auto storage=inspectWallet?inspectWallet->property("pgn_native_block_storage").toJsonObject():QJsonObject{};
    const auto coordinationSize=pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"coordination_bytes");
+   const auto gold=testnetMode?pgn::ui::walletGoldBlockReading(inspectWallet,*anchor,now):std::nullopt;
    if(testnetMode){
-    const bool sameTip=inspectWallet&&!anchor->tipHash.isEmpty()&&
-       inspectWallet->property("pgn_network_gold_tip").toString()==anchor->tipHash;
-    const auto gold=sameTip?inspectWallet->property("pgn_network_gold_blocks"):QVariant{};
-    const auto goldCount=gold.isValid()?QString::number(gold.toLongLong()):QStringLiteral("—");
+    const auto goldCount=gold?QString::number(gold->count)+(gold->atTip?QString{}:QStringLiteral("…")):QStringLiteral("—");
     networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
-       .arg(goldCount+pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"gold_bytes"), coordinationHeight+coordinationSize,peersLabel,state));
+       .arg(goldCount+(gold&&gold->atTip?pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"gold_bytes"):QString{}),
+            coordinationHeight+coordinationSize,peersLabel,state));
    }else{
     networkSummary->setText(QString("NETWORK · COORDINATION BLOCKS %1 · %2 · %3")
        .arg(coordinationHeight+coordinationSize,peersLabel,state));
@@ -487,7 +486,9 @@ int main(int argc,char** argv) {
    const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
       .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
    const auto idleHint=QStringLiteral("Core is caught up with the configured peer. The verified local chain tip is more than 24 hours old.\n\n");
-   networkSummary->setToolTip(idleChain?idleHint+verifiedTip:verifiedTip);
+   const auto goldHint=gold&&!gold->atTip?
+      QString("\nGold blocks last verified at coordination block %1. Refreshing for the current tip.").arg(gold->height):QString{};
+   networkSummary->setToolTip((idleChain?idleHint:QString{})+verifiedTip+goldHint);
   };
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
  walletButton->setToolTip("Native PGN wallet integrated here, with verified chain identity and protected local keys.");

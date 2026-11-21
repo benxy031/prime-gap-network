@@ -917,14 +917,18 @@ void CoreRuntime::readPeerSnapshot(std::function<void(QJsonArray,QString)> consu
   consume(value.toArray(),{});
  });
 }
-void CoreRuntime::readNetworkSnapshot(std::function<void(QJsonObject,QString)> consume){
+void CoreRuntime::readNetworkSnapshot(std::function<void(QJsonObject,QString)> consume,
+    std::function<void(const QJsonObject&)> observeTipState){
  if(!connected_||!processAlive()){consume({},"Verified Core connection required");return;}
  const auto owner=epoch();
- rpc("getpgnstate",{},[this,owner,consume=std::move(consume)](QJsonValue value,QString error){
+ rpc("getpgnstate",{},[this,owner,consume=std::move(consume),observeTipState=std::move(observeTipState)]
+     (QJsonValue value,QString error){
   if(!owner.matches(epoch())||!connected_||!processAlive()){consume({},"Core epoch changed");return;}
   if(!error.isEmpty()||!value.isObject()){consume({},error.isEmpty()?QString("Native state unavailable"):error);return;}
   const auto state=value.toObject();const auto hash=state.value("bestblockhash").toString();
   if(state.value("genesis").toString()!=profile_.genesisHash||hash.size()!=64||state.value("height").toInteger(-1)<0){consume({},"Native state identity mismatch");return;}
+  // An observer may use fields bound to its already verified tip before explorer headers arrive.
+  if(observeTipState)observeTipState(state);
   networkHeaders(owner,state,hash,12,{},std::move(consume));
  });
 }

@@ -31,5 +31,6 @@ void requestWalletSocial(QWidget*,const QString&,const QJsonArray&,std::function
 void signWalletSocial(QWidget*,const QString&,const QString&,const QString&,const QByteArray&,std::function<void(QJsonValue,QString)>);
 void verifyWalletSocial(QWidget*,const QString&,const QString&,const QByteArray&,const QString&,std::function<void(bool,QString)>);
 void inspectWalletBlock(QWidget*,const QString&);
+std::optional<pgn::wallet::GoldBlockReading> walletGoldBlockReading(const QWidget*,const pgn::wallet::ChainObservation&,const QDateTime&);
 void bindWalletNetworkMetrics(QWidget*,QWidget* owner,std::function<void(const QJsonObject&,const QString&)>);
 }
