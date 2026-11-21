@@ -138,8 +138,19 @@ ComponentVersionsDialog::ComponentVersionsDialog(ComponentVersionsContext contex
   QFile file(property("pgn_update_result_file").toString());if(!file.open(QIODevice::ReadOnly)||file.size()>128*1024)return;
   const auto value=QJsonDocument::fromJson(file.readAll()).object();
   if(pgn::update::validComponentUpdateProgress(value)){presentProgress(value);return;}
-  if(value.value("schema")=="PGN_UPDATE_HELPER_ERROR_V1"){resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};install_->hide();prepare_->show();updateRecovery();status_->setText(value.value("error").toString("Installation could not finish. The previous version is retained."));}
-  else if(value.value("schema")=="PGN_UPDATE_RECOVERY_RESULT_V1"&&value.value("recovery_performed").toBool()){resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};install_->hide();refreshLocal();status_->setText("The previous version has been restored and verified.");}
+  const auto schema=value.value("schema").toString();
+  const bool stopped=schema=="PGN_UPDATE_INSTALL_RESULT_V1"
+      &&value.value("publisher_authenticated")==QJsonValue(true)
+      &&value.value("installation_committed")==QJsonValue(false)
+      &&value.value("installation_performed")==QJsonValue(false)
+      &&value.value("process_control_performed")==QJsonValue(true);
+  if(schema=="PGN_UPDATE_HELPER_ERROR_V1"||stopped){
+   resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};
+   install_->hide();prepare_->show();updateRecovery();
+   if(!stopped)status_->setText(value.value("error").toString("Installation could not finish. The previous version is retained."));
+   else if(recover_->isHidden())status_->setText("Installation did not complete. Check for updates again.");
+  }
+  else if(schema=="PGN_UPDATE_RECOVERY_RESULT_V1"&&value.value("recovery_performed").toBool()){resultPoll_->stop();installStarted_=false;setBusy(false);preparedRequest_={};install_->hide();refreshLocal();status_->setText("The previous version has been restored and verified.");}
  });
  QTimer::singleShot(0,this,[this]{refreshLocal();});
 }

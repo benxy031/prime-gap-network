@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QJsonArray>
 #include <QDir>
 #include <QFile>
@@ -58,12 +59,49 @@ int main(int argc,char** argv){
  check(table->mapTo(&dialog,table->rect().bottomLeft()).y()<
        status->parentWidget()->mapTo(&dialog,QPoint{}).y());
 
+ // An authenticated helper can return a valid terminal result and leave
+ // Horizon open if the installation stops before committing.
+ QTemporaryDir receipts;
+ check(receipts.isValid());
+ const auto resultPath=receipts.filePath("result.json");
+ const auto deliver=[&](pgn::ui::ComponentVersionsDialog& target,const QJsonObject& value){
+  target.setProperty("pgn_update_result_file",resultPath);
+  QTimer* installPoll=nullptr;
+  for(auto* timer:target.findChildren<QTimer*>())if(timer->interval()==500)installPoll=timer;
+  check(installPoll);
+  QFile file(resultPath);check(file.open(QIODevice::WriteOnly));
+  const auto bytes=QJsonDocument(value).toJson(QJsonDocument::Compact);
+  check(file.write(bytes)==bytes.size());file.close();
+  check(QMetaObject::invokeMethod(installPoll,"timeout"));
+ };
+ const QJsonObject completeFailure{{"schema","PGN_UPDATE_INSTALL_RESULT_V1"},{"publisher_authenticated",true},
+   {"installation_committed",false},{"installation_performed",false},{"process_control_performed",true}};
+ dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","startup"},{"component",""},{"completed",0},{"total",0}});
+ const auto startupStatus=status->text();
+ auto malformed=completeFailure;malformed.remove("installation_performed");
+ deliver(dialog,malformed);
+ check(status->text()==startupStatus&&globalProgress->isVisible());
+ malformed=completeFailure;malformed["process_control_performed"]="true";
+ deliver(dialog,malformed);
+ check(status->text()==startupStatus&&globalProgress->isVisible());
+ malformed=completeFailure;malformed["installation_performed"]=true;
+ deliver(dialog,malformed);
+ check(status->text()==startupStatus&&globalProgress->isVisible());
+ deliver(dialog,completeFailure);
+ check(status->text().contains("Installation did not complete")&&!globalProgress->isVisible());
+ check(!install->isVisible());
+ check(dialog.findChild<QPushButton*>("pgn-components-check")->isEnabled());
+
  // An interrupted installation stays visible even when no update catalogue
  // can be fetched. The fixture uses a unique test-mode application directory.
  context.genesisHash=QString(64,'5');const auto store=pgn::update::updateStateDirectory(context.genesisHash)+"/installation";check(QDir().mkpath(store));
  QFile journal(store+"/transaction.json");check(journal.open(QIODevice::WriteOnly));journal.write(QJsonDocument(QJsonObject{{"schema","PGN_COHORT_ACTIVATION_V1"},{"state","starting_candidate"},{"restoration_completed",false}}).toJson());journal.close();
  pgn::ui::ComponentVersionsDialog recovery(context);recovery.show();recovery.presentLocal({{"manifest_state","valid"},{"components",installed}});recovery.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",available}});app.processEvents();
  auto* restore=recovery.findChild<QPushButton*>("pgn-components-recover");auto* blockedDownload=recovery.findChild<QPushButton*>("pgn-components-prepare");check(restore&&restore->isVisible()&&restore->isEnabled());check(!blockedDownload->isEnabled());
+ deliver(recovery,completeFailure);
+ const auto* recoveryStatus=recovery.findChild<QLabel*>("pgn-components-status");
+ check(recoveryStatus&&recoveryStatus->text().contains("Restore the previous version before installing another update."));
+ check(restore->isVisible()&&restore->isEnabled()&&!blockedDownload->isEnabled());
  auto* choices=recovery.findChild<QTableWidget*>("pgn-components-table");choices->item(0,0)->setCheckState(Qt::Unchecked);check(!blockedDownload->isEnabled());
  check(journal.remove());recovery.presentLocal({{"manifest_state","valid"},{"components",installed}});check(!restore->isVisible());
  QDir().rmdir(store);QDir().rmdir(QFileInfo(store).absolutePath());
