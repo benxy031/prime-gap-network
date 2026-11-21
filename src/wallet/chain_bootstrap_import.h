@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wallet/core_rpc_stream.h"
+#include "wallet/chain_observation.h"
 #include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -15,13 +16,19 @@
 namespace pgn::wallet {
 
 inline constexpr auto ChainBootstrapGenesis = "710b38654faa9f45a759ef589e818839dcc775ceebe16f7830a306ed6f8fd314";
-inline constexpr auto ChainBootstrapTip = "2aaf2ff730760d01749c699e371872056f1d2eecf6606f6cda14f5687bf23dfc";
-inline constexpr auto ChainBootstrapAsset = "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Testnet-Bootstrap-13765.pgn-bootstrap";
-inline constexpr auto ChainBootstrapAssetDigest = "1a0c5478285a743936d6faef18c988671e21bf1ca8737349f588906cc96896ad";
-inline constexpr auto ChainBootstrapDataDigest = "259762fbd09b7cdbf295f59368e9bed60f3d0a9bc7b9af9af3b4b0712f785996";
-inline constexpr qint64 ChainBootstrapHeight = 13765;
-inline constexpr qsizetype ChainBootstrapAssetBytes = 5651844;
-inline constexpr qsizetype ChainBootstrapDataBytes = 20732643;
+inline constexpr auto ChainBootstrapTip = "2e3c62ee8ecc9016d7c8da3d8d275d34f63d0f2f8d13bcfb7f9bdf983b26e8be";
+inline constexpr auto ChainBootstrapAsset = "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-epoch3/PGN-Testnet-Bootstrap-22100.pgn-bootstrap";
+inline constexpr auto ChainBootstrapAssetDigest = "f628a2a82f7465bcc5d3782a5c9984f52c8ebaeb5b7b3f45fbc81590355f4bec";
+inline constexpr auto ChainBootstrapDataDigest = "fc567765de235fe085a63d5328a06c2e58b132d7f6bac5677f36371fecc46f3a";
+inline constexpr qint64 ChainBootstrapHeight = 22100;
+inline constexpr qsizetype ChainBootstrapAssetBytes = 9086947;
+inline constexpr qsizetype ChainBootstrapDataBytes = 33804250;
+
+inline bool needsAutomaticChainBootstrap(const ChainObservation& observation) {
+    return observation.valid() && observation.genesis == ChainBootstrapGenesis
+        && observation.coreInitialBlockDownload.value_or(false)
+        && observation.height < ChainBootstrapHeight;
+}
 
 class ChainBootstrapImport final : public QObject {
 public:

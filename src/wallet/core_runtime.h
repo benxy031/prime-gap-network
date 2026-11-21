@@ -30,7 +30,7 @@ public:
  ~CoreRuntime() override;
  void launch();
  void reattach();
- void applyChainBootstrap(std::function<void(qint64,const QString&,bool)>);
+ void applyChainBootstrap();
  void stop();
  // Suspend background recovery before update code takes any early-return path.
  // This never stops or kills a process; stop() still uses verified native RPC.
@@ -89,6 +89,7 @@ public:
  std::function<void(const QString&)> onStatus;
  std::function<void(CoreLinkState,const QString&)> onLinkState;
  std::function<void(qint64)> onReady;
+ std::function<void(qint64,const QString&,bool)> onChainBootstrapProgress;
  std::function<void()> onStopped;
  std::function<void(const std::optional<ChainObservation>&)> onObservation;
 private:
@@ -129,6 +130,7 @@ private:
  void setLinkState(CoreLinkState,const QString& detail={});
  void inspect();
   void ensurePeerBootstrap();
+  void maybeApplyChainBootstrap(const ChainObservation&);
  void ensureWallet(const CoreEpoch&);
  void verifyLoadedWallet(const CoreEpoch&);
  void walletInitialized(const CoreEpoch&);
@@ -160,6 +162,7 @@ private:
  CoreEpoch ticketDomainOwner_;
  QJsonObject ticketDomain_;
  QPointer<ChainBootstrapImport> chainBootstrap_;
+ std::optional<CoreEpoch> chainBootstrapAttempt_;
  CoreRpcDiagnosticHistory diagnosticRpcHistory_;
  bool walletChecking_{},walletReady_{};
  // UI/application network context is immutable; profiles cannot select it.

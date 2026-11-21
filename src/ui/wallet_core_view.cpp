@@ -148,12 +148,13 @@ public:
     componentDialog_=new ComponentVersionsDialog(walletComponentVersionsContext(root,runtime_->runtimeDirectory(),testnet),this);
     componentDialog_->setAttribute(Qt::WA_DeleteOnClose);componentDialog_->open();
    };
-   if(testnet)management_->onChainBootstrap=[this]{
+   if(testnet){
+    management_->onChainBootstrap=[this]{runtime_->applyChainBootstrap();};
     const QPointer<WalletManagementPanel> panel(management_);
-    runtime_->applyChainBootstrap([panel](qint64,const QString& status,bool finished){
+    runtime_->onChainBootstrapProgress=[panel](qint64,const QString& status,bool finished){
      if(panel)panel->setChainBootstrapStatus(status,finished);
-    });
-   };
+    };
+   }
    const auto presentSetup=[this]{
     QFile file(runtime_->runtimeDirectory()+"/wallet-core.json");QJsonObject config;
     if(file.open(QIODevice::ReadOnly)&&file.size()<=32768)config=QJsonDocument::fromJson(file.readAll()).object();

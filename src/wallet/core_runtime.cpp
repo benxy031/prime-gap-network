@@ -554,19 +554,26 @@ void CoreRuntime::launch(){
  recovery_.explicitStart();begin(true);
 }
 
-void CoreRuntime::applyChainBootstrap(std::function<void(qint64,const QString&,bool)> notify){
- if(chainBootstrap_){
-  notify(0,"The testnet bootstrap is already running.",false);return;
- }
+void CoreRuntime::maybeApplyChainBootstrap(const ChainObservation& observation){
+ if(!needsAutomaticChainBootstrap(observation)
+     ||(chainBootstrapAttempt_&&chainBootstrapAttempt_->matches(observation.owner)))return;
+ applyChainBootstrap();
+}
+
+void CoreRuntime::applyChainBootstrap(){
+ if(chainBootstrap_)return;
  const auto usable=[this]{
   return connected_&&!stopping_&&!managedUpgradePending_&&
     recovery_.state()!=CoreRecoveryPolicy::State::Suppressed&&processAlive();
  };
  if(!usable()||profile_.genesisHash!=ChainBootstrapGenesis){
-  notify(0,"Connect the verified testnet Core before applying a bootstrap.",true);return;
+  if(onChainBootstrapProgress)
+   onChainBootstrapProgress(0,"Connect the verified testnet Core before applying a bootstrap.",true);
+  return;
  }
  setProperty("pgn_chain_bootstrap_running",true);
  const auto owner=epoch();
+ chainBootstrapAttempt_=owner;
  const auto lifecycle=recovery_.generation();
  const auto active=[this,owner,lifecycle,usable]{
   return lifecycle==recovery_.generation()&&owner.matches(epoch())&&usable()&&profile_.genesisHash==ChainBootstrapGenesis;
@@ -596,12 +603,12 @@ void CoreRuntime::applyChainBootstrap(std::function<void(qint64,const QString&,b
     done(decoded.array(),{});
    });
   },
-  [this,notify=std::move(notify)](qint64 height,const QString& message,bool finished){
+  [this](qint64 height,const QString& message,bool finished){
    if(finished){
     chainBootstrap_.clear();
     setProperty("pgn_chain_bootstrap_running",false);
    }
-   notify(height,message,finished);
+   if(onChainBootstrapProgress)onChainBootstrapProgress(height,message,finished);
   });
  chainBootstrap_->start();
 }
@@ -1316,6 +1323,7 @@ void CoreRuntime::inspect(){
    }
     if(!walletManager_->ready())walletManager_->activate(profile_.genesisHash,profile_.chain,profile_.dataDirectory,profile_.walletName,runtimeDirectory_+"/wallet-view.json");
     ensurePeerBootstrap();
+    maybeApplyChainBootstrap(*projected.observation);
    if(!walletReady_&&!walletChecking_)ensureWallet(ownerEpoch);
     inspectRpc("getconnectioncount",{},[this,ownerEpoch,observation=*projected.observation](CoreRpcResult reply)mutable{
       if(!ownerEpoch.matches(epoch())||!processAlive())return;

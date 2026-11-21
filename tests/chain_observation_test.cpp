@@ -1,7 +1,24 @@
 #include "wallet/chain_observation.h"
+#include "wallet/chain_bootstrap_import.h"
 #include <QCoreApplication>
 #include <iostream>
 int main(int argc,char** argv){
+    using pgn::wallet::ChainObservation;
+    const auto bootstrapSource = [](qint64 height, const QString& genesis, std::optional<bool> initialSync){
+        ChainObservation sample;
+        sample.owner = {42, "fixture", 1};
+        sample.genesis = genesis;
+        sample.height = height;
+        sample.observedUtc = QDateTime::currentDateTimeUtc();
+        sample.coreInitialBlockDownload = initialSync;
+        return pgn::wallet::needsAutomaticChainBootstrap(sample);
+    };
+    if(!bootstrapSource(0, pgn::wallet::ChainBootstrapGenesis, true)
+        ||bootstrapSource(pgn::wallet::ChainBootstrapHeight, pgn::wallet::ChainBootstrapGenesis, true)
+        ||bootstrapSource(pgn::wallet::ChainBootstrapHeight+1, pgn::wallet::ChainBootstrapGenesis, true)
+        ||bootstrapSource(0, QString(64, 'a'), true)
+        ||bootstrapSource(0, pgn::wallet::ChainBootstrapGenesis, false)
+        ||bootstrapSource(0, pgn::wallet::ChainBootstrapGenesis, std::nullopt))return 90;
  QCoreApplication app(argc,argv);using namespace pgn::wallet;
  CoreProfile profile;profile.genesisHash=QString(64,'b');
  const CoreEpoch epoch{42,"134041921234567890",1};
