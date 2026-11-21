@@ -189,9 +189,15 @@ class AuditAnswers:
                     if digest is None and sealed is None:raise
                 else:
                     if digest is None or actual==digest:
-                        self.check_binding(current,expected)
-                        self.retain_seal(name,current,actual)
-                        return current
+                        try:
+                            self.check_binding(current,expected)
+                        except AuditSealRecoveryRequired:
+                            # The immutable seal has already passed binding and
+                            # digest validation. A divergent working copy cannot veto it.
+                            if sealed is None:raise
+                        else:
+                            self.retain_seal(name,current,actual)
+                            return current
             if sealed is not None:return sealed
             if digest is None:
                 if current is not None:raise AuditSealRecoveryRequired('Unregistered sealed audit is inconsistent; private work retained')

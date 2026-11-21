@@ -245,6 +245,8 @@ class NetworkAudits:
         # A scheduling cursor can lose its answer without a publication intent
         # or cycle callback. The seal is independent of both mutable contexts.
         restored = dict(cached)
+        # Only the live journal may supply the intent for this publication.
+        restored.pop('publication_intent', None)
         for key, value in audit.items():
             if key not in ('answer', 'counts', 'publication_intent', 'target_merit_q16'):
                 restored[key] = value

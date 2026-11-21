@@ -70,6 +70,27 @@ class SealRecoveryTests(unittest.TestCase):
         self.assertEqual(self.compute_calls, 0)
         self.assertEqual(self.commits, [(self.request, 1, 0, self.answer['commitment'])])
 
+    def test_mutable_binding_mismatch_cannot_block_valid_immutable_seal(self):
+        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
+        original = seal.read_bytes()
+        digest = self.digest()
+        mutable = deepcopy(self.audit)
+        mutable['report_root'] = '5' * 64
+        save(self.named, mutable)
+        self.run_without_nonce_or_gpu()
+        self.assertEqual(json.loads(self.named.read_bytes())['report_root'], self.audit['report_root'])
+        self.assertEqual(seal.read_bytes(), original)
+        self.assertEqual(self.digest(), digest)
+
+    def test_seal_recovery_does_not_inherit_cached_publication_intent(self):
+        cached = deepcopy(self.audit)
+        cached['publication_intent'] = {'hash': 'a' * 64}
+        save(self.named, cached)
+        restored = self.audits.restore_reassigned_answer(deepcopy(self.audit))
+        self.assertNotIn('publication_intent', restored)
+        self.assertEqual(restored['answer'], self.answer)
+        self.assertNotIn('publication_intent', json.loads(self.named.read_bytes()))
+
     def test_expired_cursor_with_conflicting_seal_retires_and_preserves_both(self):
         # A node can retain the old seal after the current chain replaces its
         # range selection. Expiry makes this cursor ineligible for replay.
