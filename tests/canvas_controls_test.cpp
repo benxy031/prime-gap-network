@@ -40,6 +40,32 @@ int main(int argc,char** argv){
   if(commands!=1||requested)return 24;
   pgn::ui::resolveDeviceControl(fresh.get(),gpu,pending,true,"Fixture OFF acknowledgement");paint();
   if(fresh->property("pgn_total_gpu_state").toString()!="off"){std::cerr<<"FAIL repaint of older ON telemetry undoes newer OFF acknowledgement\n";return 25;}
+  auto clickGpu=[&]{
+   const auto center=pgn::ui::miningToggleRect(fresh.get(),gpu).center();
+   QMouseEvent press(QEvent::MouseButtonPress,center,fresh->mapToGlobal(center.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+   QApplication::sendEvent(fresh.get(),&press);
+  };
+  auto hasError=[&](const QString& error){return pgn::ui::miningTooltips(fresh.get()).contains(error);};
+  const QString delayedStart="Fixture start confirmation delayed",refusedStop="Fixture stop rejected";
+  clickGpu();
+  if(commands!=2||!requested)return 60;
+  pgn::ui::resolveDeviceControl(fresh.get(),gpu,pending,false,delayedStart);
+  paint();
+  if(!hasError(delayedStart))return 61;
+  source.runId="gpu-recovered";source.authoritative=true;source.state="running";
+  source.raw["pgn_process_running"]=true;source.raw["pgn_device_enabled"]=true;
+  source.observedUtc=QDateTime::currentDateTimeUtc().addMSecs(-10000);++source.sequence;
+  pgn::ui::presentDevice(fresh.get(),source);paint();
+  if(!hasError(delayedStart))return 62;
+  source.observedUtc=QDateTime::currentDateTimeUtc().addMSecs(1);++source.sequence;
+  pgn::ui::presentDevice(fresh.get(),source);paint();
+  if(hasError(delayedStart)||fresh->property("pgn_total_gpu_state").toString()!="on")return 63;
+  clickGpu();
+  if(commands!=3||requested)return 64;
+  pgn::ui::resolveDeviceControl(fresh.get(),gpu,pending,false,refusedStop);
+  source.observedUtc=QDateTime::currentDateTimeUtc().addMSecs(1);++source.sequence;
+  pgn::ui::presentDevice(fresh.get(),source);paint();
+  if(!hasError(refusedStop))return 65;
  }
  {
   std::unique_ptr<QWidget> local(pgn::ui::createMiningCanvas());pgn::ui::configureMiningDashboard(local.get());local->resize(1380,220);

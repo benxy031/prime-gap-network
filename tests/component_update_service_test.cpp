@@ -1,5 +1,6 @@
 #include "update/component_update_service.h"
 #include "update/mining_update_resume.h"
+#include "update/update_paths.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
@@ -11,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QProcess>
+#include <QUuid>
 #include <QSysInfo>
 #include <iostream>
 #include <stdexcept>
@@ -40,6 +43,26 @@ int main(int argc,char** argv){
   const auto schema=fixture=="wrong-type"?"WRONG":request.value("action")=="check"?"PGN_AUTHENTICATED_COMPONENT_VIEW_V1":request.value("action")=="prepare"?"PGN_AUTHENTICATED_STAGE_RECEIPT_V1":"PGN_UPDATE_INSTALL_PREPARATION_V1";
   std::cout<<QJsonDocument(QJsonObject{{"schema",schema},{"publisher_authenticated",true},{"installation_performed",false}}).toJson(QJsonDocument::Compact).toStdString();return 0;
  }
+ const auto testGenesis=QString(64,'5');
+ const auto foreignGenesis=testGenesis.left(20)+QString(44,'6');
+ app.setOrganizationName("PGN-Update-History-QA");
+ if(app.arguments().size()==3&&app.arguments().at(1)=="--read-update-history"){
+  app.setApplicationName(app.arguments().at(2));
+  const auto restored=pgn::update::componentUpdateDiagnosticHistory(testGenesis);
+  if(restored.isEmpty()||restored.size()>24||!pgn::update::componentUpdateDiagnosticHistory(foreignGenesis).isEmpty())return 2;
+  bool success=false,cancelled=false,closed=false;
+  for(const auto& item:restored){
+   const auto entry=item.toObject();
+   if(entry.value("event")=="progress"||entry.contains("error")||entry.contains("diagnostic_scope")||
+      entry.value("started_at_utc").toString().isEmpty())return 3;
+   if(entry.value("action")=="check"&&entry.value("event")=="completed"&&entry.value("publisher_verified").toBool())success=true;
+   if(entry.value("reason")=="cancelled")cancelled=true;
+   if(entry.value("reason")=="closed_during_update")closed=true;
+  }
+  return success&&cancelled&&closed?0:4;
+ }
+ const auto appName=QString("fixture-")+QUuid::createUuid().toString(QUuid::Id128);
+ app.setApplicationName(appName);
  int checks=0;
  const auto require=[&](bool okay,const char* message){++checks;if(!okay)throw std::runtime_error(message);};
  try{
@@ -142,6 +165,16 @@ int main(int argc,char** argv){
   for(const auto& fixture:{QString("storage-process"),QString("storage-wrong-action")}){
    const auto before=errors;require(service.start(QJsonObject{{"action","inspect_storage"},{"fixture",fixture}}),"Invalid-storage fixture refused before validation");wait();require(errors==before+1,"Unexpected storage process control or operation accepted");
   }
+  {
+   pgn::update::ComponentUpdateService pending(resolved);
+   require(pending.start(request("delay")),"Interrupted-check fixture refused");
+  }
+  QProcess reader;
+  reader.start(app.applicationFilePath(),{"--read-update-history",appName});
+  require(reader.waitForFinished(10000)&&reader.exitStatus()==QProcess::NormalExit&&reader.exitCode()==0,
+          "A fresh process failed to recover the bounded own-chain update history");
+  require(QFile::remove(pgn::update::updateStateDirectory(testGenesis)+"/update-diagnostics.json"),
+          "Could not remove private updater diagnostic fixture");
   std::cout<<"PASS "<<checks<<" updater transport/lifecycle checks; inert helper only, no network/GPU/wallet/installed code touched\n";return 0;
  }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

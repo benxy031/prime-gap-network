@@ -1,4 +1,5 @@
 #include "mining/network_controller_recovery.h"
+#include "mining/network_control_phase.h"
 #include "mining/worker_control_arguments.h"
 #include "ui/mining_attention_status.h"
 #include <QCoreApplication>
@@ -10,7 +11,14 @@
 #include <vector>
 static void need(bool okay,const char* why){if(!okay)throw std::runtime_error(why);}
 int main(int argc,char** argv)try{
- if(argc>1&&QString::fromLocal8Bit(argv[1])=="--transport"){std::string line;while(std::getline(std::cin,line))if(line=="quit")return 255;return 0;}
+ if(argc>1&&QString::fromLocal8Bit(argv[1])=="--transport"){
+  std::string line;
+  while(std::getline(std::cin,line)){
+   if(line=="quit")return 255;
+   if(line=="stale-pause"||line=="verified-pause")std::cout<<line<<std::endl;
+  }
+  return 0;
+ }
  QCoreApplication app(argc,argv);
  need(pgn::ui::miningAttentionStatus("Audit 2: Active parent changed after submission").contains("Network changed")&&!pgn::ui::miningAttentionStatus("Active parent changed").contains("retrying"),"Failure text claimed a retry without observing one");
  need(pgn::ui::miningAttentionStatus("Session index WAL budget reached").contains("storage unavailable")&&!pgn::ui::miningAttentionStatus("Session index WAL budget reached").contains("saved"),"Storage failure claimed an unverified durable save");
@@ -37,6 +45,24 @@ QProcess process;bool allowed=true;std::vector<bool> launches;int disconnected=0
  recovery.phase("Searching",true);need(!recovery.needsAttention()&&recovery.wanted(),"Fresh running work stayed hidden until OFF/ON");
  recovery.intent(false);recovery.phase("Needs attention",false);recovery.phase("Searching",true);
  need(recovery.needsAttention()&&!recovery.wanted(),"Late running observation overrode explicit OFF");
+ bool acceptedPause=false;
+ int stopObservations=0;
+ QObject::connect(&process,&QProcess::readyReadStandardOutput,&app,[&]{
+  while(process.canReadLine()){
+   const auto line=process.readLine().trimmed();
+   const bool verified=line=="verified-pause";
+   recovery.phase("Paused",verified);
+   const auto decision=pgn::mining::networkControlPhase("Paused",recovery.wanted(),recovery.needsAttention(),verified);
+   acceptedPause|=decision.acknowledgeOff&&!decision.suppressPresentation;
+   ++stopObservations;
+  }
+ });
+ process.write("stale-pause\n");
+ wait([&]{return stopObservations==1;});
+ need(recovery.needsAttention()&&!acceptedPause,"An old pause erased the fault");
+ process.write("verified-pause\n");
+ wait([&]{return stopObservations==2;});
+ need(!recovery.needsAttention()&&acceptedPause&&!recovery.wanted(),"Verified OFF did not recover after controller rejection");
  recovery.close();process.write("quit\n");wait([&]{return process.state()==QProcess::NotRunning;});need(!recovery.retryPending(),"Closing restarted a control process");
  QProcess silent;pgn::mining::NetworkControllerRecovery silence(&silent,nullptr,20,100,60);int silences=0,starts=0;
  silence.onSilent=[&]{++silences;};silence.reconnect=[&](bool){++starts;silence.launching();silent.start(QCoreApplication::applicationFilePath(),{"--transport"});};

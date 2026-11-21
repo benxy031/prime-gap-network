@@ -17,6 +17,7 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QMutex>
+#include <QSet>
 #include <stdexcept>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -29,11 +30,56 @@ void require(bool value,const char* text){if(!value)throw std::runtime_error(tex
 QMutex diagnosticMutex;
 QJsonArray diagnosticHistory;
 
-void recordDiagnostic(const QString& operation,const QString& action,QJsonObject event){
+constexpr qsizetype SavedDiagnosticLimit=16*1024;
+constexpr qsizetype SavedDiagnosticCount=24;
+
+QString savedDiagnosticPath(const QString& genesis){
+    const auto directory=updateStateDirectory(genesis);
+    return directory.isEmpty()?QString{}:directory+"/update-diagnostics.json";
+}
+
+QJsonArray readSavedDiagnostics(const QString& path,const QString& genesis,bool* foreignScope=nullptr){
+    if(path.isEmpty()||QFileInfo(path).isSymLink())return {};
+    QFile file(path);
+    if(!file.open(QIODevice::ReadOnly)||file.size()>SavedDiagnosticLimit)return {};
+    const auto snapshot=QJsonDocument::fromJson(file.read(SavedDiagnosticLimit+1)).object();
+    const auto entries=snapshot.value("operations").toArray();
+    if(snapshot.value("schema")!="PGN_UPDATE_DIAGNOSTICS_V1"||entries.size()>SavedDiagnosticCount)return {};
+    if(snapshot.value("genesis")!=genesis){
+        if(foreignScope)*foreignScope=true;
+        return {};
+    }
+    return entries;
+}
+
+void saveDiagnosticOperation(const QString& genesis,QJsonObject event){
+    const auto path=savedDiagnosticPath(genesis);
+    if(path.isEmpty()||!QDir().mkpath(QFileInfo(path).absolutePath())||QFileInfo(path).isSymLink())return;
+    bool foreignScope=false;
+    auto entries=readSavedDiagnostics(path,genesis,&foreignScope);
+    if(foreignScope)return;
+    for(qsizetype i=0;i<entries.size();++i){
+        if(entries[i].toObject().value("operation")!=event.value("operation"))continue;
+        const auto old=entries[i].toObject();
+        if(old.value("event")=="started")event.insert("started_at_utc",old.value("observed_utc"));
+        entries.removeAt(i);
+        break;
+    }
+    entries.append(event);
+    while(entries.size()>SavedDiagnosticCount)entries.removeFirst();
+    const auto bytes=QJsonDocument(QJsonObject{{"schema","PGN_UPDATE_DIAGNOSTICS_V1"},{"genesis",genesis},{"operations",entries}}).toJson(QJsonDocument::Compact);
+    if(bytes.size()>SavedDiagnosticLimit)return;
+    QSaveFile file(path);
+    if(file.open(QIODevice::WriteOnly)&&file.write(bytes)==bytes.size())file.commit();
+}
+
+void recordDiagnostic(const QString& operation,const QString& action,QJsonObject event,const QString& genesis={}){
     event.insert("operation",operation);
     event.insert("action",action);
     event.insert("observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     const QMutexLocker locker(&diagnosticMutex);
+    if(!genesis.isEmpty()&&event.value("event")!="progress")saveDiagnosticOperation(genesis,event);
+    event.insert("diagnostic_scope",genesis);
     const auto prior=diagnosticHistory.isEmpty()?QJsonObject{}:diagnosticHistory.last().toObject();
     if(event.value("event")=="progress"&&prior.value("event")=="progress"&&
        prior.value("operation")==operation&&prior.value("stage")==event.value("stage")&&
@@ -54,9 +100,42 @@ QString diagnosticFailure(const QString& error){
     return "helper_failure";
 }
 }
-QJsonArray componentUpdateDiagnosticHistory(){
+QJsonArray componentUpdateDiagnosticHistory(const QString& genesis){
     const QMutexLocker locker(&diagnosticMutex);
-    return diagnosticHistory;
+    const auto saved=readSavedDiagnostics(savedDiagnosticPath(genesis),genesis);
+    QSet<QString> active;
+    QJsonArray current;
+    for(const auto& value:diagnosticHistory){
+        auto event=value.toObject();
+        if(!genesis.isEmpty()&&event.value("diagnostic_scope")!=genesis)continue;
+        event.remove("diagnostic_scope");
+        active.insert(event.value("operation").toString());
+        current.append(event);
+    }
+    QJsonArray combined;
+    for(const auto& value:saved){
+        const auto event=value.toObject();
+        const auto operation=event.value("operation").toString();
+        const auto action=event.value("action").toString();
+        const auto goal=event.value("event").toString();
+        const auto at=event.value("observed_utc").toString();
+        if(QUuid(operation).isNull()||active.contains(operation)||!QDateTime::fromString(at,Qt::ISODateWithMs).isValid())continue;
+        if(action!="check"&&action!="prepare"&&action!="prepare_install"&&action!="inspect_storage"&&action!="clean_storage")continue;
+        if(goal!="started"&&goal!="completed"&&goal!="failed")continue;
+        QJsonObject entry{{"operation",operation},{"action",action},{"event",goal},{"observed_utc",at}};
+        const auto started=event.value("started_at_utc").toString();
+        if(QDateTime::fromString(started,Qt::ISODateWithMs).isValid())entry.insert("started_at_utc",started);
+        const auto reason=event.value("reason").toString();
+        static const QSet<QString> knownReasons{"cancelled","timed_out","disk_space","file_write","publisher_unverified",
+            "transfer","helper_response","helper_failure","closed_during_update"};
+        if(knownReasons.contains(reason))entry.insert("reason",reason);
+        if(event.value("sequence").isDouble())entry.insert("sequence",event.value("sequence").toInteger());
+        if(event.value("publisher_verified").isBool())entry.insert("publisher_verified",event.value("publisher_verified"));
+        combined.append(entry);
+    }
+    for(const auto& value:current)combined.append(value);
+    while(combined.size()>48)combined.removeFirst();
+    return combined;
 }
 ComponentUpdateDeployment componentUpdateDeployment(const QString& applicationDirectory,bool testnet){
     const auto root=QFileInfo(applicationDirectory).canonicalFilePath();
@@ -206,7 +285,8 @@ ComponentUpdateService::ComponentUpdateService(ComponentUpdateDeployment deploym
             const auto value=QJsonDocument::fromJson(line).object();
             if(!validComponentUpdateProgress(value))continue;
             recordDiagnostic(diagnosticOperation_,action_,{{"event","progress"},{"stage",value.value("stage")},
-                {"component",value.value("component")},{"completed",value.value("completed")},{"total",value.value("total")}});
+                {"component",value.value("component")},{"completed",value.value("completed")},{"total",value.value("total")}},
+                deployment_.context.value("genesis_hash").toString());
             if(!settled_&&(action_=="prepare"||action_=="prepare_install")&&value.value("stage")=="download"){
                 auto& highWater=downloadHighWater_[value.value("component").toString()];
                 const auto total=value.value("total").toInteger();
@@ -224,6 +304,8 @@ ComponentUpdateService::ComponentUpdateService(ComponentUpdateDeployment deploym
     connect(timer_,&QTimer::timeout,this,[this]{timedOut_=true;process_->kill();});
 }
 ComponentUpdateService::~ComponentUpdateService(){
+    if(!settled_)recordDiagnostic(diagnosticOperation_,action_,{{"event","failed"},{"reason","closed_during_update"}},
+                                 deployment_.context.value("genesis_hash").toString());
     settled_=true;timer_->stop();
     if(process_->state()!=QProcess::NotRunning){process_->kill();process_->waitForFinished(1000);}
 }
@@ -236,7 +318,7 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     if(data.size()>MessageLimit)return false;
     output_.clear();errors_.clear();progressBuffer_.clear();downloadHighWater_.clear();settled_=false;cancelled_=oversized_=timedOut_=false;action_=action;
     diagnosticOperation_=QUuid::createUuid().toString(QUuid::WithoutBraces);
-    recordDiagnostic(diagnosticOperation_,action_,{{"event","started"}});
+    recordDiagnostic(diagnosticOperation_,action_,{{"event","started"}},deployment_.context.value("genesis_hash").toString());
     process_->setProgram(deployment_.helper);process_->setArguments({});process_->setWorkingDirectory(QFileInfo(deployment_.helper).absolutePath());
     disconnect(startedConnection_);
     startedConnection_=connect(process_,&QProcess::started,this,[this,data]{disconnect(startedConnection_);process_->write(data);process_->closeWriteChannel();});
@@ -265,11 +347,12 @@ void ComponentUpdateService::complete(){
         ||!result.value("cleaned").isBool()||result.value("cleaned").toBool()!=(action_=="clean_storage")||!result.value("cache").isObject()))error="The storage helper returned an invalid maintenance result.";
     if(!error.isEmpty()){
         recordDiagnostic(diagnosticOperation_,action_,{{"event","failed"},
-            {"reason",cancelled_?QString("cancelled"):timedOut_?QString("timed_out"):diagnosticFailure(error)}});
+            {"reason",cancelled_?QString("cancelled"):timedOut_?QString("timed_out"):diagnosticFailure(error)}},
+            deployment_.context.value("genesis_hash").toString());
         if(onError)onError(componentUpdateFailureMessage(error));return;
     }
     recordDiagnostic(diagnosticOperation_,action_,{{"event","completed"},{"sequence",result.value("sequence")},
-        {"publisher_verified",result.value("publisher_authenticated")}});
+        {"publisher_verified",result.value("publisher_authenticated")}},deployment_.context.value("genesis_hash").toString());
     auto observed=result;if(action_=="check")observed.insert("checked_at_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     if(onResult)onResult(observed);
 }

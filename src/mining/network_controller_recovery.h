@@ -60,11 +60,9 @@ public:
   if(fresh){clearSilence();lastPacket_.start();}
   if(phase=="Needs attention"){clearSilence();terminal_=true;retry_.stop();}
   else if(fresh&&(phase=="Searching"||phase=="Paused")){failures_=0;
-   // An authenticated, fresh running frame is evidence that the same normal
-   // controller recovered. Keep OFF authoritative and never clear a failure
-   // from a stale frame, a phase-only notice or an old pause acknowledgement.
-   // Historical diagnostics retain the failure; the live view must show work.
-   if(wanted_&&phase=="Searching")terminal_=false;
+   // A verified live frame can confirm only the current direction. A late
+   // acknowledgement of the other direction must leave the fault visible.
+   if((wanted_&&phase=="Searching")||(!wanted_&&phase=="Paused"))terminal_=false;
   }}
  bool restartIfClosed(){
   if(!managed_||terminal_||process_->state()!=QProcess::NotRunning||!reconnect)return false;

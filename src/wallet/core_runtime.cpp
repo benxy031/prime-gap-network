@@ -1098,6 +1098,104 @@ void CoreRuntime::readAuditSnapshot(int offset,std::function<void(QJsonObject,QS
   if(!error.isEmpty()){consume({},error);return;}const auto state=view.value("state").toObject();consume({{"genesis",state.value("genesis")},{"tip",state.value("bestblockhash")},{"height",state.value("height")},{"offset",offset},{"reports",view.value("reports")},{"audits",view.value("audits")},{"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}},{});
  });
 }
+
+struct CoreRuntime::NativeStorageRead {
+ ChainObservation anchor;
+ qint64 next{},gold{},coordination{},missing{};
+ bool pruned{};
+ qint64 pruneHeight{-1};
+ QString prefix;
+ std::function<void(QJsonObject,QString)> complete;
+};
+void CoreRuntime::readNativeBlockStorage(const ChainObservation& anchor,const QJsonObject& previous,
+                                          std::function<void(QJsonObject,QString)> complete){
+ if(!connected_||!processAlive()||!anchor.owner.matches(epoch())||!anchor.valid()||anchor.tipHash.isEmpty()){
+  complete({},"Verified Core and a storage anchor required");return;
+ }
+ auto read=std::make_shared<NativeStorageRead>();
+ read->anchor=anchor;
+ read->complete=std::move(complete);
+ rpc("getblockchaininfo",{},[this,read,previous](QJsonValue reply,QString error){
+  if(!read->anchor.owner.matches(epoch())||!connected_||!processAlive()){
+   read->complete({},"Core storage connection changed");return;
+  }
+  const auto prune=reply.toObject().value("pruned");
+  if(!error.isEmpty()||!prune.isBool()){
+   read->complete({},error.isEmpty()?QString("Local block retention is unknown"):error);return;
+  }
+  read->pruned=prune.toBool();
+  read->pruneHeight=reply.toObject().value("pruneheight").toInteger(-1);
+  const auto height=previous.value("height").toInteger(-1);
+  const auto hash=previous.value("anchor_hash").toString();
+  const auto gold=previous.value("gold_bytes").toInteger(-1);
+  const auto coordination=previous.value("coordination_bytes").toInteger(-1);
+  const bool extend=!read->pruned&&previous.value("pruned")==false&&previous.value("missing_blocks").toInteger(-1)==0&&
+    previous.value("genesis")==read->anchor.genesis&&height>=0&&height<read->anchor.height&&!hash.isEmpty()&&gold>=0&&coordination>=0;
+  if(extend){
+   read->prefix=hash;
+   read->next=height+1;
+   read->gold=gold;
+   read->coordination=coordination;
+  }
+  continueNativeBlockStorage(read);
+ });
+}
+void CoreRuntime::continueNativeBlockStorage(const std::shared_ptr<NativeStorageRead>& read){
+ const auto active=[this,read]{return read->anchor.owner.matches(epoch())&&connected_&&processAlive();};
+ if(!active()){read->complete({},"Core storage connection changed");return;}
+ rpc("getpgnblockstorage",{read->next,read->anchor.tipHash},[this,read,active](QJsonValue value,QString error){
+  if(!active()){read->complete({},"Core storage connection changed");return;}
+  if(!error.isEmpty()){read->complete({},error);return;}
+  const auto page=value.toObject();
+  const auto end=page.value("end_height").toInteger(-1);
+  const auto gold=page.value("gold_bytes").toInteger(-1);
+  const auto coordination=page.value("coordination_bytes").toInteger(-1);
+  const auto missing=page.value("missing_blocks").toInteger(-1);
+  if(page.value("schema")!="PGN_BLOCK_STORAGE_V1"||page.value("genesis")!=read->anchor.genesis||
+     page.value("anchor_hash")!=read->anchor.tipHash||page.value("anchor_height").toInteger(-1)!=read->anchor.height||
+     page.value("start_height").toInteger(-1)!=read->next||end<=read->next||end-read->next>2048||end>read->anchor.height+1||
+     gold<0||coordination<0||missing<0||missing>end-read->next||
+     gold>std::numeric_limits<qint64>::max()-read->gold||coordination>std::numeric_limits<qint64>::max()-read->coordination){
+   read->complete({},"Core storage page is invalid");return;
+  }
+  if(!read->prefix.isEmpty()){
+   if(page.value("start_parent_hash")!=read->prefix){
+    read->prefix.clear();
+    read->next=read->gold=read->coordination=0;
+    QTimer::singleShot(0,this,[this,read]{continueNativeBlockStorage(read);});
+    return;
+   }
+   read->prefix.clear();
+  }
+  read->gold+=gold;
+  read->coordination+=coordination;
+  read->missing+=missing;
+  read->next=end;
+  if(end<=read->anchor.height){
+   QTimer::singleShot(0,this,[this,read]{continueNativeBlockStorage(read);});
+   return;
+  }
+  rpc("getblockhash",{read->anchor.height},[this,read,active](QJsonValue block,QString reason){
+   if(!active()||!reason.isEmpty()||block.toString()!=read->anchor.tipHash){
+    read->complete({},"Core storage anchor changed");return;
+   }
+   auto publish=[read]{
+    read->complete({{"genesis",read->anchor.genesis},{"anchor_hash",read->anchor.tipHash},{"height",read->anchor.height},
+      {"gold_bytes",read->gold},{"coordination_bytes",read->coordination},{"missing_blocks",read->missing},{"pruned",read->pruned}},{});
+   };
+   if(!read->pruned){publish();return;}
+   rpc("getblockchaininfo",{},[active,read,publish](QJsonValue result,QString error){
+    if(!active()||!error.isEmpty()||read->pruneHeight<0||result.toObject().value("pruneheight").toInteger(-1)!=read->pruneHeight){
+     read->complete({},"Core block retention changed");return;
+    }
+    publish();
+   });
+  });
+ });
+}
+
+
+
 void CoreRuntime::readNetworkMetrics(int spanSeconds,std::function<void(QJsonObject,QString)> consume){
  if(spanSeconds<60||spanSeconds>604800||!connected_||!processAlive()){consume({},"Verified Core connection and bounded metrics history required");return;}
  const auto owner=epoch();

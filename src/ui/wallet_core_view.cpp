@@ -36,6 +36,7 @@
 #include <QScrollArea>
 #include <QLocale>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -224,6 +225,7 @@ public:
   };
   runtime_->onObservation=[this,observe=std::move(observe)](const auto& anchor){
    if(observe)observe(anchor);
+   refreshBlockStorage(anchor);
    if(anchor&&anchor->tipHash!=networkDone_&&!networkBusy_)refreshNetwork();
    if(anchor)metrics_->observeTip(anchor->genesis,anchor->tipHash,anchor->height);
   };
@@ -256,6 +258,33 @@ public:
  }
  ~WalletCoreView() override = default;
 private:
+ void refreshBlockStorage(const std::optional<pgn::wallet::ChainObservation>& anchor){
+  if(!anchor){
+   if(storageOwner_)++storageGeneration_;
+   storageOwner_.reset();storageProbe_.invalidate();storageBusy_=storageUnsupported_=false;
+   setProperty("pgn_native_block_storage",QVariant{});
+   return;
+  }
+  if(!storageOwner_||!storageOwner_->matches(anchor->owner)){
+   ++storageGeneration_;
+   storageOwner_=anchor->owner;storageProbe_.invalidate();storageBusy_=storageUnsupported_=false;
+   setProperty("pgn_native_block_storage",QVariant{});
+  }
+  const auto previous=property("pgn_native_block_storage").toJsonObject();
+  if(storageBusy_||storageUnsupported_||previous.value("anchor_hash")==anchor->tipHash||
+     (storageProbe_.isValid()&&!storageProbe_.hasExpired(15000)))return;
+  storageProbe_.start();
+  storageBusy_=true;
+  const auto generation=++storageGeneration_;
+  runtime_->readNativeBlockStorage(*anchor,previous,[this,generation](QJsonObject totals,QString error){
+   if(generation!=storageGeneration_)return;
+   storageBusy_=false;
+   if(error.contains("Method not found",Qt::CaseInsensitive))storageUnsupported_=true;
+   if(error.isEmpty())setProperty("pgn_native_block_storage",std::move(totals));
+  });
+ }
+
+
  void refreshNetwork(){
   networkBusy_=true;runtime_->readNetworkSnapshot([this](QJsonObject state,QString error){networkBusy_=false;networkExplorer_->presentSnapshot(state,error);if(!error.isEmpty())return;networkDone_=state.value("bestblockhash").toString();setProperty("pgn_network_block_rows",state.value("blocks"));setProperty("pgn_network_leases",state.value("leases"));setProperty("pgn_network_height",state.value("height"));const auto gold=state.value("gold_blocks").toInteger(-1);setProperty("pgn_network_gold_tip",networkDone_);setProperty("pgn_network_gold_blocks",gold>=0?QVariant(gold):QVariant{});setProperty("pgn_network_ticket_width",state.value("ticket_width").toString());});
  }
@@ -272,6 +301,10 @@ private:
  QTimer attachClock_;int attempts_{};
 
  NetworkMetricsHub* metrics_{};
+ std::optional<pgn::wallet::CoreEpoch> storageOwner_;
+ QElapsedTimer storageProbe_;
+ bool storageBusy_{},storageUnsupported_{};
+ quint64 storageGeneration_{};
 };
 }
 QWidget* createWalletCoreView(const QString& root,WalletObservationSink observe,bool testnet){return new WalletCoreView(root,std::move(observe),testnet);}
