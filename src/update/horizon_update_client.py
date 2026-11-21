@@ -78,6 +78,8 @@ class AuthenticatedUpdates:
         self._initialize_cache()
         self.bootstrap, self.bootstrap_sha256 = bootstrap, bootstrap_sha256
         self.metadata_url, self.target_url = metadata_url, target_url
+        self.github_ranges = fetcher is None and target_url == (
+            "https://github.com/wizz13150/prime-gap-network/releases/download/horizon-testnet-updates-epoch3/")
         self.fetcher = progress.ProgressFetcher(
             fetcher or progress.ResumableTargetFetcher(app_user_agent='PGN-Horizon-Updater')
         )
@@ -438,6 +440,24 @@ class AuthenticatedUpdates:
             self._signed_target(updater,catalog['bundle_target'],MAX_TARGET)
             yield manifest,chosen
 
+    @contextmanager
+    def selected_windows_ui(self):
+        from horizon_update_ranges import GitHubRangeSource, RangeUnavailable
+        with locked_cache(self.cache,wait_seconds=self.cache_wait_seconds):
+            self._pins.clear()
+            self._cache_size()
+            updater=self._updater()
+            catalog,manifest,_,chosen,_=self._catalog(updater,["ui"])
+            if set(chosen)!={"ui"}:
+                raise RangeUnavailable("The authenticated dependency closure is not UI only")
+            bundle=catalog["bundle_target"]
+            artifact=self._signed_target(updater,bundle,MAX_TARGET)
+            url=self.target_url+artifact.hashes["sha256"]+"."+bundle
+            identity=digest(json.dumps(manifest,separators=(",",":"),sort_keys=True).encode())
+            receipt=dict(publisher_authenticated=True,context_sha256=self.context_sha256,
+                archive_sha256=artifact.hashes["sha256"],manifest_sha256=identity,selection=chosen)
+            yield receipt,manifest,GitHubRangeSource(url,artifact.length)
+
     def release_prepared_downloads(self):
         with locked_cache(self.cache,wait_seconds=0):
             self._pins.clear()
@@ -478,7 +498,8 @@ class AuthenticatedUpdates:
                 stage.init_cache(stage_cache, self.context)
             folder, plan = stage.stage_bundle(archive, artifact.hashes['sha256'],
                                              self.context, self.context_sha256,
-                                             stage_cache, selection,progress=progress.report)
+                                             stage_cache, selection,progress=progress.report,
+                                             verified_catalog=manifest if self.context['platform']=='windows-x86_64' else None)
         raw = stage._read_plain(folder / 'component-bundle.json', MAX_CATALOG)
         stage.require(stage._json(raw) == manifest,
                       'Signed catalogue and downloaded bundle describe different components')

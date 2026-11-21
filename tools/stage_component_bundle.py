@@ -475,7 +475,7 @@ def _plan(manifest, components, files, chosen, selected, archive_sha256, manifes
     }
 
 
-def stage_bundle(archive_path, expected_sha256, context, context_sha256, cache_path, selected, cancelled=lambda: False,progress=None):
+def stage_bundle(archive_path, expected_sha256, context, context_sha256, cache_path, selected, cancelled=lambda: False,progress=None,*,verified_catalog=None):
     require(DIGEST.fullmatch(expected_sha256) and DIGEST.fullmatch(context_sha256), 'Explicit archive/context SHA256 required')
     source = _plain_chain(archive_path)
     require(source.is_file() and source.stat().st_size <= MAX_ARCHIVE, 'Missing or oversized local archive')
@@ -490,6 +490,9 @@ def stage_bundle(archive_path, expected_sha256, context, context_sha256, cache_p
             with zipfile.ZipFile(stream) as archive:
                 indexed = _zip_index(archive)
                 raw = archive.read('component-bundle.json')
+                if verified_catalog is not None:
+                    require(_json(raw) == verified_catalog,
+                            'Signed catalogue and downloaded bundle describe different components')
                 manifest, components, files, chosen = _manifest(raw, context, selected)
                 require(set(indexed) == set(files) | {'component-bundle.json'}, 'Archive/manifest file inventory mismatch')
                 final = cache / sha(raw)[:20]
@@ -505,12 +508,20 @@ def stage_bundle(archive_path, expected_sha256, context, context_sha256, cache_p
                 pending = cache / ('.pending-' + uuid.uuid4().hex[:24])
                 pending.mkdir(mode=0o700)
                 materializing = True
-                component_for={entry['path']:identity for identity,component in components.items()for entry in component['files']}
-                totals={identity:sum(entry['bytes']for entry in component['files'])for identity,component in components.items()}
-                completed={identity:0 for identity in components};all_total=sum(totals.values());all_done=0
+                # The full compressed archive has already matched its TUF
+                # digest. Verify headers for all files and inflate only the
+                # dependency closure backed by the same signed catalogue.
+                verify_ids = chosen if verified_catalog is not None else components
+                component_for={entry['path']:identity for identity in verify_ids
+                               for entry in components[identity]['files']}
+                totals={identity:sum(entry['bytes'] for entry in components[identity]['files'])
+                        for identity in verify_ids}
+                completed=dict.fromkeys(verify_ids,0);all_total=sum(totals.values());all_done=0
                 for name, entry in files.items():
                     _cancel(cancelled)
                     require(indexed[name].file_size == entry['bytes'], 'Declared file size mismatch')
+                    if name not in component_for:
+                        continue
                     target = pending / name
                     if name in chosen_files:
                         target.parent.mkdir(parents=True, exist_ok=True)

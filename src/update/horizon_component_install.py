@@ -6,7 +6,8 @@ The application lifecycle adapter must drain its exact owned jobs and verify
 the candidate's startup before publishing the selector.
 """
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from tempfile import TemporaryFile
 import hashlib
 import json
 import os
@@ -197,11 +198,12 @@ def inventory(root, *, missing=None):
 
 
 class CohortStore:
-    def __init__(self,root,context,context_sha256,*,running_base=None):
+    def __init__(self,root,context,context_sha256,*,running_base=None,before_preparation=False):
         self.root=stage._plain_chain(root);self.context=context;self.context_sha256=context_sha256
         self.running_base=stage._plain_chain(running_base)if running_base is not None else None
         self.repairable_selected=None
         self.commit_warning=''
+        self.before_preparation=before_preparation
         self.retention=dict(removed=0,in_use=0)
         stage.require(stage._read_plain(self.root/'.owner',128)==MARKER,'Not an owned installation store')
         self._quota()
@@ -209,7 +211,12 @@ class CohortStore:
         # in this owned store. Permit exactly that verified selected code root,
         # never a wallet/data root or arbitrary nested directory. Download and
         # staging caches retain the stricter, non-overlap rule.
-        selected=Path(self.current()['cohort'])
+        # Preparation verifies the files under its locked snapshot before using
+        # them. Here only the owned selector is needed for the overlap check.
+        if before_preparation:
+            _,selected=self._read_selection()
+        else:
+            selected=Path(self.current()['cohort'])
         for name in context['protected_roots']:
             protected=stage._plain_chain(name)
             if protected.is_relative_to(self.root):
@@ -237,6 +244,13 @@ class CohortStore:
             for name in dirs+files:stage.require(not stage._linked(Path(base)/name),'Linked installation-store entry')
         if additional:
             stage.require(shutil.disk_usage(self.root).free>=additional+16*1024*1024,'Insufficient installation disk space')
+
+    def _ensure_preparation_space(self,current,required):
+        self._quota()
+        minimum=required+16*1024*1024
+        if shutil.disk_usage(self.root).free<minimum:
+            self._prune_retired(current)
+            stage.require(shutil.disk_usage(self.root).free>=minimum,'Insufficient installation disk space')
 
     def _remember_prepared(self,candidate):
         root=self.root/'prepared';root.mkdir(exist_ok=True)
@@ -500,19 +514,81 @@ class CohortStore:
     def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False,writer_wait=0):
         # Never accept a caller-created boolean "authenticated" receipt.
         stage.require(client.context==self.context and client.context_sha256==self.context_sha256,'Authentication client context differs')
-        with locked_cache(self.root,wait_seconds=writer_wait):self.require_resolved_transaction()
+        with locked_cache(self.root,wait_seconds=writer_wait):
+            # This check preserves the recovery journal and rejects an unresolved
+            # transaction before fetching. It only compares selector identities.
+            # The subsequent locked snapshot checks the actual code inventory.
+            if self.before_preparation:
+                selector,_=self._read_selection()
+                self.require_resolved_transaction(selector)
+            else:
+                self.require_resolved_transaction()
+        if (self.before_preparation and self.context['platform']=='windows-x86_64' and
+            list(selected)==['ui'] and getattr(client,'github_ranges',False)):
+            from horizon_update_ranges import RangeUnavailable
+            try:
+                return self._prepare_ranged_ui(client,base_cohort,writer_wait)
+            except RangeUnavailable:
+                # Old clients, mirrors without Range support and files we
+                # cannot reuse keep the full authenticated ZIP path.
+                pass
         # Hold the download-cache lock through every stage read/copy. A second
         # helper must not reclaim our authenticated source after prepare returns.
         with client.prepared(selected,discard_after=not retain_download) as receipt:
             return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base,writer_wait=writer_wait)
 
-    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None,writer_wait=0):
+    def _prepare_ranged_ui(self,client,base_cohort,writer_wait):
+        import horizon_update_progress as progress
+        from horizon_update_ranges import RangeUnavailable, authenticated_ui_changes, copy_changed_member
+        selector,base=self._read_selection()
+        if (base_cohort is None or stage._plain_chain(base_cohort)!=base or base.parent!=self.root/'cohorts'):
+            raise RangeUnavailable("No managed UI base for selected preparation")
+        local_manifest=base/'components.json'
+        try:
+            raw=stage._read_plain(local_manifest,stage.MAX_MANIFEST)
+        except (FileNotFoundError,stage.StageError) as error:
+            if not local_manifest.exists():
+                raise RangeUnavailable("The prior cohort changed during recovery") from error
+            raise
+        if stage.sha(raw)!=selector['inventory_sha256']:
+            raise RangeUnavailable("The local manifest changed before download")
+        # This read is only a selection hint. The later writer section verifies
+        # the selector and all file bytes before it can reuse any candidate file.
+        local=stage._json(raw)
+        ui=next((row for row in local['components'] if row['id']=='ui'),None)
+        if ui is None:
+            raise RangeUnavailable("No local UI inventory")
+        hint={'payload/ui/'+row['path']:(row['bytes'],row['sha256']) for row in ui['files']}
+        with client.selected_windows_ui() as (receipt,manifest,source), ExitStack() as download:
+            progress.report('download',completed=0,total=0,force=True)
+            prepared={}
+            with authenticated_ui_changes(source,manifest,self.context,hint) as (archive,changed):
+                size=sum(spec['bytes'] for spec in changed.values())
+                if size>source.MEMBER_BUDGET or size+16*1024*1024>shutil.disk_usage(client.cache).free:
+                    raise RangeUnavailable("Selected download exceeds the staging budget")
+                for name,spec in changed.items():
+                    file=download.enter_context(TemporaryFile(dir=client.cache))
+                    copy_changed_member(archive,name,spec,file)
+                    prepared[name]=file
+            return self._prepare_authenticated_receipt(receipt,base_cohort=base,writer_wait=writer_wait,
+                range_payload=(manifest,selector,prepared,hint))
+
+    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None,writer_wait=0,range_payload=None):
         import horizon_update_progress as progress
         stage.require(receipt['publisher_authenticated']and receipt['context_sha256']==self.context_sha256,'Authenticated preparation required')
         progress.report('prepare',completed=0,total=0,force=True)
-        source=Path(receipt['stage']);plan=stage.verify_stage(source,receipt['manifest_sha256'],self.context,self.context_sha256)
-        manifest=stage._json(stage._read_plain(source/'component-bundle.json',stage.MAX_MANIFEST))
+        chosen=set(receipt['selection'])
+        if range_payload is None:
+            source=Path(receipt['stage'])
+            plan=stage.verify_stage(source,receipt['manifest_sha256'],self.context,self.context_sha256)
+            manifest=stage._json(stage._read_plain(source/'component-bundle.json',stage.MAX_MANIFEST))
+            stage.require(chosen==set(plan['selected_with_dependencies']),'Selection differs from authenticated stage')
+        else:
+            from horizon_update_ranges import RangeUnavailable
+            manifest,expected_selector,downloaded,hint=range_payload
         with locked_cache(self.root,wait_seconds=writer_wait):
+            if range_payload is not None and self._read_selection()[0]!=expected_selector:
+                raise RangeUnavailable("The selected base changed during download")
             before,selected_inventory=self._current_with_inventory()
             self.require_resolved_transaction(before)
             base=stage._plain_chain(base_cohort if base_cohort is not None else before['cohort'])
@@ -525,6 +601,8 @@ class CohortStore:
             actual_versions={c['id']:c['version']for c in old['components']}
             for installed in self.context['installed']:
                 stage.require(actual_versions.get(installed['id'])==installed['version'],'Installed versions changed since the update request')
+            if range_payload is not None and (selected_inventory is None or base!=Path(before['cohort']) or base.parent!=self.root/'cohorts'):
+                raise RangeUnavailable("No verified immutable managed Windows base")
             if base!=Path(before['cohort']):
                 if stage._plain_chain(Path(before['cohort'])/'components.json').exists():
                     selected_inventory=inventory(Path(before['cohort']),missing=[] if self.repairable_selected==Path(before['cohort']) else None)[0]
@@ -547,31 +625,46 @@ class CohortStore:
                     journal.unlink(missing_ok=True)
                     before=dict(before,cohort=str(base),inventory_sha256=base_digest,previous=None)
                     _write(self.root/'current.json',before)
-            chosen=set(receipt['selection']);stage.require(chosen==set(plan['selected_with_dependencies']),'Selection differs from authenticated stage')
             key=stage.sha(json.dumps([base_digest,receipt['manifest_sha256'],sorted(chosen)],separators=(',',':')).encode())
             cohorts=self.root/'cohorts';cohorts.mkdir(exist_ok=True);destination=cohorts/key[:20]
             merged,payload,expected_digest=self._merged_preparation(old,manifest,chosen)
-            files={f['relative']:f['file']for f in old_files.values()if f['component']not in chosen}
-            for relative,path in payload.items():
-                stage.require(relative not in files,'Component install path overlaps')
-                files[relative]=source/path
             if destination.exists():
                 _,_,digest,_=inventory(destination);stage.require(digest==expected_digest,'Existing prepared cohort differs from authenticated files')
+                if range_payload is not None:
+                    stage._primary_format(destination/primary_programs(self.context['platform'])['ui'],self.context['platform'])
                 return self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
                     expected_current=before,base_cohort=str(base),sequence=manifest['sequence'],selected=sorted(chosen),cohort_key_sha256=key))
             # Reuse code only from a verified immutable cohort in this store.
             # A user's unpacked installation or staging cache may be edited;
             # neither is allowed to share backing storage with installed code.
+            files={f['relative']:f['file']for f in old_files.values()if f['component']not in chosen}
+            range_changes={}
+            if range_payload is not None:
+                ui_manifest=next(c for c in manifest['components'] if c['id']=='ui')
+                specs={f['path']:f for f in ui_manifest['files']}
+            for relative,path in payload.items():
+                stage.require(relative not in files,'Component install path overlaps')
+                if range_payload is None:
+                    files[relative]=source/path
+                elif path in downloaded:
+                    files[relative]=None
+                    range_changes[relative]=(downloaded[path],specs[path]['bytes'])
+                else:
+                    row=old_files.get(relative.casefold())
+                    if row is None or (row['bytes'],row['sha256'])!=hint.get(path):
+                        raise RangeUnavailable("A reused UI file changed during download")
+                    files[relative]=row['file']
             reusable={}
             if base.parent==self.root/'cohorts':
                 for component in merged['components']:
                     for row in component['files']:
                         relative=COMPONENT_PREFIX[component['id']]+row['path'];old_row=old_files.get(relative.casefold())
                         if old_row and old_row['sha256']==row['sha256']:reusable[relative]=old_row['file']
-            ordered=list(files.items());total=sum(f.stat().st_size for name,f in ordered if name not in reusable)
-            self._prune_retired(before)
-            self._quota(total+stage.MAX_MANIFEST)
-            stage.require(shutil.disk_usage(self.root).free>=total+16*1024*1024,'Insufficient installation disk space')
+            ordered=list(files.items())
+            def size(name,file):
+                return range_changes[name][1] if file is None else file.stat().st_size
+            total=sum(size(name,f) for name,f in ordered if name not in reusable)
+            self._ensure_preparation_space(before,total+stage.MAX_MANIFEST)
             pending=cohorts/('.pending-'+uuid.uuid4().hex);pending.mkdir()
             try:
                 links_enabled=bool(reusable)
@@ -585,16 +678,23 @@ class CohortStore:
                             # it; never turn unsupported hardlinks into a
                             # partially over-quota installation.
                             stage.require(not target.exists(),'Unresolved code link creation; original files retained')
-                            links_enabled=False;remaining=sum(p.stat().st_size for _,p in ordered[index:])
-                            self._quota(remaining+stage.MAX_MANIFEST)
-                            stage.require(shutil.disk_usage(self.root).free>=remaining+16*1024*1024,'Insufficient installation disk space for independent copies')
-                    shutil.copyfile(source_file,target)
+                            links_enabled=False;remaining=sum(size(name,p) for name,p in ordered[index:])
+                            self._ensure_preparation_space(before,remaining+stage.MAX_MANIFEST)
+                    if source_file is None:
+                        downloaded_file,_=range_changes[relative]
+                        with target.open('xb') as output:
+                            shutil.copyfileobj(downloaded_file,output,512*1024)
+                    else:
+                        shutil.copyfile(source_file,target)
                     if self.context['platform']=='linux-x86_64':
                         with target.open('rb') as stream:is_elf=stream.read(4)==b'\x7fELF'
                         if is_elf or relative=='launch-horizon.sh':target.chmod(0o755)
                 progress.report('verify',completed=0,total=0,force=True)
                 _write(pending/'components.json',merged)
                 _,_,digest,_=inventory(pending)
+                stage.require(digest==expected_digest,'Prepared inventory differs from the authenticated manifest')
+                if range_payload is not None:
+                    stage._primary_format(pending/primary_programs(self.context['platform'])['ui'],self.context['platform'])
                 self._quota()
                 stage._publish_pending(pending,destination,lambda:False)
             finally:
