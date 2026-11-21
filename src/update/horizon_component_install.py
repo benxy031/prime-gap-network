@@ -243,6 +243,64 @@ class CohortStore:
         _write(root/(self.context_sha256+'.json'),dict(schema='PGN_PREPARED_REFERENCE_V1',candidate=candidate))
         return candidate
 
+    def _merged_preparation(self,old,manifest,chosen):
+        rows={component['id']:component for component in old['components'] if component['id'] not in chosen}
+        payload={}
+        for component in manifest['components']:
+            identity=component['id']
+            if identity not in chosen:continue
+            prefix=COMPONENT_PREFIX[identity];new_rows=[]
+            for file in component['files']:
+                relative='/'.join(file['path'].split('/')[2:])
+                stage.require(relative.startswith(prefix),'Component layout differs')
+                stage.require(relative not in payload,'Component install path overlaps')
+                payload[relative]=file['path']
+                new_rows.append(dict(path=relative[len(prefix):],bytes=file['bytes'],sha256=file['sha256']))
+            rows[identity]=dict(id=identity,version=component['version'],files=new_rows)
+        merged=dict(schema='PGN_COMPONENT_MANIFEST_V1',release_version=manifest['release_version'],
+            network=manifest['network'],published=True,components=[rows[k]for k in sorted(rows)])
+        if self.context['platform']=='linux-x86_64' or 'platform' in old:
+            merged['platform']=self.context['platform']
+        digest=stage.sha((json.dumps(merged,sort_keys=True,separators=(',',':'))+'\n').encode())
+        return merged,payload,digest
+
+    def reuse_prepared_install(self,client,selected,base_cohort,*,writer_wait=0):
+        import horizon_update_progress as progress
+        stage.require(client.context==self.context and client.context_sha256==self.context_sha256,'Authentication client context differs')
+        reference=stage._plain_chain(self.root/'prepared'/(self.context_sha256+'.json'))
+        if not reference.is_file():return None
+        # Lock in the same order as prepare(): cache, then installation store.
+        with client.authenticated_manifest(selected) as (manifest,chosen):
+            progress.report('verify',completed=0,total=0,force=True)
+            with locked_cache(self.root,wait_seconds=writer_wait):
+                if not reference.is_file():return None
+                before,snapshot=self._current_with_inventory()
+                self.require_resolved_transaction(before)
+                base=stage._plain_chain(base_cohort)
+                if snapshot is None or base!=Path(before['cohort']):return None
+                old,_,_,_=snapshot
+                stage.require(old['network']==self.context['network']and
+                    old.get('platform','windows-x86_64')==self.context['platform'],'Running base network or platform differs')
+                versions={item['id']:item['version']for item in old['components']}
+                stage.require(all(versions.get(item['id'])==item['version'] for item in self.context['installed']),
+                    'Installed versions changed since the update request')
+                value=stage._json(stage._read_plain(reference,stage.MAX_MANIFEST))
+                stage.require(type(value)is dict and value.get('schema')=='PGN_PREPARED_REFERENCE_V1',
+                    'Unknown prepared reference retained')
+                saved=value.get('candidate')
+                if type(saved)is not dict:return None
+                key=saved.get('cohort_key_sha256')
+                if type(key)is not str or not stage.DIGEST.fullmatch(key):return None
+                destination=self.root/'cohorts'/key[:20]
+                _,_,expected_digest=self._merged_preparation(old,manifest,set(chosen))
+                candidate=dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),
+                    inventory_sha256=expected_digest,expected_current=before,base_cohort=str(base),
+                    sequence=manifest['sequence'],selected=sorted(chosen),cohort_key_sha256=key)
+                if saved!=candidate or not destination.is_dir():return None
+                # Only return the authenticated declaration. The native preflight
+                # verifies the files against its digest before any loader runs.
+                return candidate
+
     def _retention_roots(self,current):
         roots={stage._plain_chain(current['cohort'])}
         if current.get('previous'):roots.add(stage._plain_chain(current['previous']['cohort']))
@@ -359,7 +417,11 @@ class CohortStore:
         return value,files
 
     def current(self):
+        return self._current_with_inventory()[0]
+
+    def _current_with_inventory(self):
         value,selected=self._read_selection()
+        selected_inventory=None
         if self.running_base is not None and self.running_base!=selected and not stage._plain_chain(selected/'components.json').exists():
             # A manual replacement may outlive its deleted former code folder.
             # This is a preparation view only: verify the complete actual base
@@ -369,9 +431,10 @@ class CohortStore:
             stage.require(actual['network']==self.context['network']and actual.get('platform','windows-x86_64')==self.context['platform'],'Running base network or platform differs')
             versions={c['id']:c['version']for c in actual['components']}
             stage.require(versions=={c['id']:c['version']for c in self.context['installed']},'Running base differs from installed component context')
-            return value
+            return value,None
         try:
-            _,_,digest,_=inventory(selected)
+            selected_inventory=inventory(selected)
+            digest=selected_inventory[2]
         except MissingCohortFile:
             # A complete independently launched package can replace missing
             # selected code. Never use the incomplete cohort as a copy source,
@@ -391,7 +454,7 @@ class CohortStore:
                 'Missing selected code requires a complete strictly newer running package')
             self.repairable_selected=selected
         stage.require(digest==value['inventory_sha256'],'Selected cohort changed')
-        return value
+        return value,selected_inventory
 
     def require_resolved_transaction(self,current=None):
         """Never overwrite the only recovery frame after an interrupted helper."""
@@ -434,23 +497,30 @@ class CohortStore:
             previous={k:v for k,v in before.items()if k!='previous'})
         return current==expected
 
-    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False):
+    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False,writer_wait=0):
         # Never accept a caller-created boolean "authenticated" receipt.
         stage.require(client.context==self.context and client.context_sha256==self.context_sha256,'Authentication client context differs')
-        with locked_cache(self.root):self.require_resolved_transaction()
+        with locked_cache(self.root,wait_seconds=writer_wait):self.require_resolved_transaction()
         # Hold the download-cache lock through every stage read/copy. A second
         # helper must not reclaim our authenticated source after prepare returns.
         with client.prepared(selected,discard_after=not retain_download) as receipt:
-            return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base)
+            return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base,writer_wait=writer_wait)
 
-    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None):
+    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None,writer_wait=0):
+        import horizon_update_progress as progress
         stage.require(receipt['publisher_authenticated']and receipt['context_sha256']==self.context_sha256,'Authenticated preparation required')
+        progress.report('prepare',completed=0,total=0,force=True)
         source=Path(receipt['stage']);plan=stage.verify_stage(source,receipt['manifest_sha256'],self.context,self.context_sha256)
         manifest=stage._json(stage._read_plain(source/'component-bundle.json',stage.MAX_MANIFEST))
-        with locked_cache(self.root):
-            before=self.current();self.require_resolved_transaction(before)
+        with locked_cache(self.root,wait_seconds=writer_wait):
+            before,selected_inventory=self._current_with_inventory()
+            self.require_resolved_transaction(before)
             base=stage._plain_chain(base_cohort if base_cohort is not None else before['cohort'])
-            old,old_files,base_digest,_=inventory(base)
+            # The selector already authenticated this exact cohort under this writer lock.
+            if selected_inventory is not None and base==Path(before['cohort']):
+                old,old_files,base_digest,_=selected_inventory
+            else:
+                old,old_files,base_digest,_=inventory(base)
             stage.require(old['network']==self.context['network'] and old.get('platform','windows-x86_64')==self.context['platform'],'Running base network or platform differs')
             actual_versions={c['id']:c['version']for c in old['components']}
             for installed in self.context['installed']:
@@ -480,20 +550,11 @@ class CohortStore:
             chosen=set(receipt['selection']);stage.require(chosen==set(plan['selected_with_dependencies']),'Selection differs from authenticated stage')
             key=stage.sha(json.dumps([base_digest,receipt['manifest_sha256'],sorted(chosen)],separators=(',',':')).encode())
             cohorts=self.root/'cohorts';cohorts.mkdir(exist_ok=True);destination=cohorts/key[:20]
-            rows={c['id']:c for c in old['components'] if c['id']not in chosen};files={f['relative']:f['file']for f in old_files.values()if f['component']not in chosen}
-            for component in manifest['components']:
-                identity=component['id']
-                if identity not in chosen:continue
-                prefix=COMPONENT_PREFIX[identity];new_rows=[]
-                for f in component['files']:
-                    relative='/'.join(f['path'].split('/')[2:]);stage.require(relative.startswith(prefix),'Component layout differs')
-                    stage.require(relative not in files,'Component install path overlaps')
-                    files[relative]=source/f['path'];new_rows.append(dict(path=relative[len(prefix):],bytes=f['bytes'],sha256=f['sha256']))
-                rows[identity]=dict(id=identity,version=component['version'],files=new_rows)
-            merged=dict(schema='PGN_COMPONENT_MANIFEST_V1',release_version=manifest['release_version'],network=manifest['network'],published=True,components=[rows[k]for k in sorted(rows)])
-            if self.context['platform']=='linux-x86_64' or 'platform' in old:
-                merged['platform']=self.context['platform']
-            expected_digest=stage.sha((json.dumps(merged,sort_keys=True,separators=(',',':'))+'\n').encode())
+            merged,payload,expected_digest=self._merged_preparation(old,manifest,chosen)
+            files={f['relative']:f['file']for f in old_files.values()if f['component']not in chosen}
+            for relative,path in payload.items():
+                stage.require(relative not in files,'Component install path overlaps')
+                files[relative]=source/path
             if destination.exists():
                 _,_,digest,_=inventory(destination);stage.require(digest==expected_digest,'Existing prepared cohort differs from authenticated files')
                 return self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
@@ -514,7 +575,6 @@ class CohortStore:
             pending=cohorts/('.pending-'+uuid.uuid4().hex);pending.mkdir()
             try:
                 links_enabled=bool(reusable)
-                import horizon_update_progress as progress
                 for index,(relative,source_file)in enumerate(ordered):
                     progress.report('prepare',completed=index,total=len(ordered))
                     target=pending/relative;target.parent.mkdir(parents=True,exist_ok=True)
@@ -532,24 +592,26 @@ class CohortStore:
                     if self.context['platform']=='linux-x86_64':
                         with target.open('rb') as stream:is_elf=stream.read(4)==b'\x7fELF'
                         if is_elf or relative=='launch-horizon.sh':target.chmod(0o755)
-                progress.report('prepare',completed=len(ordered),total=len(ordered),force=True)
+                progress.report('verify',completed=0,total=0,force=True)
                 _write(pending/'components.json',merged)
                 _,_,digest,_=inventory(pending)
                 self._quota()
                 stage._publish_pending(pending,destination,lambda:False)
             finally:
                 if pending.exists():stage._remove_pending(pending,cohorts)
-            return self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
+            prepared=self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
                 expected_current=before,base_cohort=str(base),sequence=manifest['sequence'],selected=sorted(chosen),cohort_key_sha256=key))
+            progress.report('prepare',completed=len(ordered),total=len(ordered),force=True)
+            return prepared
 
-    def activate(self,candidate,drain_owned,start_and_verify,restore_previous):
+    def activate(self,candidate,drain_owned,start_and_verify,restore_previous,*,writer_wait=0):
         """Publish only after exact owned shutdown and verified candidate startup.
 
         The lifecycle callbacks own exact process identities. restore_previous
         stops a failed candidate and restarts the prior UI; it is mandatory,
         including after a startup exception or selector publication failure.
         """
-        with locked_cache(self.root):
+        with locked_cache(self.root,wait_seconds=writer_wait):
             self.commit_warning=''
             before=self.current();self.require_resolved_transaction(before)
             stage.require(before==candidate['expected_current'],'Installation changed since preparation')

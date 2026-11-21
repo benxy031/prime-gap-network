@@ -11,9 +11,11 @@ from horizon_component_install import inventory
 import stage_component_bundle as stage
 
 
-def candidate_runtime_preflight(cohort):
+def candidate_runtime_preflight(cohort,*,expected_inventory_sha256=None):
     cohort=Path(cohort)
-    value,files,_,_=inventory(cohort)
+    value,files,digest,_=inventory(cohort)
+    if expected_inventory_sha256 is not None:
+        stage.require(digest==expected_inventory_sha256,'Candidate runtime differs from authenticated preparation')
     suffix='.exe' if value.get('platform','windows-x86_64')=='windows-x86_64' else ''
     environment=dict(os.environ,PYINSTALLER_RESET_ENVIRONMENT='1')
     environment.pop('PGN_PRIVATE_OWNER_BOOTSTRAP',None)

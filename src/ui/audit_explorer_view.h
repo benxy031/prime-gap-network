@@ -1,3 +1,5 @@
+#include "ui/work_table_search.h"
+#include <QLineEdit>
 #pragma once
 #include "ui/audit_assignment_display.h"
 #include "ui/audit_status_presentation.h"
@@ -30,6 +32,8 @@ public:
 
 private:
     PageReader reader_, participantReader_;
+    std::function<void(const QString&,Result)> numberReader_;
+    QLineEdit* ticketSearch_{};
     QLabel* registrySummary_;
     QWidget* registryPanel_;
     QTreeWidget* registry_;
@@ -42,6 +46,7 @@ private:
     QTreeWidget* detail_;
     QPushButton *previous_, *next_;
     QTimer timer_;
+    quint64 searchGeneration_{};
     QJsonArray reports_, audits_;
     QJsonObject inspectedReport_, inspectedAudit_;
     QString selectedRequest_;
@@ -57,9 +62,17 @@ private:
     }
 
     void inspect(int row) {
-        if (row < 0 || row >= reports_.size()) return;
-        const auto report = reports_[row].toObject();
-        const auto checks = audit(report.value("request_id").toString());
+        const auto* item=table_->item(row,0);
+        if(!item)return;
+        const auto request=item->data(Qt::UserRole).toString();
+        QJsonObject report;
+        for(const auto& entry:reports_){
+            if(entry.toObject().value("request_id")!=request)continue;
+            report=entry.toObject();
+            break;
+        }
+        if(report.isEmpty())return;
+        const auto checks = audit(request);
         if (report == inspectedReport_ && checks == inspectedAudit_) return;
         const bool same = selectedRequest_ == report.value("request_id").toString();
         const int scroll = same ? detail_->verticalScrollBar()->value() : 0;
@@ -119,9 +132,10 @@ private:
     void render() {
         const QSignalBlocker blocker(table_);
         table_->setUpdatesEnabled(false);
+        const bool sorting=table_->isSortingEnabled();
+        table_->setSortingEnabled(false);
         table_->setRowCount(reports_.size());
         int unassigned = 0, active = 0, passed = 0, failed = 0, complete = 0;
-        int selectedRow = -1;
         for (int i = 0; i < reports_.size(); ++i) {
             const auto report = reports_[i].toObject();
             const auto request = report.value("request_id").toString();
@@ -141,19 +155,25 @@ private:
             }
             for (bool present : occupied) if (!present) ++unassigned;
             if (checks.value("audited").toBool()) ++complete;
-            const QStringList cells{QString("Report %1").arg(offset_ + i + 1),
+            const auto number=report.value("ticket_number").toString();
+            const QStringList cells{number.isEmpty()?QString("Report %1").arg(offset_ + i + 1):QString("Ticket %1").arg(number),
                 QString::number(report.value("height").toInteger()), states[0], states[1],
                 checks.value("audited").toBool() ? "Sampling passed" : "Awaiting independent audits"};
             for (int col = 0; col < cells.size(); ++col) {
-                auto* item = new QTableWidgetItem(cells[col]);
+                auto* item = new WorkTableItem(cells[col]);
+                if(col==0)item->setNumber(number.isEmpty()?QString::number(offset_+i+1):number);
+                if(col==1)item->setNumber(cells[col]);
                 item->setData(Qt::UserRole, request);
                 item->setToolTip("Request: " + request + "\nReport: " + report.value("report_root").toString());
                 if(col==2||col==3)presentAuditStatus(item,auditStatusPresentation(states[col-2]));
                 if(col==4)presentAuditStatus(item,auditReportPresentation(checks));
                 table_->setItem(i, col, item);
             }
-            if (request == selectedRequest_) selectedRow = i;
         }
+        table_->setSortingEnabled(sorting);
+        int selectedRow=-1;
+        for(int i=0;i<table_->rowCount();++i)
+            if(table_->item(i,0)->data(Qt::UserRole).toString()==selectedRequest_){selectedRow=i;break;}
         summary_->setText(QString("This page: %1 reports · %2 slots awaiting auditor · %3 active audits · %4 passed · %5 failed · %6 fully audited reports")
             .arg(reports_.size()).arg(unassigned).arg(active).arg(passed).arg(failed).arg(complete));
         setProperty("pgn_audit_waiting_slots", unassigned);
@@ -230,21 +250,31 @@ private:
 
     void refresh() {
         if (busy_) return;
+        const auto input=ticketSearch_->text().trimmed();
+        const auto query=exactWorkTicketNumber(input);
+        if(numberReader_&&!input.isEmpty()&&query.isEmpty())return;
         busy_ = true;
         const int page = offset_;
         const QPointer<AuditExplorerView> guard(this);
-        reader_(page, [guard, page](QJsonObject snapshot, QString error) {
+        const bool exact=numberReader_&&!query.isEmpty();
+        const auto generation=searchGeneration_;
+        auto consume=[guard,page,query,exact,generation](QJsonObject snapshot,QString error){
             if (!guard) return;
             guard->busy_ = false;
             // A delayed reply must never relabel a different page's reports.
-            if (page != guard->offset_) { guard->refresh(); return; }
+            if(page!=guard->offset_||generation!=guard->searchGeneration_){guard->refresh();return;}
             if (!error.isEmpty()) {
                 guard->status_->setText("Audit state unavailable · " + error);
                 guard->status_->setStyleSheet("color:#ffbd69");
                 return;
             }
-            const auto reports = snapshot.value("reports").toArray();
-            const auto audits = snapshot.value("audits").toArray();
+            auto reports=snapshot.value("reports").toArray();
+            const auto audits=snapshot.value("audits").toArray();
+            if(exact&&reports.size()==1){
+                auto report=reports.first().toObject();
+                report.insert("ticket_number",query);
+                reports[0]=report;
+            }
             if (reports != guard->reports_ || audits != guard->audits_ || guard->renderedOffset_ != page) {
                 guard->reports_ = reports;
                 guard->audits_ = audits;
@@ -254,12 +284,15 @@ private:
             guard->status_->setText(QString("Verified Core · ledger height %1 · observed %2")
                 .arg(snapshot.value("height").toInteger())
                 .arg(QDateTime::fromString(snapshot.value("observed_utc").toString(), Qt::ISODateWithMs).toLocalTime().toString("HH:mm:ss")));
+            if(exact&&reports.isEmpty())guard->status_->setText(QString("Ticket %1 has no audit report on this branch").arg(query));
             guard->status_->setStyleSheet("color:#69efc5");
-            guard->previous_->setEnabled(page > 0);
-            guard->next_->setEnabled(reports.size() == 100);
+            guard->previous_->setEnabled(!exact&&page>0);
+            guard->next_->setEnabled(!exact&&reports.size()==100);
             guard->setProperty("pgn_audit_reports", reports.size());
             guard->setProperty("pgn_audit_snapshot", snapshot);
-        });
+        };
+        if(exact)numberReader_(query,std::move(consume));
+        else reader_(page,std::move(consume));
     }
 
 protected:
@@ -341,7 +374,35 @@ public:
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::SingleSelection);
         table_->setStyleSheet("QTableWidget#pgn-audit-report-table::item:selected,QTableWidget#pgn-audit-report-table::item:selected:!active{background:#245f68;color:#ffffff;}");
+        table_->horizontalHeader()->setSectionsClickable(true);
+        connect(table_->horizontalHeader(),&QHeaderView::sectionClicked,this,[this](int column){
+            if(table_->isSortingEnabled())return;
+            table_->horizontalHeader()->setSortIndicator(column,Qt::AscendingOrder);
+            table_->setSortingEnabled(true);
+        });
+        for(int col=0;col<table_->columnCount();++col)
+            table_->horizontalHeaderItem(col)->setToolTip("Sort reports on the current page");
+        ticketSearch_=new QLineEdit(this);
+        ticketSearch_->setObjectName("pgn-audit-ticket-search");
+        ticketSearch_->setPlaceholderText("Find an audit by ticket number");
+        ticketSearch_->setClearButtonEnabled(true);
+        ticketSearch_->hide();
+        box->addWidget(ticketSearch_);
         box->addWidget(table_, 1);
+        connect(ticketSearch_,&QLineEdit::textChanged,this,[this](const QString& text){
+            const auto generation=++searchGeneration_;
+            reports_={};audits_={};render();
+            previous_->setEnabled(false);next_->setEnabled(false);
+            setProperty("pgn_audit_snapshot",QJsonObject{});
+            setProperty("pgn_audit_reports",0);
+            const auto number=exactWorkTicketNumber(text);
+            if(!text.trimmed().isEmpty()&&number.isEmpty()){
+                status_->setText("Enter a ticket number, for example 123");
+                return;
+            }
+            status_->setText(number.isEmpty()?QStringLiteral("Loading audit reports…"):QString("Looking up Ticket %1…").arg(number));
+            QTimer::singleShot(200,this,[this,generation]{if(searchGeneration_==generation)refresh();});
+        });
         detail_ = new QTreeWidget;
         detail_->setObjectName("pgn-audit-report-details");
         detail_->setHeaderLabels({"Evidence", "Value"});
@@ -376,6 +437,11 @@ public:
             runtime->readAuditSnapshot(offset, std::move(consume));
         }, [runtime](int offset, Result consume) {
             runtime->readParticipantPage(offset, std::move(consume));
-        }, parent) {}
+        }, parent) {
+            numberReader_=[runtime](const QString& number,Result consume){
+                runtime->readTicketNumber(number,std::move(consume));
+            };
+            ticketSearch_->show();
+        }
 };
 }

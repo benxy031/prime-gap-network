@@ -12,12 +12,19 @@
 #include <QJsonArray>
 #include <QHash>
 #include <QTableWidget>
+#include <QToolTip>
 #include <QRegularExpression>
 #include <cmath>
 
 namespace pgn::ui {
 namespace {
 constexpr int PrimaryWorkHeight=120, ConcurrentWorkRowHeight=24;
+constexpr qint64 RosetteCollectMs = 2800;
+constexpr qint64 RosetteMorphMs = 700;
+constexpr qint64 RosetteHoldMs = 650;
+constexpr qint64 RosetteExitMs = 1850;
+constexpr double RosetteRestOffset = 8.;
+constexpr qint64 RosetteValidationMs = RosetteMorphMs + RosetteHoldMs + RosetteExitMs;
 QString resourceLabel(const QString& source){
  if(source=="GPU")return source;
  return QString("CPU %1 #%2").arg(source.section('/',1,1),source.section('/',2,2));
@@ -133,24 +140,65 @@ protected:
   const QPointF receiver(center.x()+reach,center.y());
   const QPointF blackHole(center.x()-reach,center.y()),chainPort(box.right()-25,center.y());
   rail_->setProperty("pgn_ticket_audit_markers",rail_->flow_.moving()&&rail_->flow_.audit()?1:0);
-  // A whole range has a distinct packet. Its local completion, native report
-  // inclusion and audited verdict are separate states; only the last gets a halo.
-  QJsonArray workTokens;QHash<QString,QPointF> reportPositions;int visibleRanges=0;
-  for(auto at=rail_->landings_.crbegin();at!=rail_->landings_.crend()&&visibleRanges<6;++at){
-   const auto& entry=*at;if(!entry.complete&&!entry.confirmed)continue;
-   if(entry.audited&&now-entry.approvedAt>3200)continue;
-   const int slot=visibleRanges++;
-   const QPointF holding(chainPort.x()-12-slot*17,box.bottom()-3);
-   const double arrival=std::clamp((now-entry.born)/1800.,0.,1.);
-   QPointF position=livingFlowPoint(center,holding,arrival,flowSeed(qHash(entry.ticket)),seconds,13.);
-   double opacity=1.;
-   if(entry.audited){const double entering=std::clamp((now-entry.approvedAt-700)/2300.,0.,1.);position=livingFlowPoint(holding,chainPort,entering,flowSeed(qHash(entry.ticket)),seconds,4.);if(entering>.7)opacity=(1-entering)/.3;}
-   position.setY(std::min(position.y(),box.bottom()-3));
-    painter.save();painter.setOpacity(opacity);drawReportVisual(painter,position,entry.request,entry.audited?QColor("#95ffca"):entry.confirmed?QColor("#69c9e4"):QColor("#b4cec8"),seconds,1.,entry.audited);painter.restore();
-   reportPositions.insert(entry.ticket,position);
-   workTokens.append(QJsonObject{{"ticket_id",entry.ticket},{"request_id",entry.request},{"kind","range"},{"report_included",entry.confirmed},{"audited",entry.audited},{"x",position.x()},{"y",position.y()}});
+  QJsonArray workTokens,reportHits;
+  QHash<QString,QPointF> reportPositions;
+  const QPointF queueFront = chainPort + QPointF(-12,0);
+  const auto visible = [now](const auto& entry) {
+   return (entry.complete || entry.confirmed) &&
+          (entry.visualAt<0 || (entry.audited&&now < entry.visualAt + RosetteValidationMs));
+  };
+  const auto leaving = std::find_if(rail_->landings_.cbegin(),rail_->landings_.cend(),
+   [&](const auto& entry) {
+    return visible(entry) && entry.audited && entry.confirmed && !entry.block.isEmpty() &&
+           entry.visualAt>=0;
+   });
+  using Landing = std::remove_reference_t<decltype(*leaving)>;
+  QVector<const Landing*> queue;
+  if(leaving!=rail_->landings_.cend())queue.append(&*leaving);
+  for(auto at=rail_->landings_.cbegin();at!=rail_->landings_.cend()&&queue.size()<3;++at)
+   if(at!=leaving&&visible(*at))queue.append(&*at);
+
+  const double push = leaving==rail_->landings_.cend() ? 0. :
+      ease((now-leaving->visualAt-RosetteMorphMs-RosetteHoldMs)/double(RosetteExitMs));
+  for(int slot=0;slot<queue.size();++slot){
+   const auto& entry=*queue[slot];
+   const bool validating=leaving!=rail_->landings_.cend()&& &entry==&*leaving;
+   const QPointF holding=queueFront-QPointF(slot*29,0);
+   const double age=validating?double(now-entry.visualAt):0.;
+   const double merge=ease(age/double(RosetteMorphMs));
+   const double blue=validating?ease((push-.36)/.64):0.;
+   const QPointF position=holding+QPointF(push*29,RosetteRestOffset*(1.-merge));
+   const auto visualKey=reportVisualKey(entry.request,entry.ticket);
+   const double scale=reportVisualScale(visualKey);
+   const double opacity=validating?1.-ease((push-.76)/.24):1.;
+   const QColor state=validating?blend(QColor("#95ffca"),QColor("#58c8ff"),blue):
+                      entry.confirmed?QColor("#69c9e4"):QColor("#b4cec8");
+   painter.save();
+   painter.setOpacity(opacity);
+   if(blue>0.){
+    QRadialGradient glow(position,22);
+    glow.setColorAt(0,faded(QColor("#3caeff"),int(215*blue)));
+    glow.setColorAt(.48,faded(QColor("#3caeff"),int(95*blue)));
+    glow.setColorAt(1,QColor(60,174,255,0));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(glow);
+    painter.drawEllipse(position,22,22);
+   }
+   drawReportVisual(painter,position,visualKey,state,seconds,scale,merge);
+   painter.restore();
+   if(opacity>.25){
+    const auto hit=position-offset;
+    reportHits.append(QJsonObject{{"request",entry.request},{"ticket",entry.ticket},{"confirmed",entry.confirmed},
+                                  {"audited",validating},{"x",hit.x()},{"y",hit.y()}});
+   }
+   reportPositions.insert(entry.ticket,holding+QPointF(0,RosetteRestOffset));
+   workTokens.append(QJsonObject{{"ticket_id",entry.ticket},{"request_id",entry.request},
+                                 {"kind","range"},{"report_included",entry.confirmed},
+                                 {"audited",entry.audited},{"x",position.x()},{"y",position.y()},
+                                 {"morph",merge},{"exit_blue",blue},{"opacity",opacity},{"scale",scale}});
   }
   rail_->setProperty("pgn_ticket_work_tokens",workTokens);
+  rail_->setProperty("pgn_ticket_report_hits",reportHits);
   const bool alive=rail_->flow_.moving()||rail_->resourceActivity_.moving()||!rail_->flow_.events().isEmpty()||!rail_->flow_.collected().isEmpty()||!rail_->flow_.departing().isEmpty();const double beat=alive?seconds:0;
   // The right-hand collector is a destination, not a declaration that an audit
   // or a monetary reward has passed. The underlying Best table retains results.
@@ -185,8 +233,10 @@ protected:
   }
   QJsonArray hitRows;for(const auto& hit:rail_->hits_)hitRows.append(QJsonObject{{"pair",hit.pair},{"x",hit.point.x()},{"y",hit.point.y()}});rail_->setProperty("pgn_ticket_collection_hits",hitRows);
   for(const auto& node:rail_->flow_.departing()){
-   const double t=std::clamp((now-node.leaves)/double(node.toSink?1700:node.ticketTransition?2800:1700),0.,1.);
-   const QPointF holding=reportPositions.value(node.gap.ticket(),QPointF(chainPort.x()-12,box.bottom()-3));
+   const double t=std::clamp((now-node.leaves)/double(node.toSink?1700:node.ticketTransition?RosetteCollectMs:1700),0.,1.);
+   const auto destination=reportPositions.constFind(node.gap.ticket());
+   if(node.ticketTransition&&!node.toSink&&(destination==reportPositions.cend()||t>=1.))continue;
+   const QPointF holding=destination==reportPositions.cend()?queueFront:destination.value();
    const QPointF exit=node.toSink?blackHole+QPointF(std::cos(node.gap.seed*6.28)*24,std::sin(node.gap.seed*6.28)*10):node.ticketTransition?holding:QPointF(receiver.x()+100,center.y()-20);
    const double leaveSeconds=node.leaves/1000.;QPointF origin=collectionPointAt(node.gap,leaveSeconds);
    if(node.flight){const auto& event=*node.flight;const double age=node.flightAge;
@@ -196,18 +246,8 @@ protected:
    }
    auto at=livingFlowPoint(origin,exit,t,node.gap.seed,seconds,12.);double opacity=node.ticketTransition?1.:std::min(1.,(1-t)*2);
    if(node.toSink&&t>=1.){const double swallowed=std::clamp((now-node.leaves-1700)/500.,0.,1.);const double angle=node.gap.seed*6.28+swallowed*9;at=blackHole+QPointF(std::cos(angle)*24,std::sin(angle)*10)*std::sqrt(1-swallowed);}
-   else if(node.ticketTransition&&t>=1.){
-    // The report keeps the discovery signature and the actual pending state.
-    // Folding a point into that envelope does not assert blockchain inclusion.
-    const double folded=std::clamp((now-node.leaves-2800)/1400.,0.,1.);
-    opacity=1-ease(folded);
-   }
    particle(at,meritColor(node.gap.tier,QColor("#69cf8b")),opacity,coinRadius(node.gap.tier)*(1-t*.1)*(node.ticketTransition&&!node.toSink?opacity:1.));
   }
-  // A waiting packet sits outside the links. Only a current-branch Core report
-  // proof permits the final ingress; this says nothing about audit acceptance.
-  painter.setBrush(QColor("#06161e"));painter.setPen(QPen(QColor("#34545c"),1));
-  for(int i=0;i<3;++i){const QPointF p=chainPort+QPointF((i-1)*14,0);QPainterPath link;link.moveTo(p+QPointF(0,-7));link.lineTo(p+QPointF(6,-3));link.lineTo(p+QPointF(6,4));link.lineTo(p+QPointF(0,8));link.lineTo(p+QPointF(-6,4));link.lineTo(p+QPointF(-6,-3));link.closeSubpath();painter.drawPath(link);painter.drawLine(p+QPointF(-6,-3),p+QPointF(0,1));painter.drawLine(p+QPointF(0,1),p+QPointF(6,-3));painter.drawLine(p+QPointF(0,1),p+QPointF(0,8));}
   double reaction=0;QColor resonance=alive?(rail_->flow_.audit()?QColor("#62cfff"):QColor("#69cf8b")):QColor("#426b70");
   const GapFlowEvent* measured=nullptr;
   for (const auto& event : rail_->flow_.events()) {
@@ -338,7 +378,11 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
   if(packet.value("work_role")=="audit")return;
   const auto ticket=packet.value("ticket_id").toString(),request=packet.value("request_id").toString();
   if(ticket.isEmpty()||!QRegularExpression("^[0-9a-f]{64}$").match(request).hasMatch())return;
-   QVector<QColor> signature;for(const auto& node:flow_.collected())signature.append(meritColor(node.gap.tier));rememberReportVisual(request,std::move(signature));
+  QVector<MeritTier> signature;
+  for(const auto& node:flow_.collected())
+   if(node.gap.ticket()==ticket)signature.append(node.gap.tier);
+  const auto number=packet.value("ticket_number").toVariant().toString();
+  rememberReportVisual(reportVisualKey(request,ticket),std::move(signature),number);
   for(auto& entry:landings_)if(entry.ticket==ticket&&entry.request==request){if(!entry.complete&&packet.value("phase")=="Report ready"){entry.complete=true;entry.born=clock_.elapsed();}return;}
   Landing entry;entry.ticket=ticket;entry.request=request;entry.complete=packet.value("phase")=="Report ready";entry.born=clock_.elapsed();landings_.append(entry);
   while(landings_.size()>32)landings_.removeFirst();
@@ -497,11 +541,11 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
 }
 void MiningTicketProgress::bindTicketLookup(TicketLookup lookup){
  lookup_=std::move(lookup);++lookupGeneration_;++activeLookup_;lookupBusy_=false;nextLookupAt_=0;
- for(auto& entry:landings_){entry.checking=false;entry.nextCheck=0;entry.confirmed=entry.audited=false;entry.approvedAt=-1;flow_.revokeReport(entry.ticket);}
+ for(auto& entry:landings_){entry.checking=false;entry.nextCheck=0;entry.confirmed=entry.audited=false;entry.approvedAt=entry.visualAt=-1;entry.animatedBlock.clear();flow_.revokeReport(entry.ticket);}
  setProperty("pgn_ticket_landing_confirmed",false);setProperty("pgn_ticket_landing_audited",false);
 }
 bool MiningTicketProgress::workMarksActive(qint64 now)const{
- for(const auto& entry:landings_)if((entry.complete&&now-entry.born<1800)||(entry.audited&&now-entry.approvedAt<3200))return true;
+ for(const auto& entry:landings_)if((entry.complete&&now-entry.born<RosetteCollectMs)||(entry.audited&&entry.visualAt>=0&&now<entry.visualAt+RosetteValidationMs))return true;
  return false;
 }
 void MiningTicketProgress::pollLandings(){
@@ -514,20 +558,47 @@ void MiningTicketProgress::pollLandings(){
   auto& entry=*next;
   entry.checking=true;entry.nextCheck=now+(entry.audited?30000:5000);nextLookupAt_=now+1000;
   lookupBusy_=true;
+  // A queued animation uses a new active-branch proof at departure.
+  const bool verifyDeparture=entry.audited&&entry.visualAt<0&&entry.approvedAt>=0&&now>=entry.approvedAt;
   const auto ticket=entry.ticket,request=entry.request;const auto generation=lookupGeneration_,query=++entry.query,lookupId=++activeLookup_;QPointer<MiningTicketProgress> weak(this);
-  lookup_(request,[weak,ticket,request,generation,query,lookupId](QJsonObject state,QString error){
+  lookup_(request,[weak,ticket,request,generation,query,lookupId,verifyDeparture](QJsonObject state,QString error){
    if(!weak||weak->lookupGeneration_!=generation||!weak->lookupBusy_||weak->activeLookup_!=lookupId)return;
    weak->lookupBusy_=false;
    auto at=std::find_if(weak->landings_.begin(),weak->landings_.end(),[&](const auto& item){return item.ticket==ticket&&item.request==request&&item.checking&&item.query==query;});
    if(at==weak->landings_.end())return;
    const auto evidence=ticketFlowEvidence(request,ticket,state,error);
+   const auto observedAt=weak->clock_.elapsed();
+   const bool previouslyConfirmed=at->confirmed;
    at->checking=false;at->confirmed=evidence.included;at->block=evidence.block;
-   if(evidence.included&&!at->complete){at->complete=true;at->born=weak->clock_.elapsed();}
-   if(evidence.audited&&!at->audited)at->approvedAt=weak->clock_.elapsed();
-   if(!evidence.audited)at->approvedAt=-1;
-   at->audited=evidence.audited;
+   if(evidence.included&&!at->complete){at->complete=true;at->born=observedAt;}
+   if(evidence.audited&&!at->animatedBlock.isEmpty()&&at->animatedBlock!=evidence.block){
+    at->visualAt=-1;
+    at->animatedBlock.clear();
+    at->audited=false;
+   }
+   if(evidence.audited&&!at->audited&&at->visualAt<0){
+    at->approvedAt=std::max(observedAt,at->born+RosetteCollectMs);
+    if(!previouslyConfirmed)at->approvedAt=std::max(at->approvedAt,observedAt+RosetteCollectMs);
+    for(const auto& other:weak->landings_)
+     if(&other!=&*at&&other.audited)
+       at->approvedAt=std::max(at->approvedAt,(other.visualAt>=0?other.visualAt:other.approvedAt)+RosetteValidationMs);
+      at->nextCheck=std::min(at->nextCheck,at->approvedAt);
+     }
+     if(!evidence.audited){
+      at->approvedAt=-1;
+      if(at->visualAt>=0)at->visualAt=std::min(at->visualAt,observedAt-RosetteValidationMs);
+      at->nextCheck=std::min(at->nextCheck,observedAt+5000);
+     }else if(verifyDeparture){
+      qint64 waitUntil=observedAt;
+      for(const auto& other:weak->landings_)
+       if(&other!=&*at&&other.audited&&other.visualAt>=0)
+        waitUntil=std::max(waitUntil,other.visualAt+RosetteValidationMs);
+      if(waitUntil==observedAt){at->visualAt=observedAt;at->animatedBlock=evidence.block;}
+      else at->nextCheck=waitUntil;
+     }
+     at->audited=evidence.audited;
    if(evidence.included)weak->flow_.confirmReport(ticket,weak->clock_.elapsed());else weak->flow_.revokeReport(ticket);
-   QJsonArray deliveries;for(const auto& item:weak->landings_)deliveries.append(QJsonObject{{"ticket_id",item.ticket},{"request_id",item.request},{"confirmed",item.confirmed},{"audited",item.audited},{"block",item.block}});weak->setProperty("pgn_ticket_deliveries",deliveries);
+   QJsonArray deliveries;for(const auto& item:weak->landings_)deliveries.append(QJsonObject{{"ticket_id",item.ticket},{"request_id",item.request},{"confirmed",item.confirmed},{"audited",item.audited},{"block",item.block},{"visual_started",item.visualAt>=0}});weak->setProperty("pgn_ticket_deliveries",deliveries);
    weak->setProperty("pgn_ticket_landing_confirmed",evidence.included);weak->setProperty("pgn_ticket_landing_audited",evidence.audited);weak->setProperty("pgn_ticket_landing_error",error.left(160));
    weak->update();if(weak->overlay_)weak->overlay_->update();
   });
@@ -536,9 +607,29 @@ void MiningTicketProgress::pollLandings(){
 void MiningTicketProgress::mouseMoveEvent(QMouseEvent* event){
  pointer_=event->position();QString closest;double distance=12.;
  for(const auto& hit:hits_){const double d=std::hypot(pointer_.x()-hit.point.x(),pointer_.y()-hit.point.y());if(d<distance){distance=d;closest=hit.pair;}}
+ const bool showingReport=property("pgn_ticket_report_tooltip").toBool();
+ bool showReport=false;
+ QString reportTip;
+ for(const auto& value:property("pgn_ticket_report_hits").toJsonArray()){
+  const auto hit=value.toObject();
+  const auto range=std::hypot(pointer_.x()-hit.value("x").toDouble(),pointer_.y()-hit.value("y").toDouble());
+  if(range>=distance)continue;
+  distance=range;
+  reportTip=reportVisualTooltip(hit.value("request").toString(),hit.value("ticket").toString(),hit.value("confirmed").toBool(),hit.value("audited").toBool());
+  showReport=true;
+ }
+ if(showReport){
+  QToolTip::showText(event->globalPosition().toPoint(),reportTip,this);
+  closest.clear();
+ }else if(showingReport){
+  QToolTip::hideText();
+ }
+ if(showReport!=showingReport)setProperty("pgn_ticket_report_tooltip",showReport);
  hovered_=closest;setCursor(hovered_.isEmpty()?Qt::ArrowCursor:Qt::PointingHandCursor);if(overlay_)overlay_->update();
 }
-void MiningTicketProgress::leaveEvent(QEvent* event){hovered_.clear();unsetCursor();if(overlay_)overlay_->update();QWidget::leaveEvent(event);}
+void MiningTicketProgress::leaveEvent(QEvent* event){
+ if(property("pgn_ticket_report_tooltip").toBool()){QToolTip::hideText();setProperty("pgn_ticket_report_tooltip",false);}
+ hovered_.clear();unsetCursor();if(overlay_)overlay_->update();QWidget::leaveEvent(event);}
 void MiningTicketProgress::mousePressEvent(QMouseEvent* event){
  if(event->button()!=Qt::LeftButton){QWidget::mousePressEvent(event);return;}
  mouseMoveEvent(event);if(hovered_.isEmpty()||!results_)return;

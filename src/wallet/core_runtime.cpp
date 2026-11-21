@@ -946,7 +946,13 @@ void CoreRuntime::readTicketAtlas(const QString& start,const QString& end,int bi
  rpc("getpgnticketatlas",params,[this,owner,start,end,bins,consume=std::move(consume)](QJsonValue value,QString error){
   if(!error.isEmpty()||!owner.matches(epoch())||!connected_||!processAlive()){consume({},error.isEmpty()?QString("Core atlas connection changed"):error);return;}
   const auto view=value.toObject();const auto invalid=validateTicketAtlas(view,profile_.genesisHash,start,end,bins);if(!invalid.isEmpty()){consume({},invalid);return;}
-  verifyConfirmedSnapshotAnchor(view,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[view,consume=std::move(consume)](QString error){consume(error.isEmpty()?view:QJsonObject{},error);});
+  verifyConfirmedSnapshotAnchor(view,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[this,owner,view,consume=std::move(consume)](QString error){
+   if(error.isEmpty()){
+    ticketDomainOwner_=owner;
+    ticketDomain_={{"range_origin",view.value("range_origin")},{"range_limit",view.value("range_limit")},{"ticket_width",view.value("ticket_width")}};
+   }
+   consume(error.isEmpty()?view:QJsonObject{},error);
+  });
  });
 }
 void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QString)> deliver){
@@ -989,6 +995,44 @@ void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QStri
    });
   });
  });
+}
+void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJsonObject,QString)> consume){
+ if(number.isEmpty()||number.size()>80||number=="0"||number.startsWith('0')){
+  consume({},"Enter a ticket number greater than zero");return;
+ }
+ for(const auto digit:number)if(digit<'0'||digit>'9'){
+  consume({},"Enter a ticket number in decimal");return;
+ }
+ auto search=[this,number,consume=std::move(consume)](QJsonObject domain,QString error)mutable{
+  if(!error.isEmpty()){consume({},error);return;}
+  QString start,end;
+  try{
+   const auto origin=atlasInteger(domain.value("range_origin")),
+      limit=atlasInteger(domain.value("range_limit")),width=atlasInteger(domain.value("ticket_width"));
+   const AtlasInteger first=origin+(atlasInteger(QJsonValue(number))-1)*width;
+   if(width<=0||first<origin||first>=limit){consume({},"Ticket number is outside this network’s search domain");return;}
+   const AtlasInteger last=first+width;
+   start=QString::fromStdString(first.str());end=QString::fromStdString((last<limit?last:limit).str());
+  }catch(const std::exception&){consume({},"Core ticket domain is invalid");return;}
+  readTicketAtlas(start,end,1,[this,number,consume=std::move(consume)](QJsonObject atlas,QString error)mutable{
+   if(!error.isEmpty()){consume({},error);return;}
+   const auto rows=atlas.value("details").toArray();
+   if(rows.isEmpty()&&!atlas.value("details_truncated").toBool()){
+    consume(QJsonObject{{"genesis",atlas.value("genesis")},{"bestblockhash",atlas.value("bestblockhash")},
+       {"height",atlas.value("height")},{"leases",QJsonArray{}},{"reports",QJsonArray{}},{"audits",QJsonArray{}}},{});
+    return;
+   }
+   const auto row=rows.isEmpty()?QJsonObject{}:rows.first().toObject();
+   if(rows.size()!=1||row.value("ticket_number").toString()!=number){consume({},"Core returned a different ticket");return;}
+   readTicketDetails(row.value("request").toString(),[number,consume=std::move(consume)](QJsonObject state,QString error)mutable{
+    if(error.isEmpty()&&state.value("leases").toArray().first().toObject().value("ticket_number").toString()!=number)
+     error="Ticket changed while searching";
+    consume(error.isEmpty()?state:QJsonObject{},error);
+   });
+  });
+ };
+ if(ticketDomainOwner_.matches(epoch())&&!ticketDomain_.isEmpty())search(ticketDomain_,{});
+ else readTicketAtlas({},{},1,std::move(search));
 }
 void CoreRuntime::readTicketDetails(const QString& request,std::function<void(QJsonObject,QString)> consume){
  readWorkView("tickets",0,1,request,[consume=std::move(consume)](QJsonObject view,QString error){

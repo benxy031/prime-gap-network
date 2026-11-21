@@ -287,6 +287,38 @@ int main(int argc,char** argv){
  auto auditFrame=frame();auditFrame.insert("work_role","audit");rail->present(auditFrame);app.processEvents();
  if(argc>1){QImage image(parent.size(),QImage::Format_ARGB32);parent.render(&image);require(image.save(QString::fromLocal8Bit(argv[1])+"/flow-audit-work.png"),"Audit work render failed");}
  require(rail->property("pgn_ticket_audit_markers").toInt()==1,"Audit work has no distinct A entity");
+ // Hold two complete ranges. Remove the second one's evidence after its first lookup.
+ {
+  MiningTicketProgress queue;queue.resize(1000,148);queue.show();
+  const QString a=QString(64,'3'),b=QString(64,'4');
+  const QString aTicket=QString(64,'5'),bTicket=QString(64,'6');
+  int aReads=0,bReads=0;
+  bool secondStarted=false,firstStarted=false;
+  queue.bindTicketLookup([&](const QString& id,auto done){
+   int& reads=id==a?aReads:bReads;++reads;
+   if(id==b&&reads>1){done({},"Core branch changed");return;}
+   auto state=auditedState(id);
+   auto reports=state.value("reports").toArray();
+   auto report=reports.first().toObject();
+   report.insert("ticket",id==a?aTicket:bTicket);
+   reports[0]=report;state.insert("reports",reports);
+   done(state,{});
+  });
+  auto first=reportFrame;first.insert("ticket_id",aTicket);first.insert("request_id",a);queue.present(first);
+  auto second=reportFrame;second.insert("ticket_id",bTicket);second.insert("request_id",b);queue.present(second);
+  QEventLoop observed;QTimer probe;probe.setInterval(25);
+  QObject::connect(&probe,&QTimer::timeout,&observed,[&]{
+   for(const auto& item:queue.property("pgn_ticket_deliveries").toJsonArray()){
+    const auto row=item.toObject();
+    if(row.value("request_id")==a)firstStarted|=row.value("visual_started").toBool();
+    if(row.value("request_id")==b)secondStarted|=row.value("visual_started").toBool();
+   }
+   if(bReads>1)observed.quit();
+  });
+  probe.start();QTimer::singleShot(12000,&observed,&QEventLoop::quit);observed.exec();
+  require(aReads>=2&&bReads>=2&&firstStarted&&!secondStarted,
+    "queued rosette transformed without a fresh active-branch proof");
+ }
  // Seven pending ranges must all receive evidence despite the one-query/s
  // global budget. Choosing the first due entry would starve entries six onward.
  MiningTicketProgress fair;fair.resize(1000,148);fair.show();QSet<QString> queried;unsigned requests=0;

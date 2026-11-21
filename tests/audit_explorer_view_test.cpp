@@ -51,6 +51,12 @@ int main(int argc, char** argv) {
     require(table->item(0,2)->toolTip().contains("does not prove"),"Assignment must not imply running computation");
     require(view.property("pgn_audit_waiting_slots").toInt()==199,"Unassigned slots not counted");
     require(view.property("pgn_audit_active_jobs").toInt()==1,"Active audit count wrong");
+    table->sortItems(1,Qt::DescendingOrder);
+    table->setCurrentCell(0,0);table->selectRow(0);app.processEvents();
+    require(view.property("pgn_audit_selected_request").toString()==table->item(0,0)->data(Qt::UserRole).toString(),
+            "sorted row opened a different audit");
+    table->sortItems(1,Qt::AscendingOrder);
+    table->setCurrentCell(0,0);table->selectRow(0);app.processEvents();
     const auto partitions=details->findItems("Partition 1",Qt::MatchExactly|Qt::MatchRecursive);
     require(partitions.size()==1,"Audit partition missing");auto* partition=partitions.first();
     require(partition->text(1)=="1 T · 1.0000e12 · ≈ 1.819 × 2^39 positions","Partition must show common three notations on one line");

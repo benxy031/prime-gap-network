@@ -44,8 +44,8 @@ private:
  QPointer<QWidget> canvas_,results_;QPointer<GapFlowOverlay> overlay_;
  struct Hit {QString pair;QPointF point;};
  QVector<Hit> hits_;QString hovered_,pulsed_;QPointF pointer_;qint64 pulsedAt_{};
- struct Landing {QString ticket,request;bool checking{},confirmed{};qint64 nextCheck{};QString block;
-     bool complete{},audited{};qint64 born{},approvedAt{-1};quint64 query{};};
+ struct Landing {QString ticket,request;bool checking{},confirmed{};qint64 nextCheck{};QString block,animatedBlock;
+     bool complete{},audited{};qint64 born{},approvedAt{-1},visualAt{-1};quint64 query{};};
  QVector<Landing> landings_;TicketLookup lookup_;
  quint64 lookupGeneration_{},activeLookup_{};qint64 nextLookupAt_{};bool lookupBusy_{};
  bool workMarksActive(qint64)const;

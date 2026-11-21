@@ -2,6 +2,8 @@
 #include "ui/panel_style.h"
 #include "ui/render/horizon_workspace_style.h"
 #include <QDir>
+#include <QEventLoop>
+#include <QTimer>
 #include <iostream>
 #include <stdexcept>
 #include <QTreeWidgetItemIterator>
@@ -173,5 +175,54 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  need(covLabel->text()=="Scientific coverage unavailable","new branch never keeps stale coverage or invents zero");
  covFrame.remove("scientific_coverage");covRefresh->click();app.processEvents();
  need(covLabel->text()=="Scientific coverage unavailable","older Core without optional summary keeps an honest unavailable state");
+ {
+  struct Lookup{QString number;NetworkWorkView::Result callback;};
+  QVector<Lookup> lookups;
+  auto currentPage=page;currentPage.insert("height",200);currentPage.insert("bestblockhash",QString(64,'1'));
+  const auto wait=[&]{QEventLoop loop;QTimer::singleShot(260,&loop,&QEventLoop::quit);loop.exec();};
+  NetworkWorkView searchable([&](int,NetworkWorkView::Result done){done(currentPage,{});},
+    [](const QString&,NetworkWorkView::Result done){done({},"Unexpected extra detail request");});
+  searchable.setTicketNumberReader([&](const QString& number,NetworkWorkView::Result done){lookups.append({number,std::move(done)});});
+  searchable.resize(1280,800);searchable.show();app.processEvents();
+  auto* field=searchable.findChild<QLineEdit*>("pgn-work-ticket-search");
+  auto* result=searchable.findChild<QTableWidget*>("pgn-network-ticket-table");
+  QPushButton *reload=nullptr,*next=nullptr,*copy=nullptr;
+  for(auto* button:searchable.findChildren<QPushButton*>()){
+   if(button->text()=="Refresh work")reload=button;
+   if(button->text()=="Next page")next=button;
+   if(button->text()=="Copy evidence")copy=button;
+  }
+  need(field&&result&&reload&&next&&copy,"exact-search fixture controls");
+  field->setText("ticket 33");
+  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 33"&&lookups.isEmpty()&&!next->isEnabled(),
+       "cached exact lookup did not project one ticket without waiting");
+  field->setText("101");wait();
+  need(lookups.size()==1&&lookups.first().number=="101"&&result->rowCount()==0&&!copy->isEnabled(),"old details remained active in an exact lookup");
+  field->setText("102");wait();
+  need(lookups.size()==1,"overlapping exact history calls");
+  currentPage.insert("height",201);currentPage.insert("bestblockhash",QString(64,'2'));reload->click();wait();
+  QJsonObject obsolete{{"height",200},{"bestblockhash",QString(64,'1')},{"leases",QJsonArray{}}};
+  auto old=lookups.takeFirst();old.callback(obsolete,{});
+  need(lookups.size()==1&&lookups.first().number=="102"&&result->rowCount()==0&&!copy->isEnabled(),"superseded lookup took over current query");
+  auto missing=currentPage;
+  for(const auto* key:{"leases","audits","reports"})missing.insert(key,QJsonArray{});
+  auto latest=lookups.takeFirst();latest.callback(missing,{});
+  need(result->rowCount()==0,"verified negative produced ticket rows");
+  reload->click();wait();
+  need(lookups.size()==1&&lookups.first().number=="102","Refresh did not retry the same negative lookup");
+  auto match=currentPage;
+  auto lease=leases.first().toObject();lease.insert("ticket_number","102");
+  match.insert("leases",QJsonArray{lease});match.insert("reports",QJsonArray{reports.first()});
+  match.insert("audits",QJsonArray{audits.first()});
+  auto fresh=lookups.takeFirst();fresh.callback(match,{});
+  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 102"&&copy->isEnabled(),
+       "fresh assignment and its exact evidence did not replace the negative result");
+  auto* filter=searchable.findChild<QComboBox*>("pgn-network-ticket-filter");
+  filter->setCurrentIndex(1);
+  need(result->rowCount()==0&&!copy->isEnabled()&&searchable.property("pgn_selected_ticket_evidence").toJsonObject().isEmpty(),
+       "filter hid the result without retiring its evidence actions");
+  filter->setCurrentIndex(0);
+  need(result->rowCount()==1&&copy->isEnabled(),"clearing exact filter did not restore matching evidence");
+ }
  std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
  }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}
