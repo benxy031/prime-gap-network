@@ -5,6 +5,8 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QLabel>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QProgressBar>
 #include <QTimer>
 #include <QTemporaryDir>
@@ -47,28 +49,45 @@ int main(int argc,char** argv){
  for(int row=0;row<4;++row)if(table->item(row,0)->flags()&Qt::ItemIsUserCheckable)table->item(row,0)->setCheckState(Qt::Unchecked);
  check(!download->isEnabled());dialog.findChild<QPushButton*>("pgn-components-select-all")->click();check(download->isEnabled());
  auto unknown=installed[3].toObject();unknown.insert("state","unidentified");installed[3]=unknown;dialog.presentLocal({{"manifest_state","valid"},{"components",installed}});check(!(table->item(3,0)->flags()&Qt::ItemIsUserCheckable));
- dialog.resize(850,440);app.processEvents();check(table->viewport()->width()>700&&table->viewport()->height()>=136);
+ dialog.resize(850,440);app.processEvents();check(table->viewport()->width()>700&&table->viewport()->height()==table->rowCount()*table->rowHeight(0));
  QJsonArray newerLocal,olderPublic;for(const auto* id:{"ui","core","gpu","cpu"}){newerLocal.append(QJsonObject{{"id",id},{"state","matched_local_manifest"},{"version","3.0"}});olderPublic.append(QJsonObject{{"id",id},{"version","2.0"}});}
  dialog.presentLocal({{"manifest_state","valid"},{"components",newerLocal}});dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",olderPublic}});
  check(!download->isEnabled()&&table->item(0,3)->text()=="Newer local build");check(dialog.findChild<QLabel*>("pgn-components-status")->text().contains("newer than the published"));
  dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",newerLocal}});check(dialog.findChild<QLabel*>("pgn-components-status")->text()=="All components are up to date.");
+ auto* messageArea=dialog.findChild<QScrollArea*>("pgn-components-status-viewport");
+ check(messageArea&&messageArea->height()<=dialog.fontMetrics().lineSpacing()+1);
+ const auto shortHeight=messageArea->height();
  dialog.presentUpdateFailure("HTTP error occurred with status 504");
  check(table->item(0,3)->text()=="Last check outdated"&&table->item(0,2)->text()=="3.0"&&!download->isEnabled());
  auto* retryStatus=dialog.findChild<QLabel*>("pgn-components-status");
  check(retryStatus->text().contains("GitHub update service")&&retryStatus->text().contains("Last successful check:"));
  check(retryStatus->toolTip().contains("GitHub update service"));
+ check(messageArea->height()>shortHeight&&messageArea->height()<=dialog.fontMetrics().lineSpacing()*3+1);
  dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",newerLocal}});
  check(retryStatus->text()=="All components are up to date."&&retryStatus->toolTip().isEmpty());
+ app.processEvents();
+ check(messageArea->height()==shortHeight);
+ if(argc>1){
+  QDir().mkpath(QString::fromLocal8Bit(argv[1]));
+  check(dialog.grab().save(QString::fromLocal8Bit(argv[1])+"/component-updates-idle.png"));
+ }
  dialog.presentLocal({{"manifest_state","valid"},{"components",installed}});dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",available}});
  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","verify"},{"component","ui"},{"completed",2048},{"total",4096}});
  auto* progressCell=table->cellWidget(0,4);check(progressCell);
  auto* componentProgress=progressCell->findChild<QProgressBar*>("pgn-component-row-progress");check(componentProgress&&componentProgress->value()==2048&&componentProgress->maximum()==4096);
+ dialog.resize(640,dialog.height());app.processEvents();
+ check(table->columnCount()==5&&table->viewport()->height()==table->rowCount()*table->rowHeight(0));
+ dialog.resize(850,dialog.height());app.processEvents();
  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","download"},{"component",""},{"completed",73400320},{"total",204265081}});
  auto* globalProgress=dialog.findChild<QProgressBar*>("pgn-components-progress");check(globalProgress&&globalProgress->value()==73400320&&globalProgress->maximum()==204265081);
  if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));check(dialog.grab().save(QString::fromLocal8Bit(argv[1])+"/component-updates.png"));}
  dialog.presentUpdateFailure("Cannot reach the update server. "+QString(500,'A'));
  app.processEvents();
  check(table->columnCount()==4&&!globalProgress->isVisible()&&!dialog.property("pgn_update_progress").isValid());
+ dialog.presentUpdateFailure("Cannot reach the update server. "+QString("The download could not begin. ").repeated(25));
+ app.processEvents();
+ check(messageArea->verticalScrollBar()->maximum()>0);
+ check(messageArea->height()<=dialog.fontMetrics().lineSpacing()*3+1);
  auto* status=dialog.findChild<QLabel*>("pgn-components-status");
  check(status&&status->parentWidget()->mapTo(&dialog,QPoint{}).y()<
        download->mapTo(&dialog,QPoint{}).y());

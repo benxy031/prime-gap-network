@@ -7,7 +7,7 @@
 #include <QMap>
 #include <QPointer>
 #include <functional>
-class QCloseEvent;class QLabel;class QPushButton;class QTableWidget;class QTimer;class QProgressBar;
+class QCloseEvent;class QResizeEvent;class QScrollArea;class QLabel;class QPushButton;class QTableWidget;class QTimer;class QProgressBar;
 namespace pgn::ui {
 struct ComponentVersionsContext {
  QMap<QString,QString> codeRoots;
@@ -37,12 +37,15 @@ public:
  std::function<void(const QString&)> onPublishedFailure;
 protected:
  void closeEvent(QCloseEvent*)override;
+ void resizeEvent(QResizeEvent*)override;
 private:
  friend struct ComponentVersionsDialogTest;
+ void setStatus(const QString&);
+ void updateStatusExtent();
  void followDetachedInstall(pgn::update::DetachedComponentInstall,bool recovering);
  void updateRows();void prepareSelected();void installPrepared();void setBusy(bool);void updateRecovery();
  QStringList selected()const;QJsonObject request(const QString&,const QStringList&)const;bool ensureService();
- ComponentVersionsContext context_;QLabel* localSummary_{};QLabel* status_{};QTableWidget* components_{};
+ ComponentVersionsContext context_;QLabel* localSummary_{};QLabel* status_{};QScrollArea* statusViewport_{};QTableWidget* components_{};
  QProgressBar* progress_{};
  QPushButton *refresh_{},*selectAll_{},*prepare_{},*install_{},*cancel_{},*recover_{};
  QPointer<QFutureWatcher<QJsonObject>> localWatcher_;
