@@ -34,10 +34,6 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
  auto* actions=new QHBoxLayout;create_=new QPushButton("Create wallet…");create_->setObjectName("pgn-wallet-create");open_=new QToolButton;open_->setText("Open wallet…");open_->setObjectName("pgn-wallet-open");open_->setPopupMode(QToolButton::InstantPopup);auto* menu=new QMenu(open_);auto* folder=menu->addAction("Open wallet folder…");auto* file=menu->addAction("Open wallet .dat file…");open_->setMenu(menu);load_=new QPushButton("Load");load_->setObjectName("pgn-wallet-load");close_=new QPushButton("Close wallet");close_->setObjectName("pgn-wallet-close");for(auto* button:{create_,load_,close_})actions->addWidget(button);actions->insertWidget(1,open_);actions->addStretch();walletBox->addLayout(actions);
  service_=new QLabel;service_->setObjectName("pgn-wallet-service-binding");service_->setTextFormat(Qt::PlainText);service_->setWordWrap(true);box->addWidget(service_);
  auto* software=new QHBoxLayout;auto* components=new QPushButton("Components…");components->setObjectName("pgn-wallet-components");software->addWidget(components);software->addStretch();box->addLayout(software);connect(components,&QPushButton::clicked,this,[this]{if(onComponents)onComponents();});
- bootstrap_=new QPushButton("Apply blockchain bootstrap");bootstrap_->setObjectName("pgn-wallet-chain-bootstrap");bootstrap_->hide();
- auto* bootstrapActions=new QHBoxLayout;bootstrapActions->addWidget(bootstrap_);bootstrapActions->addStretch();box->addLayout(bootstrapActions);
- bootstrapStatus_=new QLabel;bootstrapStatus_->setTextFormat(Qt::PlainText);bootstrapStatus_->setWordWrap(true);bootstrapStatus_->hide();box->addWidget(bootstrapStatus_);
- connect(bootstrap_,&QPushButton::clicked,this,[this]{if(onChainBootstrap)onChainBootstrap();});
  message_=new QLabel;message_->setObjectName("pgn-wallet-management-status");message_->setTextFormat(Qt::PlainText);message_->setWordWrap(true);message_->setAccessibleName("Wallet management status");box->addWidget(message_);
  connect(configure_,&QPushButton::clicked,this,[this]{setupFields_->setVisible(setupFields_->isHidden());});connect(reload_,&QPushButton::clicked,this,[this]{manager_->refresh();});
  connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Choose PGN Core data folder",directory_->text());if(!path.isEmpty())directory_->setText(path);});
@@ -51,7 +47,6 @@ WalletManagementPanel::WalletManagementPanel(pgn::wallet::WalletManager* manager
  connect(load_,&QPushButton::clicked,this,[this]{manager_->load(wallets_->currentData().toString());});connect(select_,&QPushButton::clicked,this,[this]{manager_->select(wallets_->currentData().toString());});connect(close_,&QPushButton::clicked,this,[this]{manager_->unload(wallets_->currentData().toString());});connect(wallets_,&QComboBox::currentIndexChanged,this,[this]{refresh();});refresh();
 }
 void WalletManagementPanel::present(const QString& network,const QString& directory,bool configured,bool pending,const QString& pendingDirectory,const QString& savedWallet){
- bootstrap_->setVisible(bool(onChainBootstrap));
  const bool changed=configured_!=configured;configured_=configured;pending_=pending;
  location_->setText(configured?QString("Network: %1\nCurrent Core data folder: %2\nDefault wallet folder: %3").arg(network,directory,QDir(directory).filePath(network=="test"?"testnet/wallets":"wallets")):"To get started, click Create node and wallet. You can use the suggested folder as it is. To reuse an existing node, choose Open existing Core folder. Existing wallet files are preserved.");
  configure_->setText("Change Core folder…");configure_->setVisible(configured);configure_->setToolTip("Choose a Core data folder. Existing files are never moved or deleted.");reload_->setVisible(configured);walletControls_->setVisible(configured);
@@ -59,9 +54,6 @@ void WalletManagementPanel::present(const QString& network,const QString& direct
  if(configured&&!directory.isEmpty()){directory_->setText(directory);if(!savedWallet.isEmpty())setupWallet_->setText(savedWallet);else if(!manager_->serviceWallet().isEmpty())setupWallet_->setText(manager_->serviceWallet());}
  configure_->setEnabled(!pending);cancelChange_->setVisible(pending);
  if(pending)location_->setText(location_->text()+"\nScheduled Core data folder: "+pendingDirectory+"\nWaiting for the current Core to stop cleanly. Reopening Horizon while Core is still running keeps the current folder.");
-}
-void WalletManagementPanel::setChainBootstrapStatus(const QString& status,bool finished){
- bootstrap_->setEnabled(finished);bootstrapStatus_->setText(status);bootstrapStatus_->setVisible(!status.isEmpty());
 }
 void WalletManagementPanel::showConnectionIssue(const QString& reason){setupFields_->setVisible(true);message_->setText("The existing wallet could not be reconnected. "+reason);}
 void WalletManagementPanel::finishSetup(const QString& error){setupBusy_=false;setupError_=error;setupFields_->setEnabled(!pending_);message_->setText(error);}

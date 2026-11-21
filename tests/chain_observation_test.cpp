@@ -38,20 +38,6 @@ int main(int argc,char** argv){
  for(const auto& pendingPeer:{QJsonObject{{"addr",endpoint},{"connection_type","manual"},{"pgn_announced_height",11},{"pgn_syncing",false}},QJsonObject{{"addr",endpoint},{"connection_type","manual"},{"pgn_announced_height",10},{"pgn_syncing",true}}}){
   const auto held=projectNativeSynchronization(*quietValue.observation,QJsonArray{pendingPeer},endpoint);if(held.synchronizing!=true||held.nativePeerCaughtUp)return 11;
  }
- auto diagnostic=peer;
- diagnostic.insert("synced_headers",11);diagnostic.insert("synced_blocks",10);
- diagnostic.insert("inflight",QJsonArray{11,12});diagnostic.insert("host","fixture host");
- QJsonObject safe;
- projectNativeSynchronization(*quietValue.observation,QJsonArray{diagnostic},endpoint,&safe);
- const QJsonObject expectedDiag{{"announced_height",10},{"syncing",false},{"synced_headers",11},
-  {"synced_blocks",10},{"inflight_count",2},{"first_inflight_height",11}};
- if(safe!=expectedDiag)return 22;
- diagnostic.insert("synced_blocks","unknown");diagnostic.insert("inflight",QJsonArray{"private-invalid",12});
- projectNativeSynchronization(*quietValue.observation,QJsonArray{diagnostic},endpoint,&safe);
- if(safe.contains("synced_blocks")||safe.contains("inflight_count"))return 23;
- safe=expectedDiag;
- projectNativeSynchronization(caughtUp,{},endpoint,&safe);
- if(!safe.isEmpty())return 24;
  auto headersAhead=*quietValue.observation;headersAhead.headerHeight=11;
  if(projectNativeSynchronization(headersAhead,QJsonArray{peer},endpoint).synchronizing!=true)return 12;
  auto noHeaders=*quietValue.observation;noHeaders.headerHeight.reset();

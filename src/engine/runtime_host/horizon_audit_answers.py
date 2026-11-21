@@ -27,10 +27,6 @@ class AuditSealRecoveryPending(RuntimeError):
 class AuditSealRecoveryRequired(ValueError):
     retryable=False
 
-class AuditSealBindingMismatch(AuditSealRecoveryRequired):
-    """A different assignment must never consume this retained seal."""
-
-
 class AuditAnswers:
     def __init__(self,folder,*,max_pages=32768):
         self.folder=state_path(folder);self.file=self.folder/'answers.sqlite3'
@@ -88,7 +84,7 @@ class AuditAnswers:
     @staticmethod
     def check_binding(value,expected):
         if any(value.get(k)!=expected.get(k)for k in ('request_id','slot','attempt','ticket','report_root','ranges')):
-            raise AuditSealBindingMismatch('Sealed audit replay differs from the reassigned work; retained original must not be used for another generation')
+            raise AuditSealRecoveryRequired('Sealed audit replay differs from the reassigned work; retained original must not be used for another generation')
         counts=value.get('counts')
         if (not isinstance(counts,list)or len(counts)!=len(expected['ranges'])
                 or any(type(n)is not int or n<0 for n in counts)):
@@ -136,7 +132,7 @@ class AuditAnswers:
             saved,actual=self.read_path(name,target)
             if actual!=digest:raise AuditSealRecoveryRequired('Sealed answer changed after registration')
             if any(saved.get(k)!=value.get(k)for k in ('request_id','slot','attempt','ticket','report_root','ranges')):
-                raise AuditSealBindingMismatch('Sealed audit replay differs from the reassigned work; immutable generation differs')
+                raise AuditSealRecoveryRequired('Sealed audit replay differs from the reassigned work; immutable generation differs')
             if saved.get('counts')!=value.get('counts'):
                 raise AuditSealRecoveryRequired('Sealed audit replay does not match its committed counts')
         finally:

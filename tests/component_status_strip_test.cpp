@@ -7,8 +7,6 @@
 #include <QTemporaryDir>
 #include <QSaveFile>
 #include <QElapsedTimer>
-#include <QProgressBar>
-#include <QTableWidget>
 #include <QThread>
 #include <iostream>
 int main(int argc,char** argv){
@@ -31,29 +29,6 @@ int main(int argc,char** argv){
   if(!QFile::remove(context.coreProfilePath)||!bind(core)||!wait("matched_local_manifest"))return 35;
   std::cout<<"PASS atomic profile rebind: absent/valid/invalid/recreated; fresh primary hash binding without restart\n";return 0;
  }
- if(argc>=3&&QString::fromLocal8Bit(argv[1])=="--installed-gpu-updates"){
-  const auto expected=QString::fromLocal8Bit(argv[2]);
-  const auto root=QCoreApplication::applicationDirPath();
-  auto installed=pgn::ui::walletComponentVersionsContext(root,root+"/test-runtime",true);
-  installed.fetchOnOpen=false;
-  const auto manifest=pgn::ui::inspectLocalComponentVersions(installed,pgn::ui::ComponentInventory::Manifest);
-  const auto files=pgn::ui::inspectLocalComponentVersions(installed);
-  const auto localGpu=[](const QJsonObject& snapshot){
-   for(const auto& entry:snapshot.value("components").toArray())if(entry.toObject().value("id")=="gpu")return entry.toObject();
-   return QJsonObject{};
-  };
-  if(localGpu(manifest).value("state")!="reported_local_manifest"||localGpu(manifest).value("version").toString()!=expected)return 40;
-  if(localGpu(files).value("state")!="matched_local_manifest"||!localGpu(files).value("primary_bound").toBool())return 41;
-  pgn::ui::ComponentVersionsDialog dialog(installed);
-  dialog.presentLocal(manifest);
-  dialog.presentProgress({{"schema","PGN_UPDATE_PROGRESS_V1"},{"stage","metadata"},{"component",""},{"completed",0},{"total",0}});
-  dialog.presentPublished({{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},
-     {"components",QJsonArray{QJsonObject{{"id","gpu"},{"version",expected}}}}});
-  auto* table=dialog.findChild<QTableWidget*>("pgn-components-table");
-  auto* progress=dialog.findChild<QProgressBar*>();
-  if(!table||table->item(2,1)->text()!=expected||table->item(2,3)->text()!="Up to date"||!progress||!progress->isHidden())return 42;
-  std::cout<<"PASS installed GPU manifest, executable binding and Updates row\n";return 0;
- }
  if(argc>=3&&QString::fromLocal8Bit(argv[1])=="--inspect-installed"){
   const auto product=QString::fromLocal8Bit(argv[2]);
   const auto resolved=pgn::ui::walletComponentVersionsContext(product,product+"/data/testnet/ui-runtime",true);
@@ -75,52 +50,34 @@ int main(int argc,char** argv){
  auto* status=new pgn::ui::ComponentStatusStrip(context,&window);box->addWidget(status);
  QEventLoop loop;QTimer::singleShot(80,&loop,&QEventLoop::quit);loop.exec();
  status->presentLocal({{"components",QJsonArray{QJsonObject{{"id","ui"},{"state","matched_local_manifest"},{"version","1.2.3"},{"code_root","verified-code"}},QJsonObject{{"id","core"},{"state","unidentified"},{"code_root","existing-code"}},QJsonObject{{"id","cpu"},{"state","unidentified"},{"code_root",""}}}}});
- const auto updates=status->findChild<QToolButton*>("pgn-component-update-status");
- if(!updates||status->findChildren<QToolButton*>().size()!=1||
-    !updates->toolTip().contains("UI · 1.2.3")||!updates->toolTip().contains("CORE · unverified")||
-    !updates->toolTip().contains("CPU · not configured"))return 1;
+ const auto ui=status->findChild<QToolButton*>("pgn-component-status-ui");const auto core=status->findChild<QToolButton*>("pgn-component-status-core");const auto cpu=status->findChild<QToolButton*>("pgn-component-status-cpu");
+ if(!ui||ui->text()!="UI 1.2.3"||!core||core->text()!="CORE ?"||!cpu||cpu->text()!="CPU —")return 1;
  status->presentPublished({{"component_versions_available",false},{"packages",QJsonArray{QJsonObject{{"version","99.0"}}}}});
- if(updates->text()!="Updates · versions unavailable")return 2;
- QJsonObject signedCatalog{{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},
-    {"components",QJsonArray{QJsonObject{{"id","ui"},{"version","1.2.4"}}}}};
- status->presentPublished(signedCatalog);
- if(updates->text()!="Updates · 1 available"||updates->property("state")!="update")return 7;
+ const auto updates=status->findChild<QToolButton*>("pgn-component-update-status");if(!updates||updates->text()!="Updates · versions unavailable")return 2;
+ QJsonObject signedCatalog{{"schema","PGN_AUTHENTICATED_COMPONENT_VIEW_V1"},{"publisher_authenticated",true},{"components",QJsonArray{QJsonObject{{"id","ui"},{"version","1.2.4"}}}}};
+ status->presentPublished(signedCatalog);if(updates->text()!="Updates · 1 available"||!ui->text().endsWith(" ↑"))return 7;
  signedCatalog.insert("components",QJsonArray{QJsonObject{{"id","ui"},{"version","1.2.3"}}});status->presentPublished(signedCatalog);
- if(updates->text()!="Updates · partially verified")return 8;
- status->presentPublished({{"component_versions_available",false}});
- if(updates->text()!="Updates · partially verified")return 9;
+ if(updates->text()!="Updates · partially verified"||ui->text().endsWith(" ↑"))return 8;
+ status->presentPublished({{"component_versions_available",false}});if(updates->text()!="Updates · partially verified")return 9;
  QJsonArray installed,available;
- for(const auto& pair:QList<QPair<QString,QString>>{{"ui","2026.11.6.25"},{"core","2026.11.6.2"},{"gpu","2026.11.6.6"},{"cpu","2026.11.6.389"}}){
-  installed.append(QJsonObject{{"id",pair.first},{"state","matched_local_manifest"},{"version",pair.second},{"code_root","verified-code"}});
-  available.append(QJsonObject{{"id",pair.first},{"version",pair.second}});
- }
- status->presentLocal({{"components",installed}});signedCatalog.insert("components",available);status->presentPublished(signedCatalog);
- if(updates->text()!="Updates · up to date"||updates->property("state")!="current")return 10;
- for(const auto& item:installed){
-  const auto row=item.toObject();
-  if(!updates->toolTip().contains(row.value("id").toString().toUpper()+" · "+row.value("version").toString()))return 11;
- }
- status->presentUpdateChecking();
- if(updates->text()!="Updates · checking"||updates->property("state")!="checking")return 12;
- status->presentUpdateFailure("Controlled offline check");
- if(updates->text()!="Updates · check failed"||updates->property("state")!="stale"||!updates->toolTip().contains("Controlled offline check"))return 13;
- status->presentUpdateFailure("GitHub update service is temporarily unavailable (HTTP 504)");
- if(updates->text()!="Updates · GitHub unavailable"||updates->property("state")!="stale")return 17;
- status->presentPublished(signedCatalog);
- if(updates->property("state")!="current")return 14;
- status->presentLocal({{"components",installed}});
- if(updates->property("state")!="current")return 15;
+ for(const auto& pair:QList<QPair<QString,QString>>{{"ui","2026.11.6.25"},{"core","2026.11.6.2"},{"gpu","2026.11.6.6"},{"cpu","2026.11.6.389"}}){installed.append(QJsonObject{{"id",pair.first},{"state","matched_local_manifest"},{"version",pair.second},{"code_root","verified-code"}});available.append(QJsonObject{{"id",pair.first},{"version",pair.second}});}
+ status->presentLocal({{"components",installed}});signedCatalog.insert("components",available);status->presentPublished(signedCatalog);if(updates->text()!="Updates · up to date")return 10;
+ for(auto* button:status->findChildren<QToolButton*>())if(button!=updates&&(button->property("state")!="current"||!button->text().endsWith(" ✓")))return 11;
+ status->presentUpdateChecking();if(updates->text()!="Updates · checking"||ui->property("state")!="checking"||ui->text().contains("✓"))return 12;
+ status->presentUpdateFailure("Controlled offline check");if(updates->text()!="Updates · check failed"||ui->property("state")!="stale"||!ui->text().endsWith(" ?"))return 13;
+ status->presentUpdateFailure("GitHub update service is temporarily unavailable (HTTP 504)");if(updates->text()!="Updates · GitHub unavailable"||ui->property("state")!="stale")return 17;
+ status->presentPublished(signedCatalog);if(ui->property("state")!="current")return 14;
+ // A local inventory refresh must keep a fresh signed comparison, while a
+ // later failure must visibly withdraw it without changing installed versions.
+ status->presentLocal({{"components",installed}});if(ui->property("state")!="current"||!ui->text().endsWith(" ✓"))return 15;
  auto newer=installed;auto newerUI=newer[0].toObject();newerUI.insert("version","2026.11.6.26");newer[0]=newerUI;
- status->presentLocal({{"components",newer}});
- if(updates->text()!="Updates · partially verified"||!updates->toolTip().contains("UI · 2026.11.6.26"))return 16;
+ status->presentLocal({{"components",newer}});if(ui->property("state")!="ahead"||!ui->text().endsWith(" ?")||updates->text()!="Updates · partially verified")return 16;
  status->presentLocal({{"components",installed}});status->presentPublished(signedCatalog);
- for(int width:{800,1280,1920}){
+ for(int width:{1280,1920}){
   window.resize(width,60);window.show();app.processEvents();
-  if(!status->rect().contains(updates->geometry()))return 3;
+  for(auto* button:status->findChildren<QToolButton*>())if(!status->rect().contains(button->geometry()))return 3;
   if(status->geometry().right()>=window.width()||network->width()<180)return 4;
  }
- updates->click();app.processEvents();
- if(!status->findChild<QDialog*>("pgn-component-versions"))return 18;
  if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));window.resize(1280,60);app.processEvents();if(!window.grab().save(QString::fromLocal8Bit(argv[1])+"/component-footer.png"))return 5;}
- std::cout<<"PASS: single update button, four installed versions, same component dialog, checked/outdated/error states and 800/1280/1920 layout.\n";
+ std::cout<<"PASS: verified/unknown/absent states, no false current claim, 1280/1920 layout.\n";
 }

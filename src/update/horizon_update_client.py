@@ -58,7 +58,7 @@ class WindowsCacheUpdater(Updater):
 
 class AuthenticatedUpdates:
     def __init__(self, cache, bootstrap, bootstrap_sha256, metadata_url,
-                 target_url, context, context_sha256, *, fetcher=None, cache_wait_seconds=0):
+                 target_url, context, context_sha256, *, fetcher=None):
         stage.require(type(bootstrap) is bytes and len(bootstrap) <= 262144
                       and stage.DIGEST.fullmatch(bootstrap_sha256)
                       and digest(bootstrap) == bootstrap_sha256,
@@ -70,7 +70,6 @@ class AuthenticatedUpdates:
                           and not parsed.query and not parsed.fragment
                           and url.endswith('/'), 'Explicit HTTPS repository required')
         self.context, self.context_sha256 = context, context_sha256
-        self.cache_wait_seconds = cache_wait_seconds
         self.cache_repairs = []
         self.cache_cleanup_warning = ''
         self._pins = set()
@@ -418,7 +417,7 @@ class AuthenticatedUpdates:
     @contextmanager
     def prepared(self, selected, *, discard_after=False):
         """Pin and lock staged code until its consumer finishes copying it."""
-        with locked_cache(self.cache, wait_seconds=self.cache_wait_seconds):
+        with locked_cache(self.cache):
             self._pins.clear()
             yield self._prepare_locked(selected)
             if discard_after:

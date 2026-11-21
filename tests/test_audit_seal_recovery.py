@@ -70,51 +70,6 @@ class SealRecoveryTests(unittest.TestCase):
         self.assertEqual(self.compute_calls, 0)
         self.assertEqual(self.commits, [(self.request, 1, 0, self.answer['commitment'])])
 
-    def test_expired_cursor_with_conflicting_seal_retires_and_preserves_both(self):
-        # A node can retain the old seal after the current chain replaces its
-        # range selection. Expiry makes this cursor ineligible for replay.
-        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
-        original = seal.read_bytes()
-        digest = self.digest()
-        stale = deepcopy(self.audit)
-        stale['ranges'][0]['end'] = str(int(stale['ranges'][0]['end']) + 2)
-        save(self.current, stale)
-        cursor = self.current.read_bytes()
-        anchor = 'a' * 64
-        self.audits.worker.rpc = SimpleNamespace(call=lambda method: anchor)
-        self.audits.state = lambda request: dict(request_id=request, jobs=[
-            dict(slot=1, attempt=0, state='assigned', expired=True)])
-        retired = []
-        self.audits.on_retired = lambda value, tip: retired.append((value, tip))
-        self.assertEqual(self.audits.process_one(), 'retired')
-        self.assertEqual(retired, [(stale, anchor)])
-        self.assertFalse(self.current.exists())
-        preserved = list((self.audits.folder / 'retained-assignments').glob('*.json'))
-        self.assertEqual([p.read_bytes() for p in preserved], [cursor])
-        self.assertEqual(seal.read_bytes(), original)
-        self.assertEqual(self.digest(), digest)
-        self.assertEqual(self.compute_calls, 0)
-        self.assertEqual(self.commits, [])
-
-    def test_terminal_cursor_with_conflicting_seal_does_not_block_the_next_cycle(self):
-        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
-        original = seal.read_bytes()
-        stale = deepcopy(self.audit)
-        stale['ranges'][0]['end'] = str(int(stale['ranges'][0]['end']) + 2)
-        save(self.current, stale)
-        anchor = 'a' * 64
-        self.audits.worker.rpc = SimpleNamespace(call=lambda method: anchor)
-        retired = []
-        self.audits.on_retired = lambda value, tip: retired.append((value, tip))
-        self.audits.state = lambda request: dict(request_id=request, jobs=[
-            dict(slot=1, attempt=0, state='passed', commitment='c' * 64)])
-        self.assertEqual(self.audits.process_one(), 'retired')
-        self.assertFalse(self.current.exists())
-        self.assertEqual(retired, [(stale, anchor)])
-        self.assertEqual(seal.read_bytes(), original)
-        self.assertEqual(self.compute_calls, 0)
-        self.assertEqual(self.commits, [])
-
     def test_current_lost_answer_reuses_registered_seal_without_publication_intent(self):
         partial = deepcopy(self.audit)
         partial.pop('answer')

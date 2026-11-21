@@ -40,23 +40,6 @@ class OwnerTurnTests(OwnerReportQueueTests):
         self.assertTrue(all((self.root/'tickets'/self.item(i)['ticket']/'network-report.json').exists()
                             for i in range(1, 11)))
 
-    def test_deferred_gold_queue_cannot_hide_a_ready_owner_disclosure(self):
-        self.populate(52)
-        anchor = self.queue.observe(self.rpc)
-        deferred, _ = self.queue.next_on_anchor(anchor, limit=52)
-        self.queue.retain_publication_turn(deferred)
-        request, item, _ = self.completed(53)
-        self.rpc.states[request] = dict(audited=False,
-            jobs=[dict(state="committed"), dict(state="committed")])
-        self.queue.register(request, item)
-        played = []
-        self.worker.submit_gold = lambda key, *_: played.append(("gold", key)) or "pending_gold"
-        self.client.apply = lambda action, key, *_: played.append((action, key)) or dict(available=False)
-        self.client.reveal_owner_reports()
-        self.assertEqual(played[0], ("reveal_report", request))
-        self.assertEqual(self.count(1), 53)
-        self.assertLessEqual(max(self.rpc.page_lengths), 64)
-
     def test_slow_send_yields_and_retains_every_unvisited_report(self):
         self.populate(3)
         clock = [0.0]

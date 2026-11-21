@@ -56,26 +56,6 @@ inline void readExplorerBlockPage(const QString& id,int offset,const std::functi
   const auto invalid=value.isObject()?validateExplorerBlockPage(value.toObject(),id,offset):QString("Native block page is not an object");consume(invalid.isEmpty()?value.toObject():QJsonObject{},invalid);
  });
 }
-inline void readExplorerBlockAtHeight(int height,const std::function<bool()>& current,
- const TransactionRpc& rpc,std::function<void(QJsonObject,QString)> consume){
- if(height<0||!current()){consume({},"Valid current-chain height required");return;}
- rpc("getblockhash",{height},[height,current,rpc,consume=std::move(consume)](QJsonValue hash,QString error){
-  if(!current()){consume({},"Core connection changed during height lookup");return;}
-  if(!error.isEmpty()){consume({},error);return;}
-  readExplorerBlockPage(hash.toString(),0,current,rpc,
-   [height,hash,current,rpc,consume](QJsonObject block,QString error){
-    if(!error.isEmpty()){consume({},error);return;}
-    // A body can still be read by hash after it leaves the active chain.
-    // Check only the requested height so progress at the tip is harmless.
-    rpc("getblockhash",{height},[hash,current,block=std::move(block),consume](QJsonValue active,QString error){
-     if(!current()){consume({},"Core connection changed during height lookup");return;}
-     if(!error.isEmpty()){consume({},error);return;}
-     if(active!=hash){consume({},"Block at this height changed. Refresh the block page.");return;}
-     consume(std::move(block),{});
-    });
-   });
- });
-}
 inline void readExplorerTransactionPage(const QString& id,const QString& block,int offset,
  const std::function<bool()>& current,const TransactionRpc& rpc,std::function<void(QJsonObject,QString)> consume){
  static const QRegularExpression hash("^[0-9a-f]{64}$");

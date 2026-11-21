@@ -434,20 +434,20 @@ class CohortStore:
             previous={k:v for k,v in before.items()if k!='previous'})
         return current==expected
 
-    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False,writer_wait=0):
+    def prepare(self,client,selected,*,base_cohort=None,verify_running_base=None,retain_download=False):
         # Never accept a caller-created boolean "authenticated" receipt.
         stage.require(client.context==self.context and client.context_sha256==self.context_sha256,'Authentication client context differs')
-        with locked_cache(self.root,wait_seconds=writer_wait):self.require_resolved_transaction()
+        with locked_cache(self.root):self.require_resolved_transaction()
         # Hold the download-cache lock through every stage read/copy. A second
         # helper must not reclaim our authenticated source after prepare returns.
         with client.prepared(selected,discard_after=not retain_download) as receipt:
-            return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base,writer_wait=writer_wait)
+            return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base)
 
-    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None,writer_wait=0):
+    def _prepare_authenticated_receipt(self,receipt,*,base_cohort=None,verify_running_base=None):
         stage.require(receipt['publisher_authenticated']and receipt['context_sha256']==self.context_sha256,'Authenticated preparation required')
         source=Path(receipt['stage']);plan=stage.verify_stage(source,receipt['manifest_sha256'],self.context,self.context_sha256)
         manifest=stage._json(stage._read_plain(source/'component-bundle.json',stage.MAX_MANIFEST))
-        with locked_cache(self.root,wait_seconds=writer_wait):
+        with locked_cache(self.root):
             before=self.current();self.require_resolved_transaction(before)
             base=stage._plain_chain(base_cohort if base_cohort is not None else before['cohort'])
             old,old_files,base_digest,_=inventory(base)
@@ -542,14 +542,14 @@ class CohortStore:
             return self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
                 expected_current=before,base_cohort=str(base),sequence=manifest['sequence'],selected=sorted(chosen),cohort_key_sha256=key))
 
-    def activate(self,candidate,drain_owned,start_and_verify,restore_previous,*,writer_wait=0):
+    def activate(self,candidate,drain_owned,start_and_verify,restore_previous):
         """Publish only after exact owned shutdown and verified candidate startup.
 
         The lifecycle callbacks own exact process identities. restore_previous
         stops a failed candidate and restarts the prior UI; it is mandatory,
         including after a startup exception or selector publication failure.
         """
-        with locked_cache(self.root,wait_seconds=writer_wait):
+        with locked_cache(self.root):
             self.commit_warning=''
             before=self.current();self.require_resolved_transaction(before)
             stage.require(before==candidate['expected_current'],'Installation changed since preparation')

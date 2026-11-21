@@ -67,58 +67,6 @@ class InstallTests(unittest.TestCase):
   for path in (self.store.root,self.store.root/'wallets',Path(candidate['cohort'])):
    context=deepcopy(self.context);context['protected_roots'].append(str(path))
    with self.assertRaisesRegex(ValueError,'Only selected immutable code'):install.CohortStore(self.store.root,context,'unused')
- def test_dashboard_preparation_waits_for_busy_installation(self):
-  import subprocess,threading,time
-  import horizon_update_cli as cli
-  cache=self.root/'download-cache'
-  store=self.store.root
-  ready,release=self.root/'lock-ready',self.root/'lock-release'
-  owner="""import sys,time
-from pathlib import Path
-sys.path.insert(0,sys.argv[1])
-from stage_component_bundle import owned_lock
-with owned_lock(Path(sys.argv[2])):
- Path(sys.argv[3]).touch()
- for _ in range(200):
-  if Path(sys.argv[4]).exists(): break
-  time.sleep(.025)
-"""
-  process=subprocess.Popen([sys.executable,'-B','-c',owner,str(P/'tools'),str(store),str(ready),str(release)])
-  original=(store/'current.json').read_bytes()
-  try:
-   for _ in range(160):
-    if ready.exists():break
-    if process.poll() is not None:self.fail("fixture writer exited before acquiring the lock")
-    time.sleep(.025)
-   self.assertTrue(ready.exists())
-   unblock=threading.Timer(.45,release.touch)
-   unblock.start()
-   try:
-    repository=dict(genesis_hash=self.context['genesis_hash'],compatibility_set=self.context['compatibility_set'],
-                    root='test fixture',root_sha256='*'*64,metadata_url='https://qa.test/meta/',targets_url='https://qa.test/targets/')
-    request=dict(schema='PGN_UPDATE_REQUEST_V1',action='prepare_install',context=self.context,
-                 cache=str(cache),selected=['cpu'],base_cohort=str(self.base),installation_store=str(store))
-    context, digest = stage.context_from_bytes(json.dumps(request['context'], sort_keys=True, separators=(',', ':')).encode())
-    staging = stage.init_cache(self.root/'canonical-cli-stage', context)
-    archive = self.root/'update.zip'
-    folder, plan = stage.stage_bundle(archive,stage.sha(archive.read_bytes()),context,digest,staging,['cpu'])
-    self.client.context, self.client.context_sha256 = context, digest
-    self.client.cache_cleanup_warning = ''
-    self.receipt.update(context_sha256=digest,stage=str(folder),manifest_sha256=plan['manifest_sha256'])
-    with patch.object(cli,'AuthenticatedUpdates',return_value=self.client) as client:
-     result=cli.run(request,repositories={'testnet':repository})
-     self.assertEqual(client.call_args.kwargs['cache_wait_seconds'],90)
-    self.assertTrue(release.exists())
-    self.assertTrue(result['publisher_authenticated'])
-    self.assertFalse(result['installation_performed'])
-    self.assertFalse(result['process_control_performed'])
-    self.assertEqual((store/'current.json').read_bytes(),original)
-   finally:
-    unblock.cancel()
-  finally:
-   release.touch()
-   process.wait(timeout=5)
-
  def second_generation(self):
   first=self.store.prepare(self.client,['cpu']);self.assertTrue(self.store.activate(first,lambda:True,lambda path:True,lambda *args:None))
   context=deepcopy(self.context)

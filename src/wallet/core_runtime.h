@@ -28,7 +28,6 @@ public:
  ~CoreRuntime() override;
  void launch();
  void reattach();
- void applyChainBootstrap(std::function<void(qint64,const QString&,bool)>);
  void stop();
  // Suspend background recovery before update code takes any early-return path.
  // This never stops or kills a process; stop() still uses verified native RPC.
@@ -60,7 +59,6 @@ public:
  void consoleRequest(const QString&,const QByteArray&,bool displayedWallet,std::function<void(QByteArray,QString)>);
  void readTicketPage(int offset,std::function<void(QJsonObject,QString)>);
  void readTicketDetails(const QString&,std::function<void(QJsonObject,QString)>);
- void readTicketNumber(const QString&,std::function<void(QJsonObject,QString)>);
  void readTicketAtlas(const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)>);
  void readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,std::function<void(QJsonObject,QString)>);
  void readBlockAtHeight(int,std::function<void(QJsonObject,QString)>);
@@ -68,7 +66,6 @@ public:
  void readAuditDetails(const QString&,std::function<void(QJsonObject,QString)>);
  void readAuditSnapshot(int offset,std::function<void(QJsonObject,QString)>);
  void readParticipantPage(int offset,std::function<void(QJsonObject,QString)>);
- void readNativeBlockStorage(const ChainObservation&,const QJsonObject&,std::function<void(QJsonObject,QString)>);
  void readNetworkMetrics(int spanSeconds,std::function<void(QJsonObject,QString)>);
  void readBlockDetails(const QString&,std::function<void(QJsonObject,QString)>);
  void readTransactionDetails(const QString& txid,const QString& blockHash,std::function<void(QJsonObject,QString)>);
@@ -133,8 +130,6 @@ private:
  void failStart(const QString&);
  bool recoverOwned();
  bool persistOwned();
- struct NativeStorageRead;
- void continueNativeBlockStorage(const std::shared_ptr<NativeStorageRead>&);
  void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={},CoreRpcChannel channel=CoreRpcChannel::General);
  void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel=CoreRpcChannel::General);
  void inspectRpc(const QString&,const QJsonArray&,std::function<void(CoreRpcResult)>,int timeoutMs=CoreInspectionTimeoutMs);

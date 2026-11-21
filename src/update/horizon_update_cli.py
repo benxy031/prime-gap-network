@@ -17,11 +17,11 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.21.35'
+VERSION='2026.11.18.32'
 
 
 def maintain_installation(cache,context,context_sha,result):
-    """Retire obsolete program cohorts during explicit storage cleanup."""
+    """Catch up old-helper installations on the next authenticated check."""
     root=cache.parent/'installation'
     if not root.exists():return result
     try:
@@ -82,8 +82,7 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
     selected=request['selected']
     stage.require(type(selected)is list and 1<=len(selected)<=4 and all(type(x)is str and x in stage.IDS for x in selected)and len(set(selected))==len(selected),'Choose one to four unique component IDs')
     stage.require(type(request['cache'])is str and Path(request['cache']).is_absolute(),'Absolute owned update-cache path required')
-    writer_wait=90 if action in ('prepare','prepare_install','install') else 0
-    client=AuthenticatedUpdates(Path(request['cache']),repository['root'].encode(),repository['root_sha256'],repository['metadata_url'],repository['targets_url'],context,context_sha,fetcher=fetcher,cache_wait_seconds=writer_wait)
+    client=AuthenticatedUpdates(Path(request['cache']),repository['root'].encode(),repository['root_sha256'],repository['metadata_url'],repository['targets_url'],context,context_sha,fetcher=fetcher)
     if action in ('inspect_storage','clean_storage'):
         # These operations need no Internet and claim no fresh publisher check.
         # The installed helper and its build-pinned context are still verified.
@@ -99,7 +98,7 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
         if action=='clean_storage':
             maintain_installation(client.cache,context,context_sha,result)
         return result
-    if action=='check':return client.refresh(selected)
+    if action=='check':return maintain_installation(client.cache,context,context_sha,client.refresh(selected))
     if action=='prepare':return client.prepare(selected)
     stage.require(all(type(request[k])is str and Path(request[k]).is_absolute()for k in ('base_cohort','installation_store')),'Absolute code/store paths required')
     store_path=Path(request['installation_store'])
@@ -114,13 +113,10 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             from horizon_linux_install import LinuxCohortLifecycle
             native_lifecycle=LinuxCohortLifecycle
         verify_running_base=lambda base:native_lifecycle.verify_running_base(store,base,request['activation'])
-    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),
-                            verify_running_base=verify_running_base,
-                            retain_download=action=='prepare_install',writer_wait=writer_wait)
+    candidate=store.prepare(client,selected,base_cohort=Path(request['base_cohort']),verify_running_base=verify_running_base,retain_download=action=='prepare_install')
     if action=='install':
         stage.require(context['platform'] in ('windows-x86_64','linux-x86_64'),'Native installation platform is unsupported')
-        native_install=lifecycle_factory is None
-        if native_install:
+        if lifecycle_factory is None:
             from horizon_runtime_preflight import candidate_runtime_preflight
             candidate_runtime_preflight(Path(candidate['cohort']))
             if context['platform']=='windows-x86_64':
@@ -139,13 +135,11 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
             return lifecycle.drain()
         def start(path):
             progress.report('startup',force=True)
-            if native_install:
-                return lifecycle.start_and_verify(path,expected_inventory_sha256=candidate['inventory_sha256'])
             return lifecycle.start_and_verify(path)
         def restore(*args):
             if lifecycle is not None:return lifecycle.restore_previous(*args)
         try:
-            committed=store.activate(candidate,drain,start,restore,writer_wait=writer_wait)
+            committed=store.activate(candidate,drain,start,restore)
             if committed:
                 try:progress.report('committed',completed=1,total=1,force=True)
                 except OSError:

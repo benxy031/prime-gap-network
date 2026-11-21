@@ -41,22 +41,6 @@ int main(int argc,char** argv){QCoreApplication app(argc,argv);
  readExplorerTransactionPage(ID,BLOCK,25,live,rpc,consume);before=calls;pending({},"Core RPC error (-32601): Method not found");need(calls==before&&!error.isEmpty(),"Legacy fallback silently returned first page for later offset");
  readExplorerBlockPage(BLOCK,25,live,rpc,consume);pending(blockPage(25),{});need(error.isEmpty()&&result==blockPage(25),"Block page lookup failed");
  readExplorerBlockPage(BLOCK,0,live,rpc,consume);pending({},"Core RPC error (-32601): Method not found");need(method=="getblock"&&params==QJsonArray{BLOCK,2},"Legacy native block fallback changed");pending(QJsonObject{{"hash",QString(64,'d')}},{});need(!error.isEmpty()&&result.isEmpty(),"Legacy foreign block accepted");
- const auto reply=[&](QJsonValue value,QString rpcError={}){auto next=std::move(pending);next(std::move(value),std::move(rpcError));};
- const auto atHeight=[&](){
-  result={};error.clear();
-  readExplorerBlockAtHeight(100,live,rpc,consume);
-  need(method=="getblockhash"&&params==QJsonArray{100},"Height lookup changed the requested height");
-  reply(BLOCK);
-  need(method=="getpgnexplorerview"&&params==QJsonArray{"block",BLOCK,"",0,25},"Height lookup lost the resolved block identity");
-  reply(blockPage(0));
-  need(result.isEmpty()&&error.isEmpty(),"The body was shown before the active height was rechecked");
-  need(method=="getblockhash"&&params==QJsonArray{100},"Height lookup skipped the active height recheck");
- };
- atHeight();reply(BLOCK);need(error.isEmpty()&&result==blockPage(0),"Stable height did not return the body");
- atHeight();reply(QString(64,'d'));need(error.contains("height changed")&&result.isEmpty(),"A body orphaned during lookup was returned by height");
- atHeight();reply({},"Block height out of range");need(error=="Block height out of range"&&result.isEmpty(),"Rollback below the requested height still returned the body");
- atHeight();current=false;reply(BLOCK);need(error.contains("connection changed")&&result.isEmpty(),"New Core epoch accepted the old height");current=true;
- before=calls;readExplorerBlockAtHeight(-1,live,rpc,consume);need(calls==before&&result.isEmpty()&&!error.isEmpty(),"Invalid height issued an RPC");
  if(argc>1){
   const QDir artifacts(QString::fromLocal8Bit(argv[1]));
   for(const QString name:{"large-block-projection.json","default-transaction-page.json"}){

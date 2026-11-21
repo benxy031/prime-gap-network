@@ -17,8 +17,7 @@ struct ComponentVersionsContext {
 ComponentVersionsContext walletComponentVersionsContext(const QString& productRoot,const QString& runtimeDirectory,bool testnet);
 ComponentVersionsContext refreshComponentVersionsContext(ComponentVersionsContext);
 QByteArray componentProfileIdentity(const ComponentVersionsContext&);
-enum class ComponentInventory { Files, Manifest };
-QJsonObject inspectLocalComponentVersions(const ComponentVersionsContext&,ComponentInventory mode=ComponentInventory::Files);
+QJsonObject inspectLocalComponentVersions(const ComponentVersionsContext&);
 class ComponentVersionsDialog final:public QDialog {
 public:
  explicit ComponentVersionsDialog(ComponentVersionsContext,QWidget* parent=nullptr);
@@ -42,7 +41,5 @@ private:
  pgn::update::ComponentUpdateService* service_{};pgn::update::ComponentUpdateDeployment deployment_;
  QJsonObject localSnapshot_,published_,preparedRequest_;QTimer* resultPoll_{};
  bool localBusy_{},busy_{},closing_{},installStarted_{},publishedFresh_{};
- QPointer<QFutureWatcher<QJsonObject>> preparationInventory_;
- void startPreparation(const QStringList& selected);
 };
 }

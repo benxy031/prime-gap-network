@@ -46,7 +46,6 @@
 #include "ui/render/horizon_primary_navigation.h"
 #include "ui/archive_browser.h"
 #include "ui/wallet_core_view.h"
-#include "ui/network_footer_storage.h"
 #include "wallet/core_link_state.h"
 #include "wallet/runtime_paths.h"
 #include "ui/component_status_strip.h"
@@ -460,33 +459,24 @@ int main(int argc,char** argv) {
      condition==Condition::PeersUnknown?QStringLiteral("PEER STATUS UNAVAILABLE"):
      condition==Condition::SyncUnknown?QStringLiteral("SYNC UNKNOWN"):
      syncing?QStringLiteral("SYNCING"):
-     idleChain?QStringLiteral("NO RECENT BLOCK"):QStringLiteral("UP TO DATE");
+     idleChain?QStringLiteral("CHAIN IDLE"):QStringLiteral("UP TO DATE");
    const bool attention=condition==Condition::NoPeers||condition==Condition::PeersUnknown||
      condition==Condition::SyncUnknown||idleChain;
    const auto networkStyle=QString("QLabel{color:%1;font:12px Consolas;padding:3px 8px;}").arg(attention?"#ffbd69":syncing?"#8dccff":"#69efc5");
    if(networkSummary->styleSheet()!=networkStyle)networkSummary->setStyleSheet(networkStyle);
    const auto peersLabel=peers+QString(anchor->peers&&*anchor->peers<=1?" PEER":" PEERS");
    networkSummary->setBusy(syncing);
-   const bool headersAhead=anchor->headerHeight&&*anchor->headerHeight>anchor->height;
-   const auto coordinationHeight=headersAhead
-     ?QString("%1 / %2").arg(anchor->height).arg(*anchor->headerHeight)
-     :QString::number(anchor->height);
-   const auto storage=inspectWallet?inspectWallet->property("pgn_native_block_storage").toJsonObject():QJsonObject{};
-   const auto coordinationSize=pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"coordination_bytes");
-   if(testnetMode){
-    const auto gold=inspectWallet?inspectWallet->property("pgn_network_gold_blocks"):QVariant{};
-    const auto goldCount=gold.isValid()?QString::number(gold.toLongLong()):QStringLiteral("—");
-    networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
-      .arg(goldCount+pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"gold_bytes"),
-           coordinationHeight+coordinationSize,peersLabel,state));
+   const bool localLedgerBehind=condition==Condition::NoPeers&&anchor->headerHeight&&*anchor->headerHeight>anchor->height;
+   if(localLedgerBehind){
+    networkSummary->setText(QString("%1 · LEDGER %2 / %3 · %4")
+      .arg(testnetMode?QStringLiteral("TESTNET"):QStringLiteral("NETWORK"))
+      .arg(anchor->height).arg(*anchor->headerHeight).arg(state));
    }else{
-    networkSummary->setText(QString("NETWORK · COORDINATION BLOCKS %1 · %2 · %3")
-      .arg(coordinationHeight+coordinationSize,peersLabel,state));
+    if(testnetMode)networkSummary->setText(QString("TESTNET · GOLD BLOCKS — · %1 · %2").arg(peersLabel,state));
+    else networkSummary->setText(QString("NETWORK · HEIGHT %1 · %2 · %3").arg(anchor->height).arg(peersLabel,state));
+    if(testnetMode&&inspectWallet&&inspectWallet->property("pgn_network_gold_blocks").isValid())networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · %2 · %3").arg(inspectWallet->property("pgn_network_gold_blocks").toLongLong()).arg(peersLabel,state));
    }
-   const auto verifiedTip=QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4")
-      .arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height);
-   const auto idleHint=QStringLiteral("Core is connected to a peer. The last verified block is older than the chain activity threshold.\n\n");
-   networkSummary->setToolTip(idleChain?idleHint+verifiedTip:verifiedTip);
+   networkSummary->setToolTip(QString("Verified Core observation: %1\nChain: %2\nTip: %3\nTechnical coordination ledger height: %4").arg(anchor->observedUtc.toUTC().toString(Qt::ISODateWithMs),anchor->genesis,anchor->tipHash).arg(anchor->height));
   };
   auto* networkClock=new QTimer(&window);networkClock->setInterval(1000);QObject::connect(networkClock,&QTimer::timeout,&window,displayNetwork);networkClock->start();
  walletButton->setToolTip("Native PGN wallet integrated here, with verified chain identity and protected local keys.");
@@ -515,7 +505,7 @@ int main(int argc,char** argv) {
  pgn::ui::selectNativeGraphAxis(canvas,"length");
  QWidget* community=nullptr;QTableWidget* testnetTickets=nullptr;
  pgn::ui::NetworkWorkView* networkWork=nullptr;pgn::ui::AuditAnimationView* auditAnimation=nullptr;
- if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});networkWork->setTicketNumberReader([&inspectWallet](const QString& number,auto done){pgn::ui::readWalletTicketNumber(inspectWallet,number,std::move(done));});community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
+ if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
 #ifdef Q_OS_WIN
  if(networkWork){auto* animation=new pgn::ui::AuditAnimationView([&inspectWallet](qint64 height,const QString& hash,const QJsonArray& watched,auto done){pgn::ui::readWalletAuditActivity(inspectWallet,height,hash,watched,std::move(done));},[networkWork](const QJsonArray& rows,QWidget* surface){return networkWork->auditProjection(rows,surface);});networkWork->onAtlasProjectionChanged=[animation]{animation->reproject();};animation->onAtlasCommand=[networkWork](const QJsonObject& command){networkWork->atlasCommand(command);};networkWork->setAuditAnimation(animation);auditAnimation=animation;}
 #endif
@@ -648,10 +638,7 @@ int main(int argc,char** argv) {
   pgn::ui::requestWalletDisplayLink(inspectWallet,"validateaddress",{address},[displayConnection,target](QJsonValue value,QString error){if(!target||*displayConnection!=target)return;const auto object=value.toObject();if(error.isEmpty()&&object["isvalid"]==true)target->open(object["scriptPubKey"].toString());else target->open();});
  };
  socialServices.sendChat=[socialConnection](auto request,auto done){if(*socialConnection)(*socialConnection)->services().sendChat(std::move(request),std::move(done));else done({request.identity,request.channel,request.requestId,pgn::social::SendOutcome::Uncertain,{},"Wallet connection changed; draft retained."});};
- const auto socialRoot=pgn::app::mutableDataRoot(root)+"/social";
- auto* social=new pgn::ui::SocialView(socialRoot+"/drafts.json",std::move(socialServices));
- social->setLeaderboardCacheScope(socialRoot+"/leaderboard",installedGenesis);
- major->addWidget(social);
+ auto* social=new pgn::ui::SocialView(pgn::app::mutableDataRoot(root)+"/social/drafts.json",std::move(socialServices));major->addWidget(social);
  auto socialBinding=std::make_shared<QString>();auto socialPreparing=std::make_shared<bool>(false);auto socialEpoch=std::make_shared<quint64>(0);
  auto syncSocial=std::make_shared<std::function<void()>>();const QPointer<pgn::ui::SocialView> socialWeak(social);
  *syncSocial=[socialConnection,displayConnection,accessConnection,socialBinding,socialPreparing,socialEpoch,socialWeak,inspectWallet,root,testnetMode,toolsButton]{
@@ -731,9 +718,9 @@ int main(int argc,char** argv) {
    ".exe"
 #endif
    ;
-  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkSummary,networkObservation,&window]{
+  auto* diagnostics=pgn::ui::createDiagnosticCaptureView(exporter,[canvas,inspectWallet,networkObservation,&window]{
    const auto select=[](const QJsonObject& source,std::initializer_list<const char*> keys){QJsonObject value;for(const auto* key:keys)if(source.contains(key))value.insert(key,source.value(key));return value;};
-   QJsonObject network{{"status",networkSummary->text()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
+   QJsonObject network{{"status",canvas->property("pgn_global_network_status").toString()},{"core_state",inspectWallet->property("pgn_core_link_state").toString()}};
    if(*networkObservation){
     const auto& observation=**networkObservation;
     network.insert("height",observation.height);network.insert("genesis",observation.genesis);
@@ -741,8 +728,6 @@ int main(int argc,char** argv) {
     network.insert("synchronizing",observation.synchronizing?QJsonValue(*observation.synchronizing):QJsonValue{});
     network.insert("verified_utc",observation.observedUtc.toString(Qt::ISODateWithMs));
     if(observation.headerHeight)network.insert("headers",*observation.headerHeight);
-    const auto peer=inspectWallet->property("pgn_core_native_peer_sync").toJsonObject();
-    if(!peer.isEmpty())network.insert("native_peer",peer);
     if(observation.coreInitialBlockDownload)network.insert("initial_block_download",*observation.coreInitialBlockDownload);
     if(observation.tipTime)network.insert("tip_unix_time",*observation.tipTime);
    }
@@ -780,7 +765,7 @@ int main(int argc,char** argv) {
       {"application_data",window.property("pgn_update_data_root").toString()}};
    return QJsonObject{{"startup",startupHistory},{"core_first",linkHistory("pgn_core_first_transitions")},
      {"core_link_history",linkHistory("pgn_core_link_transitions")},{"selector_outcome",selectorStatus},
-     {"update_history",pgn::update::componentUpdateDiagnosticHistory(window.property("pgn_update_genesis").toString())},
+     {"update_history",pgn::update::componentUpdateDiagnosticHistory()},
      {"core_rpc_history",pgn::ui::walletCoreRpcDiagnosticHistory(inspectWallet)},
      {"observed_core_pid",inspectWallet->property("pgn_wallet_embedded_pid").toLongLong()},{"local_paths",locations}};
   });
@@ -1339,20 +1324,12 @@ int main(int argc,char** argv) {
     QObject::connect(stream,&QProcess::readyReadStandardOutput,&window,[stream,buffer,profile,cpuFleet,miningResults,records,testnetSummary,testnetProgress,pgn,miningToggle,networkMode,stopRequested,canvas,pendingCard,presentationSequence,ticketProgressRail,gapRates,connectionRecovery,status,toolsButton,processDiagnostics,miningStartupNotice]{
     const auto received=stream->readAllStandardOutput();canvas->setProperty("pgn_worker_stream_bytes",canvas->property("pgn_worker_stream_bytes").toLongLong()+received.size());buffer->append(received);if(buffer->size()>4194304){buffer->clear();testnetSummary->setText("Worker presentation exceeded its admitted size");return;}
     while(buffer->contains('\n')){const auto newline=buffer->indexOf('\n');const auto line=buffer->left(newline);buffer->remove(0,newline+1);auto packet=QJsonDocument::fromJson(line).object();if(pgn::ui::presentPublicProfileStatus(toolsButton,packet))continue;
-     pgn::ui::presentPublicMiningAccess(toolsButton,packet.value("network_admission").toObject());if(cpuFleet->packet(stream,packet))continue;
-     const auto reportedPhase=packet.value("phase").toString();
-     const auto staleness=packet.value("source_stale");
-     const bool sourceFresh=packet.value("schema")=="PGN_HORIZON_MINING_VIEW_V1"&&staleness.isBool()&&!staleness.toBool();
-     const bool currentNotice=packet.value("schema")=="PGN_HORIZON_MINING_VIEW_UNAVAILABLE_V1"&&
-        packet.value("message").isString()&&!packet.value("message").toString().isEmpty();
-     connectionRecovery->phase(reportedPhase,sourceFresh,currentNotice);
-     canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);
-     cpuFleet->minerReady(stream);
-     const auto controlPhase=pgn::mining::networkControlPhase(reportedPhase.toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
-     if(connectionRecovery->waitingForLiveData()&&!sourceFresh&&!currentNotice&&!controlPhase.acknowledgeOff)continue;
-     processDiagnostics->packet(packet);
-     canvas->setProperty("pgn_worker_stream_phase",reportedPhase);canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
+     pgn::ui::presentPublicMiningAccess(toolsButton,packet.value("network_admission").toObject());if(cpuFleet->packet(stream,packet))continue;processDiagnostics->packet(packet);cpuFleet->minerReady(stream);
+     canvas->setProperty("pgn_worker_stream_packets",canvas->property("pgn_worker_stream_packets").toLongLong()+1);canvas->setProperty("pgn_worker_stream_phase",packet.value("phase").toString());canvas->setProperty("pgn_worker_stream_notice",packet.value("message").toString().left(400));
      {auto intents=canvas->property("pgn_update_gpu_intents").toJsonObject();const auto device=profile.value("gpu_uuid").toString();auto entry=intents.value(device).toObject();entry.insert("phase",packet.value("phase"));intents.insert(device,entry);canvas->setProperty("pgn_update_gpu_intents",intents);}
+     const bool sourceFresh=packet.value("source_stale").isBool()&&!packet.value("source_stale").toBool();
+     connectionRecovery->phase(packet.value("phase").toString(),sourceFresh);
+     const auto controlPhase=pgn::mining::networkControlPhase(packet.value("phase").toString().toStdString(),connectionRecovery->wanted(),connectionRecovery->needsAttention(),sourceFresh);
      if(controlPhase.suppressPresentation)continue;
      const bool showTicket=ticketProgressRail->workSource()=="GPU";
      if(packet.value("schema")!="PGN_HORIZON_MINING_VIEW_V1"){auto phaseFrame=canvas->property("pgn_network_ticket_frame").toJsonObject();phaseFrame.insert("phase",packet.value("phase").toString("Starting"));phaseFrame.insert("message",packet.value("message"));phaseFrame=pgn::ui::currentAssignmentPresentation(phaseFrame);canvas->setProperty("pgn_network_ticket_frame",phaseFrame);ticketProgressRail->present(phaseFrame);if(controlPhase.acknowledgeOff){*stopRequested=false;const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);if(!pendingCard->isEmpty()&&pendingCard->at(2)=="off"){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),true,"GPU released after checkpoint");pendingCard->clear();}}if(showTicket)testnetSummary->setText(packet.value("message").toString("Starting · waiting for the first coherent worker checkpoint"));if(packet.value("phase")=="Needs attention"){const QSignalBlocker block(miningToggle);miningToggle->setChecked(false);miningToggle->setEnabled(true);miningToggle->setText("Start mining");*stopRequested=false;if(!pendingCard->isEmpty()){pgn::ui::resolveDeviceControl(canvas,pendingCard->at(0),pendingCard->at(1),false,packet.value("message").toString());pendingCard->clear();}}continue;}

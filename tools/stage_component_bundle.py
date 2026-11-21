@@ -223,8 +223,8 @@ def _cache(path, context):
 
 
 @contextmanager
-def owned_lock(cache, *, wait_seconds=0):
-    """One OS writer lock, with an optional bounded wait for an active owner."""
+def owned_lock(cache):
+    """One nonblocking OS writer lock, automatically released on process death."""
     lock = _plain_chain(Path(cache) / '.writer.lock')
     with lock.open('a+b') as stream:
         stream.seek(0, os.SEEK_END)
@@ -233,25 +233,10 @@ def owned_lock(cache, *, wait_seconds=0):
         stream.seek(0)
         if os.name == 'nt':
             import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
-        deadline = time.monotonic() + wait_seconds
-        while True:
-            try:
-                if os.name == 'nt':
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError as error:
-                if error.errno not in (errno.EACCES, errno.EAGAIN):
-                    raise
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    if wait_seconds:
-                        raise TimeoutError("Another update still owns the installation or download cache") from error
-                    raise
-                time.sleep(min(0.2, left))
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             yield
         finally:

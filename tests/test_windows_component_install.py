@@ -68,28 +68,6 @@ class WindowsProfileTests(unittest.TestCase):
    lifecycle.restore_previous(self.fixture.base,candidate)
    self.assertEqual({p:p.read_bytes()for p in self.runtime.iterdir()},self.backup)
   finally:lifecycle.close()
- def test_managed_activation_reuses_base_and_keeps_full_final_verification(self):
-  lifecycle=self.lifecycle()
-  path=Path(self.candidate['cohort'])
-  expected=self.candidate['inventory_sha256']
-  core=path/'Core/pgn-core.exe'
-  stock=core.read_bytes()
-  try:
-   with patch.object(cohort,'inventory',wraps=cohort.inventory) as scan:
-    lifecycle.rebind_profiles(path,expected_inventory_sha256=expected)
-    scan.assert_not_called()
-    core.write_bytes(stock[:-1]+bytes([stock[-1]^1]))
-    with patch.object(cohort.subprocess,'Popen') as run:
-     with self.assertRaises(ValueError):
-      lifecycle.launch(path,expected_inventory_sha256=expected)
-     run.assert_not_called()
-    scan.assert_called_once_with(path)
-   lifecycle.restore_previous(self.fixture.base,path)
-   self.assertEqual({p:p.read_bytes()for p in self.runtime.iterdir()},self.backup)
-  finally:
-   core.write_bytes(stock)
-   lifecycle.close()
-
  def test_foreign_ui_data_root_is_refused_before_profile_changes(self):
   self.state['pgn_update_data_root']=str(self.fixture.root/'another-wallet')
   with self.assertRaisesRegex(ValueError,'actual owned UI'):self.lifecycle()

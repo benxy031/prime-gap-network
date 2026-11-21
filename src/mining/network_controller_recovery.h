@@ -43,11 +43,7 @@ public:
  }
  void intent(bool on){managed_=true;wanted_=on;terminal_=false;failures_=0;retry_.stop();}
  void launching(){managed_=true;retry_.stop();silent_=false;lastPacket_.start();freshness_.start();}
- void phase(const QString& phase,bool fresh,bool currentNotice=false){
-  // A phase notice describes current controller activity without authorizing
-  // live device rates. A cached telemetry frame cannot prove either.
-  if(fresh||currentNotice){silent_=false;lastPacket_.start();}
-  if(phase=="Needs attention"){terminal_=true;retry_.stop();}else if(fresh&&(phase=="Searching"||phase=="Paused")){failures_=0;
+ void phase(const QString& phase,bool fresh){silent_=false;lastPacket_.start();if(phase=="Needs attention"){terminal_=true;retry_.stop();}else if(fresh&&(phase=="Searching"||phase=="Paused")){failures_=0;
    // An authenticated, fresh running frame is evidence that the same normal
    // controller recovered. Keep OFF authoritative and never clear a failure
    // from a stale frame, a phase-only notice or an old pause acknowledgement.
@@ -63,7 +59,6 @@ public:
  }
  bool needsAttention()const{return terminal_;}
  bool wanted()const{return wanted_;}
- bool waitingForLiveData()const{return silent_&&!terminal_;}
  bool retryPending()const{return retry_.isActive();}
  void close(){managed_=false;terminal_=true;retry_.stop();freshness_.stop();}
 };

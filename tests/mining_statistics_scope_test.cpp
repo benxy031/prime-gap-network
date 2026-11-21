@@ -19,13 +19,11 @@ static QJsonObject packet(int sequence,int count){
 }
 int main(int argc,char** argv){
  QApplication app(argc,argv);QCoreApplication::setOrganizationName("PGN-QA");QCoreApplication::setApplicationName("statistics-scope155");QStandardPaths::setTestModeEnabled(true);QTemporaryDir dir;if(!dir.isValid())return 2;QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,dir.path());
- QSettings().setValue("mining/statisticsScope","history");
- QSettings().setValue("mining/summaryHistory",true);
  try{
   auto view=std::unique_ptr<QWidget>(pgn::ui::createMiningResultsView(dir.path()));view->resize(1366,700);view->show();
   pgn::ui::presentMiningTicketData(view.get(),packet(1,3));pgn::ui::presentMiningTicketData(view.get(),packet(2,5));settle(view.get());
   auto* gaps=view->findChild<QTableWidget*>("pgn-results-gap-statistics");auto* best=view->findChild<QTableWidget*>("pgn-results-best");auto* summary=view->findChild<QWidget*>("pgn-session-statistics");need(gaps&&best&&summary,"Actual statistics widgets absent");
-  auto* session=view->findChild<QPushButton*>("pgn-summary-session");need(session&&session->isChecked(),"Session must open selected despite a saved History scope");
+  auto* session=view->findChild<QPushButton*>("pgn-summary-session");need(session,"Session button absent");session->click();settle(view.get());
   need(gaps->rowCount()>0&&gaps->item(0,1)->text()=="8","Session selected but histogram still shows only the current ticket");
   need(summary->property("pgn_summary_statistics").toJsonObject().value("ticket_count").toString()=="2","Summary and histogram do not describe the same two tickets");
   auto* cell=best->item(0,0);const auto identity=cell->data(Qt::UserRole);best->setCurrentCell(0,0);auto* ticket=view->findChild<QPushButton*>("pgn-summary-ticket");auto* history=view->findChild<QPushButton*>("pgn-summary-history");need(ticket&&history,"Explicit ticket/history scopes absent");
@@ -35,11 +33,7 @@ int main(int argc,char** argv){
   need(best->item(0,0)==cell&&cell->data(Qt::UserRole)==identity&&best->currentItem()==cell,"Statistics scope changed the live Best model or selection");
   for(auto size:{QSize(800,320),QSize(1366,700),QSize(1920,900)}){view->resize(size);settle(view.get());for(auto* button:{ticket,session,history})need(button->isVisible()&&button->width()>20,"A statistics scope button disappeared");}
   view.reset();view.reset(pgn::ui::createMiningResultsView(dir.path()));view->resize(1366,700);view->show();pgn::ui::presentMiningTicketData(view.get(),packet(3,7));settle(view.get());
-  gaps=view->findChild<QTableWidget*>("pgn-results-gap-statistics");
-  session=view->findChild<QPushButton*>("pgn-summary-session");
-  need(session->isChecked()&&gaps->item(0,1)->text()=="7","Restart must open the current Session");
-  history=view->findChild<QPushButton*>("pgn-summary-history");history->click();settle(view.get());
-  need(gaps->item(0,1)->text()=="15","Selecting History after restart must recover all three ticket counts");
+  gaps=view->findChild<QTableWidget*>("pgn-results-gap-statistics");need(gaps->item(0,1)->text()=="15","Persisted history scope does not restore all three ticket counts");
   session=view->findChild<QPushButton*>("pgn-summary-session");session->click();settle(view.get());need(gaps->item(0,1)->text()=="7","A fresh session included an earlier process session");
   // A native engine update changes the source directory and its stream hash.
   // The legacy History archive must retain 15 and accept new stream's 11 once.
@@ -58,10 +52,7 @@ int main(int argc,char** argv){
   auto numeric=summary->property("pgn_summary_statistics").toJsonObject();need(numeric.value("positions").toString()=="2000"&&numeric.value("tests").toString()=="200","Ticket numeric values did not advance");need(numeric.value("completed_tickets").toString()=="1","A complete calculation was lost while its report was submitting");
   session->click();settle(view.get());need(gaps->item(0,1)->text()=="20"&&summary->property("pgn_summary_statistics").toJsonObject().value("positions").toString()=="3000","Session failed to advance after a source transition");
   history->click();settle(view.get());need(gaps->item(0,1)->text()=="28"&&summary->property("pgn_summary_statistics").toJsonObject().value("positions").toString()=="5000","History numeric values did not advance");
-  view.reset();view.reset(pgn::ui::createMiningResultsView(dir.path()));view->resize(1366,700);view->show();pgn::ui::presentMiningTicketData(view.get(),progress);settle(view.get());gaps=view->findChild<QTableWidget*>("pgn-results-gap-statistics");
-  need(view->findChild<QPushButton*>("pgn-summary-session")->isChecked(),"Restart restored History instead of Session");
-  view->findChild<QPushButton*>("pgn-summary-history")->click();settle(view.get());
-  need(gaps->item(0,1)->text()=="28","Restart duplicated a migrated source prefix");
+  view.reset();view.reset(pgn::ui::createMiningResultsView(dir.path()));view->resize(1366,700);view->show();pgn::ui::presentMiningTicketData(view.get(),progress);settle(view.get());gaps=view->findChild<QTableWidget*>("pgn-results-gap-statistics");need(gaps->item(0,1)->text()=="28","Restart duplicated a migrated source prefix");
   if(argc>1)need(view->grab().save(QString::fromLocal8Bit(argv[1])),"Scope screenshot could not be saved");
   std::cout<<"PASS actual Qt: ticket/session/history distributions agree with summary; Best identity retained; history across restart and fresh-session separation; three sizes\n";
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

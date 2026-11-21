@@ -37,13 +37,5 @@ int main(int argc,char** argv){
  anchors[1](anchor,{});if(!require(observed.startsWith("Newest"),"Newer response accepted"))return 1;
  anchors[0](anchor,{});if(!require(observed.startsWith("Newest"),"Late older response cannot undo the name"))return 1;
  if(!require(completions==9,"One completion per read"))return 1;
- mode=Linked;label="New live label";read();
- if(!require(observed.startsWith("Newest")&&completions==10&&anchors.size()==3,"Cached name displayed before held Core reply"))return 1;
- read();
- if(!require(completions==11&&anchors.size()==3,"Warm refresh is coalesced while Core is busy"))return 1;
- anchors[2](anchor,{});
- if(!require(completions==11,"Background refresh does not complete the same read twice"))return 1;
- held=false;read();
- if(!require(observed.startsWith("New live label"),"Latest verified name appears on the next refresh"))return 1;
  std::cout<<"PASS stable names through loading/error, canonical rename/withdrawal, identity separation, response ordering\n";
 }

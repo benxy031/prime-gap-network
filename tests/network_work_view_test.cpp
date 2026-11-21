@@ -3,18 +3,9 @@
 #include "ui/render/horizon_workspace_style.h"
 #include <QDir>
 #include <iostream>
-#include <QEventLoop>
-#include <vector>
 #include <stdexcept>
 #include <QTreeWidgetItemIterator>
 using pgn::ui::NetworkWorkView;
-
-static void waitForSearch(){
-    QEventLoop loop;
-    QTimer::singleShot(pgn::ui::WorkTicketSearchDelayMs + 120,&loop,&QEventLoop::quit);
-    loop.exec();
-}
-
 int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn::ui::dataPanelStyle());int checks=0;const auto need=[&](bool b,const char* why){++checks;if(!b)throw std::runtime_error(why);};try{
  QJsonArray leases,reports,audits;for(int i=1;i<=100;++i){const auto id=QString::number(i,16).rightJustified(64,'0');leases.append(QJsonObject{{"request",id},{"ticket_number",QString::number(i)},{"start","150000000000000000000"},{"end","150000200000000000000"},{"state","reported"},{"issued",i},{"report_root",QString(64,'c')}});reports.append(QJsonObject{{"request_id",id},{"report_root",QString(64,'c')},{"block",QString(64,'d')},{"height",120}});audits.append(QJsonObject{{"request_id",id},{"jobs",QJsonArray{QJsonObject{{"slot",0},{"attempt",0},{"state","assigned"}}}}});}
  QJsonObject page{{"leases",leases},{"reports",reports},{"audits",audits},{"genesis",QString(64,'a')},{"bestblockhash",QString(64,'b')},{"height",150},{"active_lease_count",100}};int pageReads=0,detailReads=0;QString error;
@@ -182,58 +173,5 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
  need(covLabel->text()=="Scientific coverage unavailable","new branch never keeps stale coverage or invents zero");
  covFrame.remove("scientific_coverage");covRefresh->click();app.processEvents();
  need(covLabel->text()=="Scientific coverage unavailable","older Core without optional summary keeps an honest unavailable state");
-
- {
-  auto workPage=page;
-  workPage.insert("active_lease_count",1405);
-  NetworkWorkView searchView([&](int,NetworkWorkView::Result done){done(workPage,{});},
-     [](const QString&,NetworkWorkView::Result done){done({},"Fixture has no additional evidence");});
-  struct Lookup { QString number; NetworkWorkView::Result complete; };
-  std::vector<Lookup> lookups;
-  searchView.setTicketNumberReader([&](const QString& number,NetworkWorkView::Result reply){
-    lookups.push_back({number,std::move(reply)});
-  });
-  searchView.resize(1280,800);searchView.show();app.processEvents();
-  auto* input=searchView.findChild<QLineEdit*>();
-  auto* results=searchView.findChild<QTableWidget*>("pgn-network-ticket-table");
-  auto* loading=searchView.findChild<QWidget*>("pgn-network-ticket-search-indicator");
-  need(input&&results&&loading&&!loading->isVisible(),"search starts settled");
-  const auto width=input->width();
-  input->setText("ticket 33");
-  need(results->rowCount()==1&&results->item(0,0)->text()=="Ticket 33"&&lookups.empty(),"local exact result is synchronous");
-  need(!loading->isVisible(),"cached page does not trigger a loading indicator");
-  input->setText("321");
-  need(loading->isVisible(),"remote search shows loading synchronously");
-  input->setText("322");input->setText("323");
-  waitForSearch();
-  need(input->width()==width,"loading does not move the search field");
-  need(lookups.size()==1&&lookups[0].number=="323","burst sends only the last exact query");
-  input->setText("324");
-  waitForSearch();
-  need(lookups.size()==2&&lookups[1].number=="324","new query may finish without waiting for an old reply");
-  auto remoteResult=[&](const QString& number){
-    auto result=workPage;
-    auto lease=leases.first().toObject();
-    lease.insert("ticket_number",number);
-    result.insert("leases",QJsonArray{lease});
-    return result;
-  };
-  lookups[0].complete(remoteResult("323"),{});
-  need(loading->isVisible()&&results->rowCount()==0,"stale response keeps the latest indicator and table");
-  lookups[1].complete(remoteResult("324"),{});
-  need(!loading->isVisible()&&results->rowCount()==1&&results->item(0,0)->text()=="Ticket 324","current result clears the indicator");
-  input->setText("ticket 33");
-  auto visibleLeases=workPage.value("leases").toArray();visibleLeases.removeAt(32);
-  workPage.insert("leases",visibleLeases);
-  workPage.insert("bestblockhash",QString(64,'8'));
-  for(auto* button:searchView.findChildren<QPushButton*>())if(button->text()=="Refresh work")button->click();
-  need(loading->isVisible(),"ticket leaving a refreshed page triggers an exact lookup");
-  waitForSearch();
-  need(lookups.size()==3&&lookups[2].number=="33","page replacement retains exact search semantics");
-  lookups[2].complete(remoteResult("33"),{});
-  need(!loading->isVisible()&&results->rowCount()==1&&results->item(0,0)->text()=="Ticket 33","page move still returns the same ticket");
-  input->setText("ticket");
-  need(results->rowCount()==99&&!loading->isVisible(),"local text filter remains synchronous");
- }
  std::cout<<"PASS "<<checks<<" real NetworkWorkView checks;completepage100selections/0detailRPC,partialpageboundedprefetch/exactfallback,stable row+detail identities across advancing anchors,real audit delta,selection and transport recovery,distinct95bitbounds/sharedauditquantity,responsivecompactrows\n";return 0;
  }catch(const std::exception& e){std::cerr<<"FAIL after "<<checks<<": "<<e.what()<<'\n';return 1;}}

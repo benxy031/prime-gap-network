@@ -5,8 +5,6 @@
 #include <QPushButton>
 #include <deque>
 #include <iostream>
-#include <QEventLoop>
-#include <vector>
 #include <stdexcept>
 
 static void require(bool value, const char* what) {
@@ -28,13 +26,6 @@ static QJsonObject page(int first, int count) {
     return {{"reports",reports},{"audits",audits},{"height",500},
         {"tip",QString(64,'d')},{"observed_utc","2026-11-01T15:00:00.000Z"}};
 }
-
-static void waitForSearch(){
-    QEventLoop loop;
-    QTimer::singleShot(pgn::ui::WorkTicketSearchDelayMs + 120,&loop,&QEventLoop::quit);
-    loop.exec();
-}
-
 int main(int argc, char** argv) {
     QApplication app(argc,argv);
     QFont fixtureFont("Segoe UI");fixtureFont.setPixelSize(13);app.setFont(fixtureFont);
@@ -45,9 +36,7 @@ int main(int argc, char** argv) {
     View view(View::PageReader{[&](int offset, View::Result reply) {pending.push_back({offset,std::move(reply)});}});
     view.resize(1100,700); view.show(); app.processEvents();
     auto answer=[&](int offset,QJsonObject snapshot,QString error={}) {
-        if(pending.empty()||pending.front().offset!=offset)
-            throw std::runtime_error("Wrong requested page: expected "+std::to_string(offset)+
-                ", queued "+(pending.empty()?std::string("none"):std::to_string(pending.front().offset)));
+        require(!pending.empty() && pending.front().offset==offset,"Wrong requested page");
         auto callback=std::move(pending.front().reply);pending.pop_front();callback(snapshot,error);app.processEvents();
     };
     auto* table=view.findChild<QTableWidget*>("pgn-audit-report-table");
@@ -56,19 +45,6 @@ int main(int argc, char** argv) {
     auto* next=view.findChild<QPushButton*>("pgn-audit-next");
     auto* previous=view.findChild<QPushButton*>("pgn-audit-previous");
     auto snapshot=page(1,100);answer(0,snapshot);
-    if(argc==2&&QString::fromLocal8Bit(argv[1])=="--sorted-only"){
-    table->sortItems(1,Qt::DescendingOrder);
-    app.processEvents();
-    require(table->item(0,0)->data(Qt::UserRole).toString()==report(100).value("request_id").toString(),"Fixture must reverse the original report order");
-    table->setCurrentCell(0,0);table->selectRow(0);app.processEvents();
-    require(view.property("pgn_audit_selected_request")==table->item(0,0)->data(Qt::UserRole),"Sorted audit selection points to another request");
-
-
-
-        std::cout<<"PASS sorted clicks use the displayed report identity and its own audit details\n";
-        return 0;
-    }
-
     require(table->rowCount()==100,"Initial page missing");
     require(table->item(0,2)->text()=="Assigned"&&table->item(0,2)->foreground().color()==pgn::ui::ticketStagePresentation("audits_assigned").color&&!table->item(0,2)->icon().isNull(),"Assigned audit lacks persistent color/icon");
     require(table->item(0,3)->foreground().color()==pgn::ui::ticketStagePresentation("pending_audits").color,"Missing auditor must remain awaiting");
@@ -145,43 +121,5 @@ int main(int argc, char** argv) {
     View::Result detached;
     auto* closing=new View(View::PageReader{[&](int,View::Result consume){detached=std::move(consume);}});
     closing->show();app.processEvents();delete closing;detached(page(1,1),{});
-
-    {
-        struct Lookup { QString number; View::Result complete; };
-        std::deque<Lookup> lookups;
-        int pageReads=0;
-        View searchView(View::PageReader{[&](int,View::Result done){++pageReads;done(page(1,2),{});}});
-        searchView.setTicketNumberReader([&](const QString& number,View::Result reply){
-            lookups.push_back({number,std::move(reply)});
-        });
-        searchView.resize(1100,700);searchView.show();app.processEvents();
-        auto* input=searchView.findChild<QLineEdit*>("pgn-audit-ticket-search");
-        auto* results=searchView.findChild<QTableWidget*>("pgn-audit-report-table");
-        auto* loading=searchView.findChild<QWidget*>("pgn-audit-ticket-search-indicator");
-        require(input&&input->isVisible()&&results&&loading&&!loading->isVisible(),"Audit search starts settled");
-        const auto width=input->width();
-        input->setText("101");
-        require(loading->isVisible(),"Audit search shows loading synchronously");
-        input->setText("102");input->setText("103");
-        waitForSearch();
-        require(input->width()==width,"Audit search field stays fixed while waiting");
-        require(lookups.size()==1&&lookups.front().number=="103","Audit burst sends only the final exact number");
-        input->setText("104");waitForSearch();
-        auto first=std::move(lookups.front().complete);lookups.pop_front();
-        first(page(103,1),{});
-        require(loading->isVisible()&&results->rowCount()==2,"Stale audit reply keeps the current indicator");
-        require(lookups.size()==1&&lookups.front().number=="104","Latest audit starts after the stale result settles");
-        auto latest=std::move(lookups.front().complete);lookups.pop_front();
-        latest(page(104,1),{});
-        require(!loading->isVisible()&&results->rowCount()==1&&results->item(0,0)->text()=="Ticket 104",
-                "Audit search renders only the exact latest row");
-        input->setText("107");waitForSearch();
-        input->setText("invalid text");
-        auto invalidated=std::move(lookups.front().complete);lookups.pop_front();
-        invalidated(page(107,1),{});
-        require(!loading->isVisible()&&results->item(0,0)->text()=="Ticket 104","Invalid input prevents stale audit rendering");
-        input->clear();waitForSearch();
-        require(pageReads==2&&results->rowCount()==2&&!loading->isVisible(),"Clearing search restores the audit page");
-    }
     std::cout<<"PASS audit explorer: missing slots, stable refresh, selection, stale page, errors, empty state, destroyed owner\n";
 }

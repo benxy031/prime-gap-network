@@ -39,9 +39,7 @@ struct CoreSocialService::Impl {
   clock.setInterval(2000);QObject::connect(&clock,&QTimer::timeout,owner,[this]{poll();retry();pollNames();});
  }
  void changed(){if(owner->changed)owner->changed();}
- bool namesFailed(QString reason,bool transient=false){const auto previous=names.revision();
-  if(transient)names.abandonRefresh();else names.clear();
-  nameReading=false;nextNames=nameClock.elapsed()+5000;
+ bool namesFailed(QString reason){const auto previous=names.revision();names.clear();nameReading=false;nextNames=nameClock.elapsed()+5000;
   if(nameError!=reason){nameError=std::move(reason);if(owner->diagnostic)owner->diagnostic("Public names: "+nameError);}return previous!=names.revision();}
  void namePage(QString cursor,quint64 lookup){
   if(!running||!nameReading||lookup!=nameLookup||!owner->leaderboard)return;
@@ -51,14 +49,7 @@ struct CoreSocialService::Impl {
   owner->leaderboard(request,[weak,e,lookup,request,completed](Snapshot snapshot,QString failure){
    if(!weak||!weak->impl_->running||weak->impl_->epoch!=e||!weak->impl_->nameReading||weak->impl_->nameLookup!=lookup||*completed)return;*completed=true;
    auto& p=*weak->impl_;const auto before=p.names.revision();
-   if(!failure.isEmpty()){
-    const bool transient=failure.startsWith("Core RPC read failed (1):")||failure.startsWith("Core RPC read failed (2):")||
-         failure.startsWith("Core RPC read failed (4):")||failure.startsWith("Core RPC read failed (7):");
-    p.namesFailed(std::move(failure),transient);
-    if(before!=p.names.revision())p.changed();
-    return;
-   }
-   failure=p.names.append(request,snapshot);
+   if(failure.isEmpty())failure=p.names.append(request,snapshot);
    if(!failure.isEmpty()){p.namesFailed(std::move(failure));if(before!=p.names.revision())p.changed();return;}
    if(p.names.collecting()){const auto next=p.names.nextCursor();QTimer::singleShot(0,weak,[weak,e,lookup,next]{if(weak&&weak->impl_->running&&weak->impl_->epoch==e)weak->impl_->namePage(next,lookup);});}
    else{p.nameReading=false;p.nextNames=p.nameClock.elapsed()+60000;p.nameError.clear();if(before!=p.names.revision())p.changed();}

@@ -1,5 +1,3 @@
-#include <boost/multiprecision/cpp_int.hpp>
-#include "wallet/chain_bootstrap_import.h"
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
 #include "wallet/audit_activity_snapshot.h"
@@ -68,16 +66,6 @@ bool processIdentity(qint64 pid,QString& birth,QString& image,bool* exited=nullp
 
 #endif
 
-bool coreRecoveryMemoryAvailable(){
-#ifdef Q_OS_WIN
- MEMORYSTATUSEX memory{};
- memory.dwLength=sizeof(memory);
- return GlobalMemoryStatusEx(&memory)&&memory.ullAvailPhys>=CoreRecoveryPolicy::MemoryPhysicalReserve&&
-  memory.ullAvailPageFile>=CoreRecoveryPolicy::MemoryCommitReserve;
-#else
- return false;
-#endif
-}
 QByteArray nativeFileIdentity(const QString& path,bool directory){
  const QFileInfo info(path);
  if(!info.exists()||info.isSymLink()||info.isDir()!=directory)return {};
@@ -200,12 +188,6 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
   if(!preparation.error.isEmpty()){failStart(preparation.error);return;}
   if(preparationAutomatic_&&(!recoveryBindingValid_||!recoveryBindingMatches(readRecoveryStorage(preparation.profile,runtimeDirectory_))||!departedOwnerAbsent())){
    failStart("Core recovery stopped: profile, data folder or storage identity changed");return;
-  }
-  if(preparationAutomatic_&&recovery_.memoryRecovery()&&!coreRecoveryMemoryAvailable()){
-   recovery_.deferMemoryLaunch();launching_=false;
-   if(ownershipLock_)ownershipLock_->unlock();
-   setLinkState(CoreLinkState::Stopped,"Core is waiting for stable memory headroom before restarting.");
-   return;
   }
   profile_=preparation.profile;if(!preparation.notice.isEmpty())report(preparation.notice);
   managedUpgradePending_=preparation.ownedUpgradePending;
@@ -366,17 +348,13 @@ bool CoreRuntime::recoverOwned(){
 #endif
 }
 bool CoreRuntime::processAlive(){
- bool confirmedExit=false,exitKindAllowed=true,memoryExitKindAllowed=false;
+ bool confirmedExit=false,exitKindAllowed=true;
 #ifdef Q_OS_WIN
  const auto wait=processHandle_?WaitForSingleObject(static_cast<HANDLE>(processHandle_),0):WAIT_FAILED;
  if(wait==WAIT_TIMEOUT)return true;
  if(wait==WAIT_OBJECT_0){
   DWORD code{};confirmedExit=true;
-  const bool haveExitCode=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code);
-  exitKindAllowed=haveExitCode&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
-  // The Windows CRT can report terminate() as a fail-fast exit. Require
-  // the exact terminal message from this verified Core run as well.
-  memoryExitKindAllowed=haveExitCode&&(exitKindAllowed||code==0xC0000409u);
+  exitKindAllowed=GetExitCodeProcess(static_cast<HANDLE>(processHandle_),&code)&&(code==EXIT_SUCCESS||code==EXIT_FAILURE);
  }
  if(processHandle_){CloseHandle(static_cast<HANDLE>(processHandle_));processHandle_=nullptr;}
 #elif defined(Q_OS_LINUX)
@@ -390,7 +368,6 @@ bool CoreRuntime::processAlive(){
   const auto departed=coreOwnershipBinding(profile_,pid_,processBirth_);
   readRecoveryLog(true);
   const bool known=confirmedExit&&exitKindAllowed&&faultEvidence_.knownDiskFull();
-  const bool outOfMemory=confirmedExit&&memoryExitKindAllowed&&faultEvidence_.knownOutOfMemory();
   const bool same=recoveryBindingValid_&&recoveryBindingMatches(readRecoveryStorage(profile_,runtimeDirectory_));
   const auto databaseFailure=confirmedExit&&exitKindAllowed&&same?faultEvidence_.databaseFailure():CoreDatabaseFailure::None;
   ++identityGeneration_;pid_=0;processBirth_.clear();clock_.stop();connected_=false;checking_=false;stopping_=false;walletChecking_=walletReady_=false;
@@ -400,7 +377,7 @@ bool CoreRuntime::processAlive(){
       std::string_view(startupError->constData(),std::size_t(startupError->size())));
   const QString exitDetail=dataDirectoryRefused
       ?coreDataDirectoryRefusedDetail
-      :outOfMemory?"Core ran out of memory.":"The owned Core process exited";
+      :"The owned Core process exited";
   setLinkState(CoreLinkState::Stopped,exitDetail);
   if(onObservation)onObservation(std::nullopt);
   if(ownershipLock_)ownershipLock_->unlock();
@@ -409,16 +386,10 @@ bool CoreRuntime::processAlive(){
    restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
    const auto generation=recovery_.generation();
    QTimer::singleShot(0,this,[this,generation]{if(recovery_.permits(generation))begin(true);});
-  }else if(outOfMemory?recovery_.memoryExit(true,same,recoveryTime_.elapsed()):
-                       recovery_.diskExit(known,same,recoveryTime_.elapsed())){
+  }else if(recovery_.diskExit(known,same,recoveryTime_.elapsed())){
    departedOwner_=departed;recoveryClock_.start();
-   if(outOfMemory){
-    setLinkState(CoreLinkState::Stopped,"Core ran out of memory. Waiting for stable memory headroom before restarting.");
-    report("CORE WAITING FOR MEMORY · automatic recovery is armed");
-   }else{
-    setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
-    report("CORE WAITING FOR STORAGE · automatic recovery is armed");
-   }
+   setLinkState(CoreLinkState::Stopped,"Core stopped because storage filled; saved wallet and chain are retained. Waiting for stable free space before retrying.");
+   report("CORE WAITING FOR STORAGE · automatic recovery is armed");
   }else if(databaseFailure!=CoreDatabaseFailure::None&&recovery_.state()!=CoreRecoveryPolicy::State::Suppressed){
    recoveryClock_.stop();
    const auto reason=databaseFailure==CoreDatabaseFailure::Chainstate?
@@ -430,7 +401,7 @@ bool CoreRuntime::processAlive(){
    recoveryClock_.stop();
    if(recovery_.state()==CoreRecoveryPolicy::State::Suppressed)
     report("CORE STOPPED BY REQUEST · automatic restart is suspended");
-   else if(dataDirectoryRefused||outOfMemory)
+   else if(dataDirectoryRefused)
     report(exitDetail);
    else
     report("CORE STOPPED · cause or ownership could not be verified for automatic recovery; wallet and chain are unchanged");
@@ -534,7 +505,7 @@ void CoreRuntime::recoveryTick(){
   recovery_.attention();recoveryClock_.stop();
   report("Core recovery stopped: approved profile, process ownership or storage identity changed; no client launched");return;
  }
- if(recovery_.probe(now,sample.ready,true,true,sample.available,coreRecoveryMemoryAvailable()))begin(true,true);
+ if(recovery_.probe(now,sample.ready,true,true,sample.available))begin(true,true);
 }
 void CoreRuntime::report(const QString& text){if(onStatus)onStatus(text);}
 void CoreRuntime::setLinkState(CoreLinkState state,const QString& detail){
@@ -547,46 +518,6 @@ void CoreRuntime::launch(){
  if(launching_||verifier_.isRunning()){report("The owned Core preparation is still in progress");return;}
  recovery_.explicitStart();begin(true);
 }
-
-void CoreRuntime::applyChainBootstrap(std::function<void(qint64,const QString&,bool)> notify){
- if(property("pgn_chain_bootstrap_running").toBool()||stopping_||!connected_||!processAlive()||profile_.genesisHash!=ChainBootstrapGenesis){
-  notify(0,"Connect the verified testnet Core before applying a bootstrap.",true);return;
- }
- setProperty("pgn_chain_bootstrap_running",true);
- const auto owner=epoch();
- const auto active=[this,owner]{return owner.matches(epoch())&&connected_&&!stopping_&&processAlive();};
- auto job=new ChainBootstrapImport(this,
-  [this,active](const QString& method,const QJsonArray& params,ChainBootstrapImport::Reply reply){
-   if(!active()){reply({},"Core connection changed");return;}
-   rpc(method,params,[active,reply=std::move(reply)](QJsonValue value,QString error){
-    if(!active()){reply({},"Core connection changed");return;}
-    reply(value,error);
-   });
-  },
-  [this,active](const QJsonArray& requests,std::function<void(QJsonArray,QString)> done){
-   if(!active()){done({},"Core connection changed");return;}
-   QFile cookie(profile_.networkDataDirectory()+"/.cookie");
-   if(!cookie.open(QIODevice::ReadOnly)||cookie.size()>4096){done({},"Core credentials unavailable");return;}
-   QNetworkRequest request{QUrl("http://127.0.0.1:"+QString::number(profile_.rpcPort)+"/")};
-   request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
-   request.setRawHeader("Authorization","Basic "+cookie.readAll().trimmed().toBase64());
-   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
-   auto* reply=network_.post(request,QJsonDocument(requests).toJson(QJsonDocument::Compact),60000);
-   readBoundedCoreRpcReply(reply,this,65536,[reply,active,done=std::move(done)](QByteArray bytes,bool oversized){
-    const auto failed=reply->error()!=QNetworkReply::NoError;
-    reply->deleteLater();
-    const auto decoded=QJsonDocument::fromJson(bytes);
-    if(!active()||failed||oversized||!decoded.isArray()){done({},"Core submission unavailable");return;}
-    done(decoded.array(),{});
-   });
-  },
-  [this,notify=std::move(notify)](qint64 height,const QString& message,bool finished){
-   if(finished)setProperty("pgn_chain_bootstrap_running",false);
-   notify(height,message,finished);
-  });
- job->start();
-}
-
 void CoreRuntime::reattach(){
  if(QFileInfo::exists(runtimeDirectory_+"/wallet-owned.json")){recovery_.explicitStart();begin(false);}
 }
@@ -1005,48 +936,13 @@ void CoreRuntime::readTicketPage(int offset,std::function<void(QJsonObject,QStri
   });
  });
 }
-void CoreRuntime::readTicketNumber(const QString& number,std::function<void(QJsonObject,QString)> consume){
- if(number.isEmpty()||number.size()>80||number=="0"||number.startsWith('0')){
-  consume({},"Enter a ticket number greater than zero");return;
- }
- for(const auto digit:number)if(digit<'0'||digit>'9'){
-  consume({},"Enter a ticket number in decimal");return;
- }
- readTicketAtlas({},{},1,[this,number,consume=std::move(consume)](QJsonObject domain,QString error)mutable{
-  if(!error.isEmpty()){consume({},error);return;}
-  using Integer=boost::multiprecision::cpp_int;
-  QString start,end;
-  try{
-   const Integer origin(domain.value("range_origin").toString().toStdString()),
-      limit(domain.value("range_limit").toString().toStdString()),width(domain.value("ticket_width").toString().toStdString());
-   const Integer first=origin+(Integer(number.toStdString())-1)*width;
-   if(width<=0||first<origin||first>=limit){consume({},"Ticket number is outside this network’s search domain");return;}
-   const Integer last=first+width;
-   start=QString::fromStdString(first.str());end=QString::fromStdString((last<limit?last:limit).str());
-  }catch(const std::exception&){consume({},"Core ticket domain is invalid");return;}
-  readTicketAtlas(start,end,1,[this,number,consume=std::move(consume)](QJsonObject atlas,QString error)mutable{
-   if(!error.isEmpty()){consume({},error);return;}
-   const auto rows=atlas.value("details").toArray();
-   if(rows.isEmpty()&&!atlas.value("details_truncated").toBool()){consume({},{});return;}
-   const auto row=rows.isEmpty()?QJsonObject{}:rows.first().toObject();
-   if(rows.size()!=1||row.value("ticket_number").toString()!=number){consume({},"Core returned a different ticket");return;}
-   readTicketDetails(row.value("request").toString(),[number,consume=std::move(consume)](QJsonObject state,QString error)mutable{
-    if(error.isEmpty()&&state.value("leases").toArray().first().toObject().value("ticket_number").toString()!=number)
-     error="Ticket changed while searching";
-    consume(error.isEmpty()?state:QJsonObject{},error);
-   });
-  });
- });
-}
 void CoreRuntime::readTicketDetails(const QString& request,std::function<void(QJsonObject,QString)> consume){
  readWorkView("tickets",0,1,request,[consume=std::move(consume)](QJsonObject view,QString error){
   if(!error.isEmpty()){consume({},error);return;}auto state=view.value("state").toObject();if(state.value("leases").toArray().size()!=1){consume({},"Ticket is not on the inspected branch");return;}state.insert("reports",view.value("reports"));state.insert("audits",view.value("audits"));consume(state,{});
  });
 }
 void CoreRuntime::readBlockAtHeight(int height,std::function<void(QJsonObject,QString)> consume){
- const auto owner=epoch();
- readExplorerBlockAtHeight(height,[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},
-  [this](const QString& method,const QJsonArray& params,TransactionReply done){rpc(method,params,std::move(done));},std::move(consume));
+ if(height<0||!connected_||!processAlive()){consume({},"Valid current-chain height required");return;}const auto owner=epoch();rpc("getblockhash",{height},[this,owner,consume=std::move(consume)](QJsonValue hash,QString error){if(!error.isEmpty()||!owner.matches(epoch())){consume({},error.isEmpty()?QString("Core epoch changed"):error);return;}readBlockDetails(hash.toString(),std::move(consume));});
 }
 void CoreRuntime::readBlockPage(int height,std::function<void(QJsonObject,QString)> consume){
  if(!connected_||!processAlive()){consume({},"Verified Core connection required");return;}const auto owner=epoch();rpc("getpgnstate",{},[this,owner,height,consume=std::move(consume)](QJsonValue value,QString error){
@@ -1065,104 +961,6 @@ void CoreRuntime::readAuditSnapshot(int offset,std::function<void(QJsonObject,QS
   if(!error.isEmpty()){consume({},error);return;}const auto state=view.value("state").toObject();consume({{"genesis",state.value("genesis")},{"tip",state.value("bestblockhash")},{"height",state.value("height")},{"offset",offset},{"reports",view.value("reports")},{"audits",view.value("audits")},{"observed_utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}},{});
  });
 }
-
-struct CoreRuntime::NativeStorageRead {
- ChainObservation anchor;
- qint64 next{},gold{},coordination{},missing{};
- bool pruned{};
- qint64 pruneHeight{-1};
- QString prefix;
- std::function<void(QJsonObject,QString)> complete;
-};
-void CoreRuntime::readNativeBlockStorage(const ChainObservation& anchor,const QJsonObject& previous,
-                                          std::function<void(QJsonObject,QString)> complete){
- if(!connected_||!processAlive()||!anchor.owner.matches(epoch())||!anchor.valid()||anchor.tipHash.isEmpty()){
-  complete({},"Verified Core and a storage anchor required");return;
- }
- auto read=std::make_shared<NativeStorageRead>();
- read->anchor=anchor;
- read->complete=std::move(complete);
- rpc("getblockchaininfo",{},[this,read,previous](QJsonValue reply,QString error){
-  if(!read->anchor.owner.matches(epoch())||!connected_||!processAlive()){
-   read->complete({},"Core storage connection changed");return;
-  }
-  const auto prune=reply.toObject().value("pruned");
-  if(!error.isEmpty()||!prune.isBool()){
-   read->complete({},error.isEmpty()?QString("Local block retention is unknown"):error);return;
-  }
-  read->pruned=prune.toBool();
-  read->pruneHeight=reply.toObject().value("pruneheight").toInteger(-1);
-  const auto height=previous.value("height").toInteger(-1);
-  const auto hash=previous.value("anchor_hash").toString();
-  const auto gold=previous.value("gold_bytes").toInteger(-1);
-  const auto coordination=previous.value("coordination_bytes").toInteger(-1);
-  const bool extend=!read->pruned&&previous.value("pruned")==false&&previous.value("missing_blocks").toInteger(-1)==0&&
-    previous.value("genesis")==read->anchor.genesis&&height>=0&&height<read->anchor.height&&!hash.isEmpty()&&gold>=0&&coordination>=0;
-  if(extend){
-   read->prefix=hash;
-   read->next=height+1;
-   read->gold=gold;
-   read->coordination=coordination;
-  }
-  continueNativeBlockStorage(read);
- });
-}
-void CoreRuntime::continueNativeBlockStorage(const std::shared_ptr<NativeStorageRead>& read){
- const auto active=[this,read]{return read->anchor.owner.matches(epoch())&&connected_&&processAlive();};
- if(!active()){read->complete({},"Core storage connection changed");return;}
- rpc("getpgnblockstorage",{read->next,read->anchor.tipHash},[this,read,active](QJsonValue value,QString error){
-  if(!active()){read->complete({},"Core storage connection changed");return;}
-  if(!error.isEmpty()){read->complete({},error);return;}
-  const auto page=value.toObject();
-  const auto end=page.value("end_height").toInteger(-1);
-  const auto gold=page.value("gold_bytes").toInteger(-1);
-  const auto coordination=page.value("coordination_bytes").toInteger(-1);
-  const auto missing=page.value("missing_blocks").toInteger(-1);
-  if(page.value("schema")!="PGN_BLOCK_STORAGE_V1"||page.value("genesis")!=read->anchor.genesis||
-     page.value("anchor_hash")!=read->anchor.tipHash||page.value("anchor_height").toInteger(-1)!=read->anchor.height||
-     page.value("start_height").toInteger(-1)!=read->next||end<=read->next||end-read->next>2048||end>read->anchor.height+1||
-     gold<0||coordination<0||missing<0||missing>end-read->next||
-     gold>std::numeric_limits<qint64>::max()-read->gold||coordination>std::numeric_limits<qint64>::max()-read->coordination){
-   read->complete({},"Core storage page is invalid");return;
-  }
-  if(!read->prefix.isEmpty()){
-   if(page.value("start_parent_hash")!=read->prefix){
-    read->prefix.clear();
-    read->next=read->gold=read->coordination=0;
-    QTimer::singleShot(0,this,[this,read]{continueNativeBlockStorage(read);});
-    return;
-   }
-   read->prefix.clear();
-  }
-  read->gold+=gold;
-  read->coordination+=coordination;
-  read->missing+=missing;
-  read->next=end;
-  if(end<=read->anchor.height){
-   QTimer::singleShot(0,this,[this,read]{continueNativeBlockStorage(read);});
-   return;
-  }
-  rpc("getblockhash",{read->anchor.height},[this,read,active](QJsonValue block,QString reason){
-   if(!active()||!reason.isEmpty()||block.toString()!=read->anchor.tipHash){
-    read->complete({},"Core storage anchor changed");return;
-   }
-   auto publish=[read]{
-    read->complete({{"genesis",read->anchor.genesis},{"anchor_hash",read->anchor.tipHash},{"height",read->anchor.height},
-      {"gold_bytes",read->gold},{"coordination_bytes",read->coordination},{"missing_blocks",read->missing},{"pruned",read->pruned}},{});
-   };
-   if(!read->pruned){publish();return;}
-   rpc("getblockchaininfo",{},[active,read,publish](QJsonValue result,QString error){
-    if(!active()||!error.isEmpty()||read->pruneHeight<0||result.toObject().value("pruneheight").toInteger(-1)!=read->pruneHeight){
-     read->complete({},"Core block retention changed");return;
-    }
-    publish();
-   });
-  });
- });
-}
-
-
-
 void CoreRuntime::readNetworkMetrics(int spanSeconds,std::function<void(QJsonObject,QString)> consume){
  if(spanSeconds<60||spanSeconds>604800||!connected_||!processAlive()){consume({},"Verified Core connection and bounded metrics history required");return;}
  const auto owner=epoch();
@@ -1290,7 +1088,6 @@ void CoreRuntime::inspect(){
        report(QStringLiteral("PGN CORE")+
         (value.peers&&*value.peers==0?" · NO PEERS":!value.synchronizing?" · SYNC STATUS UNAVAILABLE":*value.synchronizing?" · SYNCHRONIZING":value.oldTipAt(QDateTime::currentDateTimeUtc())?" · CONNECTED · CHAIN IDLE":" · CONNECTED"));
       };
-      setProperty("pgn_core_native_peer_sync",QJsonObject{});
       if(!peerBootstrap_){publish(observation);return;}
       const auto endpoint=peerBootstrap_->localEndpoint();
       inspectRpc("getpeerinfo",{},[this,ownerEpoch,observation,endpoint,publish](CoreRpcResult reply)mutable{
@@ -1300,9 +1097,7 @@ void CoreRuntime::inspect(){
         observation.synchronizing.reset();publish(observation);return;
        }
        const auto peers=value.toArray();
-       QJsonObject diagnostic;
-       const auto projected=projectNativeSynchronization(observation,peers,endpoint,&diagnostic);
-       setProperty("pgn_core_native_peer_sync",diagnostic);
+       const auto projected=projectNativeSynchronization(observation,peers,endpoint);
        if(projected.synchronizing.has_value())peerBootstrap_->reconcileAttachment(peers);
        publish(projected);
       },3000);

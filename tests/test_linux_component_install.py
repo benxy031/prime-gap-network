@@ -4,11 +4,9 @@ The Qt child is an inert fixture using the production data lease, not Horizon
 or Core. Authentication has separate reference-TUF tests. Wallet bytes are a
 sentinel and are never passed to lifecycle code.
 """
-from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 import hashlib,json,os,shutil,subprocess,sys,tempfile,time,unittest,zipfile
-from types import SimpleNamespace
 from unittest.mock import patch
 P=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(P/'tools'),str(P/'src/update')]
@@ -56,11 +54,7 @@ class LinuxInstallTests(unittest.TestCase):
         cache=stage.init_cache(self.root/'stage',self.context)
         folder,plan=stage.stage_bundle(archive,stage.sha(archive.read_bytes()),self.context,self.context_sha,cache,['cpu'])
         receipt=dict(publisher_authenticated=True,context_sha256=self.context_sha,stage=str(folder),manifest_sha256=plan['manifest_sha256'],selection=['cpu'])
-        client = SimpleNamespace(
-            context=self.context,
-            context_sha256=self.context_sha,
-            prepared=lambda selected, *, discard_after=False: nullcontext(deepcopy(receipt)),
-        )
+        client=type('PreparedClient',(),dict(context=self.context,context_sha256=self.context_sha,prepare=lambda ignored,selected:deepcopy(receipt)))()
         self.candidate=self.store.prepare(client,['cpu']);self.new=Path(self.candidate['cohort'])
         self.runtime=self.data/'testnet/ui-runtime';self.runtime.mkdir(parents=True)
         self.profile=self.runtime/'wallet-core.json'
@@ -103,11 +97,7 @@ class LinuxInstallTests(unittest.TestCase):
 
     def test_native_install_drains_restarts_rebinds_and_retains_execute_modes(self):
         life=self.lifecycle()
-        def start(candidate):
-            return life.start_and_verify(
-                candidate, expected_inventory_sha256=self.candidate['inventory_sha256'],
-            )
-        self.assertTrue(self.store.activate(self.candidate,life.drain,start,life.restore_previous))
+        self.assertTrue(self.store.activate(self.candidate,life.drain,life.start_and_verify,life.restore_previous))
         self.assertTrue(life.ui.exited());self.assertFalse(life.new_ui.exited())
         self.assertEqual(self.store.current()['cohort'],str(self.new))
         self.assertEqual(json.loads(self.profile.read_bytes())['executable'],str(self.new/LINUX_PRIMARY['core']))

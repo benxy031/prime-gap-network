@@ -9,14 +9,12 @@ namespace pgn::wallet {
 // CheckDiskSpace() has a 50 MiB floor; init.cpp's periodic check adds 50 MiB.
 class CoreRecoveryPolicy {
 public:
- enum class State { Idle, Running, WaitingDisk, WaitingMemory, Backoff, Launching, Suppressed, Attention };
+ enum class State { Idle, Running, WaitingDisk, Backoff, Launching, Suppressed, Attention };
  static constexpr std::int64_t MiB=1024*1024;
  static constexpr std::int64_t NativeFloor=50*MiB;
  static constexpr std::int64_t NativePeriodicFloor=NativeFloor+50*MiB;
  static constexpr std::int64_t LowWater=NativePeriodicFloor+256*MiB;
  static constexpr std::int64_t ResumeWater=NativePeriodicFloor+512*MiB;
- static constexpr std::int64_t MemoryCommitReserve=1024*MiB;
- static constexpr std::int64_t MemoryPhysicalReserve=768*MiB;
  static constexpr unsigned RequiredHighProbes=3,MaximumStarts=3;
  static constexpr std::int64_t StableReadyResetMs=60000;
  std::uint64_t explicitStart(){++generation_;wanted_=true;state_=State::Idle;starts_=high_=0;readySince_=-1;return generation_;}
@@ -25,7 +23,7 @@ public:
  std::uint64_t generation()const{return generation_;}
  State state()const{return state_;}
  unsigned starts()const{return starts_;}
- bool waiting()const{return state_==State::WaitingDisk||state_==State::WaitingMemory||state_==State::Backoff;}
+ bool waiting()const{return state_==State::WaitingDisk||state_==State::Backoff;}
  void attention(){state_=State::Attention;high_=0;}
  void ready(std::int64_t now){
   if(!wanted_)return;
@@ -34,30 +32,22 @@ public:
   if(now-readySince_>=StableReadyResetMs)starts_=0;
  }
  bool diskExit(bool knownDiskFull,bool sameContext,std::int64_t now){
-  return resourceExit(knownDiskFull,sameContext,now,State::WaitingDisk);
- }
- bool memoryRecovery()const{return resourceWait_==State::WaitingMemory;}
- void deferMemoryLaunch(){
-  if(state_==State::Launching&&memoryRecovery()){
-   --starts_;
-   high_=0;
-   state_=resourceWait_;
-  }
- }
- bool memoryExit(bool knownOutOfMemory,bool sameContext,std::int64_t now){
-  return resourceExit(knownOutOfMemory,sameContext,now,State::WaitingMemory);
+  readySince_=-1;high_=0;lastProbe_=-1;
+  if(!wanted_){state_=State::Suppressed;return false;}
+  if(!knownDiskFull||!sameContext||starts_>=MaximumStarts){attention();return false;}
+  static constexpr std::int64_t delays[]{5000,15000,30000,60000};
+  nextAttempt_=now+delays[std::min(starts_,3u)];state_=State::WaitingDisk;return true;
  }
  // One fresh observation per completed probe. Unknown space/presence never
  // authorizes a launch. A changed identity closes this recovery episode.
- bool probe(std::int64_t now,bool fresh,bool sameContext,bool ownerAbsent,std::int64_t available,bool memoryReady=false){
+ bool probe(std::int64_t now,bool fresh,bool sameContext,bool ownerAbsent,std::int64_t available){
   if(!wanted_||!waiting())return false;
   if(!sameContext){attention();return false;}
   if(now<=lastProbe_)return false;
   lastProbe_=now;
-  if(!fresh||!ownerAbsent||available<ResumeWater||
-     (resourceWait_==State::WaitingMemory&&!memoryReady)){
-   high_=0;state_=resourceWait_;return false;
-  }
+  if(!fresh||!ownerAbsent||available<0){high_=0;state_=State::WaitingDisk;return false;}
+  if(available<LowWater){high_=0;state_=State::WaitingDisk;return false;}
+  if(available<ResumeWater){high_=0;state_=State::WaitingDisk;return false;}
   high_=std::min(high_+1,RequiredHighProbes);
   if(now<nextAttempt_){state_=State::Backoff;return false;}
   if(high_<RequiredHighProbes)return false;
@@ -65,17 +55,7 @@ public:
   ++starts_;state_=State::Launching;return true;
  }
 private:
- bool resourceExit(bool confirmed,bool sameContext,std::int64_t now,State wait){
-  readySince_=-1;high_=0;lastProbe_=-1;
-  if(!wanted_){state_=State::Suppressed;return false;}
-  if(!confirmed||!sameContext||starts_>=MaximumStarts){attention();return false;}
-  static constexpr std::int64_t delays[]{5000,15000,30000};
-  nextAttempt_=now+delays[starts_];
-  resourceWait_=state_=wait;
-  return true;
- }
- State state_{State::Idle},resourceWait_{State::WaitingDisk};
- bool wanted_{};
+ State state_{State::Idle};bool wanted_{};
  std::uint64_t generation_{};unsigned starts_{},high_{};
  std::int64_t nextAttempt_{},lastProbe_{-1},readySince_{-1};
 };
@@ -111,10 +91,9 @@ public:
   if(pending_.size()>8192){invalidate();return;}
   if(final&&!pending_.empty()){line(pending_);pending_.clear();}
  }
- bool knownOutOfMemory()const{return usable_&&memory_&&!disk_&&!databaseCorruption_&&!otherFatal_;}
- bool knownDiskFull()const{return usable_&&disk_&&!memory_&&!otherFatal_&&!databaseCorruption_&&shutdown_;}
+ bool knownDiskFull()const{return usable_&&disk_&&!otherFatal_&&!databaseCorruption_&&shutdown_;}
  CoreDatabaseFailure databaseFailure()const{
-  return usable_&&!disk_&&!memory_&&!otherFatal_&&databaseCorruption_&&shutdown_?databaseFailure_:CoreDatabaseFailure::None;
+  return usable_&&!disk_&&!otherFatal_&&databaseCorruption_&&shutdown_?databaseFailure_:CoreDatabaseFailure::None;
  }
  bool usable()const{return usable_;}
 private:
@@ -124,14 +103,10 @@ private:
   const auto space=text.find(' ');
   // Only the native timestamp/severity envelope is stripped. A marker quoted
   // in arbitrary log text is not a shutdown-cause witness.
-  const bool stamped=space>=20&&space<=40&&text.size()>space&&text[4]=='-'&&text[7]=='-'&&text[10]=='T'&&text[space-1]=='Z';
-  if(stamped)text.remove_prefix(space+1);
-  const bool error=prefix("[error] ");
+  if(space>=20&&space<=40&&text.size()>space&&text[4]=='-'&&text[7]=='-'&&text[10]=='T'&&text[space-1]=='Z')text.remove_prefix(space+1);
   if(prefix("[error] "))text.remove_prefix(8);
   else if(prefix("[info] "))text.remove_prefix(7);
   if(prefix("Error: "))text.remove_prefix(7);
-  if(text.empty())return;
-  memory_=stamped&&error&&text=="Out of memory. Terminating.";
   const bool disk=text=="Shutting down due to lack of disk space!"||text=="Disk space is too low!"||
    text=="A fatal internal error occurred, see debug.log for details: Disk space is too low!";
   if(disk){disk_=true;shutdown_=false;}
@@ -154,7 +129,7 @@ private:
   }
   if(text=="Shutdown done"&&(disk_||databaseCorruption_))shutdown_=true;
  }
- bool usable_{true},disk_{},otherFatal_{},shutdown_{},databaseCorruption_{},memory_{};
+ bool usable_{true},disk_{},otherFatal_{},shutdown_{},databaseCorruption_{};
  CoreDatabaseFailure databaseFailure_{CoreDatabaseFailure::None};
  std::string pending_;
 };
