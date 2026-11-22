@@ -48,68 +48,48 @@ class Tests(unittest.TestCase):
  def test_eof_during_pending_mutation_is_not_lost(self):
   s=Service.__new__(Service);s.pending=dict(id=7,action='pause',generation=2);s.eof_requested=False
   s.command(dict(id='eof',action='close',drain=True));self.assertTrue(s.eof_requested);self.assertEqual(s.pending['id'],7)
- def test_fresh_budget_admission(self):
-  from unittest.mock import patch
-  class L:
-   value=None
-   next_value=None
-   def sample(self):return(0,0)
-   def reset(self):self.value=None
-   def update(self):self.value=self.next_value;return self.value
-  s=Service.__new__(Service);s.load=L();s.threads=2;s.inv={'available_cpus':list(range(12))}
-  with patch('service.time.sleep')as sleep:
-   self.assertFalse(s.admit_budget());sleep.assert_called_once_with(.26)
-  s.load.next_value=20
-  with patch('service.time.sleep'):self.assertTrue(s.admit_budget())
-  s.load.next_value=70
-  with patch('service.time.sleep'):self.assertFalse(s.admit_budget())
- def budget_fixture(self):
+ def test_user_enabled_switch_dispatch_and_pause_ignore_machine_load(self):
   from types import SimpleNamespace
-  s=Service.__new__(Service);s.enabled=True;s.pending=None;s.request={'retained':True};s.result=None;s.threads=4;s.inv={'available_cpus':list(range(12))};s.budget_resume_since=None;s.budget_retry_after=0.;s.budget_refused=True;s.state='BUDGET_PAUSED';s.starts=0
-  s.load=SimpleNamespace(value=20,update=lambda: s.load.value)
-  s.admit_budget=lambda:True
-  def start():s.starts+=1
-  s.start_workers=start
-  return s
- def test_guard_resumes_after_stable_background_only(self):
-  from unittest.mock import patch
-  s=self.budget_fixture()
-  with patch('service.time.monotonic',return_value=0.):s.recover_budget()
-  with patch('service.time.monotonic',return_value=1.99):s.recover_budget()
-  self.assertEqual(s.starts,0);self.assertTrue(s.budget_refused)
-  with patch('service.time.monotonic',return_value=2.):s.recover_budget()
-  self.assertEqual(s.starts,1);self.assertFalse(s.budget_refused);self.assertEqual(s.state,'RUNNING')
- def test_guard_resumes_admissible_seven_thread_budget(self):
-  from unittest.mock import patch
-  s=self.budget_fixture();s.threads=7;s.load.value=14
-  with patch('service.time.monotonic',return_value=0.):s.recover_budget()
-  with patch('service.time.monotonic',return_value=2.):s.recover_budget()
-  self.assertEqual(s.starts,1);self.assertFalse(s.budget_refused)
- def test_enabled_budget_can_wait_without_rejecting_the_ON_choice(self):
-  s=self.budget_fixture();s.workers={};s.run_start=None;s.result=None;s.pending=dict(id=1,action='configure',generation=1,enabled=True,threads=7,affinity=[0,2,4,5,6,7,8]);s.admit_budget=lambda:False;s.stop_workers=lambda **kwargs:None;replies=[];s.reply=lambda command,*args,**kwargs:replies.append((args,kwargs));s.finish_pending()
-  self.assertTrue(s.enabled);self.assertTrue(s.budget_refused);self.assertEqual(s.state,'BUDGET_PAUSED');self.assertEqual(replies,[((),{})]);self.assertEqual(s.starts,0)
- def test_guard_burst_resets_window_and_honors_OFF_close_result(self):
-  from unittest.mock import patch
-  s=self.budget_fixture()
-  with patch('service.time.monotonic',return_value=0.):s.recover_budget()
-  s.load.value=60
-  with patch('service.time.monotonic',return_value=2.):s.recover_budget()
-  self.assertIsNone(s.budget_resume_since);self.assertEqual(s.starts,0)
-  s.load.value=20
-  for mutation in[{'enabled':False},{'pending':{'action':'close'}},{'result':{'state':'COMPLETE'}}]:
-   t=self.budget_fixture();t.budget_resume_since=0.
-   for k,v in mutation.items():setattr(t,k,v)
-   with patch('service.time.monotonic',return_value=10.):t.recover_budget()
-   self.assertEqual(t.starts,0)
- def test_guard_uses_fresh_admission_and_preserves_closed_result(self):
-  from unittest.mock import patch
-  s=self.budget_fixture();s.budget_resume_since=0.;s.admit_budget=lambda:False
-  with patch('service.time.monotonic',return_value=3.):s.recover_budget()
-  self.assertEqual(s.starts,0);self.assertTrue(s.budget_refused)
-  s.workers={};s.pending=None;s.run_start=None;s.result={'state':'AUDIT_COMPUTED_SOURCE_PROOF_PENDING'};s.enabled=False;s.stops=0
-  def stop():s.stops+=1
-  s.stop_workers=stop;s.finish_pending()
-  self.assertEqual(s.state,s.result['state']);self.assertFalse(s.budget_refused);self.assertEqual(s.stops,1)
+  s=Service.__new__(Service)
+  s.enabled=False;s.workers={};s.request={'retained':True};s.result=None
+  s.run_start=None;s.running_seconds=0.;s.generation=0;s.threads=1
+  s.pending=dict(id=1,action='configure',generation=1,enabled=True,threads=1,affinity=[2])
+  s.load=SimpleNamespace(value=100,update=lambda:100)
+  s.maximum_machine_load=0.;s.total=8;s.next_offset=0;s.completed={};s.seq=0
+  s.args=SimpleNamespace(piece_positions=8)
+  s.locate=lambda offset:(0,2**67+offset,2**67+8)
+  commands=[]
+  def start():s.workers[2]=SimpleNamespace(task=None,ready=True,send=commands.append)
+  def stop(keep=()):
+   for cpu in tuple(s.workers):
+    if cpu not in keep:del s.workers[cpu]
+  s.start_workers=start;s.stop_workers=stop;s.persist=lambda:None;s.reply=lambda _:None
+  s.finish_pending()
+  self.assertTrue(s.enabled)
+  self.assertEqual(s.state,'RUNNING')
+  s.dispatch()
+  self.assertTrue(commands[0].startswith('TASK '))
+  s.dispatch()
+  self.assertEqual(s.maximum_machine_load,100)
+  s.command(dict(id=2,action='pause',generation=2))
+  s.finish_pending()
+  self.assertEqual(s.state,'DRAINING_CONTROL')
+  s.workers[2].task=None
+  s.finish_pending()
+  self.assertEqual(s.state,'PAUSED')
+  self.assertFalse(s.enabled)
+  self.assertEqual(s.workers,{})
+ def test_new_work_runs_when_enabled_with_high_system_load(self):
+  from types import SimpleNamespace
+  s=Service.__new__(Service);s.pending=None;s.enabled=True
+  s.load=SimpleNamespace(value=99,update=lambda:99)
+  events=[]
+  s.new_work=lambda request,probe:events.append(('new',probe))
+  s.start_workers=lambda:events.append(('start',None))
+  s.reply=lambda _:None
+  s.command(dict(id=3,action='execute',request={}))
+  self.assertEqual(events,[('new',False),('start',None)])
+  self.assertEqual(s.state,'RUNNING')
 class LoadWindowTests(unittest.TestCase):
  def test_short_spike_uses_counter_window(self):
   from unittest.mock import patch

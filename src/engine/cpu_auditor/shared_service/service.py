@@ -7,9 +7,6 @@ import cycle_work
 from native_transport import HASHES,Job,Load,Worker,inventory,verify
 from runtime_metrics import CpuMetrics,PositionRateWindow,MiningCounterWindow
 SCHEMA='PGN_CPU_JSONLINES_V1';CONTROL_VERSION=2
-LOAD_LIMIT_PERCENT=75
-RESUME_HEADROOM_PERCENT=0
-RESUME_STABLE_SECONDS=2
 POLICY_SHA='96e656691a2f7e3f8594a1cfdc59c04a94dd3c86a2d9aadadb1f70591bb0639a'
 
 class ControlLease:
@@ -73,9 +70,9 @@ class Service:
    import msvcrt;msvcrt.locking(self.lock.fileno(),msvcrt.LK_NBLCK,1)
   else:
    import fcntl;fcntl.flock(self.lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-  self.cp=self.workspace/'shared68-checkpoint.json';verify(args.engine,HASHES[os.name][0]);self.inv=inventory(args.inventory);self.events=queue.Queue(maxsize=64);self.commands=queue.Queue(maxsize=32);self.job=Job();self.load=Load();self.workers={};self.pending=None;self.generation=0;self.enabled=False;self.threads=1;self.affinity=[];self.state='IDLE';self.failure=None;self.budget_refused=False;self.request=None;self.parts=[];self.probe=False;self.total=0;self.committed=0;self.next_offset=0;self.counts=[];self.completed={};self.seq=0;self.result=None;self.compute_seconds=0.;self.run_start=None;self.running_seconds=0.;self.session=uuid.uuid4().hex;self.closed=False;self.max_buffered=0;self.completed_piece_count=0;self.rate_base=0;self.best=[];self.tests=0
+  self.cp=self.workspace/'shared68-checkpoint.json';verify(args.engine,HASHES[os.name][0]);self.inv=inventory(args.inventory);self.events=queue.Queue(maxsize=64);self.commands=queue.Queue(maxsize=32);self.job=Job();self.load=Load();self.workers={};self.pending=None;self.generation=0;self.enabled=False;self.threads=1;self.affinity=[];self.state='IDLE';self.failure=None;self.request=None;self.parts=[];self.probe=False;self.total=0;self.committed=0;self.next_offset=0;self.counts=[];self.completed={};self.seq=0;self.result=None;self.compute_seconds=0.;self.run_start=None;self.running_seconds=0.;self.session=uuid.uuid4().hex;self.closed=False;self.max_buffered=0;self.completed_piece_count=0;self.rate_base=0;self.best=[];self.tests=0
   self.keep_result_workers=False
-  self.history={};self.budget_resume_since=None;self.budget_retry_after=0.;self.eof_requested=False;self.maximum_machine_load=0.;self.coordinator_cpu=None;self.own_cpu_start=sum(os.times()[:2])
+  self.history={};self.eof_requested=False;self.maximum_machine_load=0.;self.coordinator_cpu=None;self.own_cpu_start=sum(os.times()[:2])
   self.simd=bool(self.inv.get('features',{}).get('avx2_usable')) and not args.scalar
   self.threads=min(args.initial_threads,self.inv["maximum_workers"]);self.affinity=self.preferred(self.threads)
   self.restore()
@@ -127,30 +124,6 @@ class Service:
     try:os.sched_setaffinity(int(tid.name),{cpu})
     except ProcessLookupError:pass
   self.coordinator_cpu=cpu
- def estimated_worker_load(self):
-  # GetSystemTimes reports machine load, not utilization within our affinity
-  # subset. Keep eligibility/reserve based on available_cpus, but use the same
-  # system denominator for predicted added load. Retain conservative behavior
-  # for old inventories and unqualified multi-group machines.
-  count=self.inv.get('logical_cpus_system');available=len(self.inv['available_cpus'])
-  if type(count)is not int or not available<=count<=64:count=available
-  return self.threads*100/count
- def admit_budget(self):
-  # All compute pieces are drained here. Measure a fresh idle/background window.
-  self.load.reset();time.sleep(.26);value=self.load.update()
-  if value is None or value+self.estimated_worker_load()>LOAD_LIMIT_PERCENT:return False
-  return True
- def recover_budget(self):
-  # Only an explicitly enabled, retained assignment can resume. All workers
-  # have drained before this background-only measurement is considered.
-  if not self.enabled or self.pending or not self.request or self.result:return
-  now=time.monotonic();value=self.load.update();capacity=LOAD_LIMIT_PERCENT-RESUME_HEADROOM_PERCENT-self.estimated_worker_load()
-  if value is None or value>capacity:self.budget_resume_since=None;return
-  if self.budget_resume_since is None:self.budget_resume_since=now;return
-  if now-self.budget_resume_since<RESUME_STABLE_SECONDS or now<self.budget_retry_after:return
-  self.budget_retry_after=now+RESUME_STABLE_SECONDS;self.budget_resume_since=None
-  if not self.admit_budget():return
-  self.budget_refused=False;self.start_workers();self.state='RUNNING'
  def remember_pages(self,w,v):
   w.memory_pages=validate_memory_pages(v);w.memory_sample_time=time.monotonic();w.memory_query_pending=False
  def memory_pages_status(self):
@@ -186,12 +159,12 @@ class Service:
  def status(self):
   self.request_memory_samples()
   active=sum(w.task is not None for w in self.workers.values());elapsed=self.running_seconds+(time.monotonic()-self.run_start if self.run_start else 0);rate=(self.committed-self.rate_base)/elapsed if elapsed>0 else 0
-  computing=self.enabled and self.state=='RUNNING'and bool(self.workers)and not self.budget_refused and self.result is None
+  computing=self.enabled and self.state=='RUNNING'and bool(self.workers)and self.result is None
   measured_rate=self.rate_window.observe(self.committed,computing)
   science_rates=self.science_rates.observe(digest(self.request)if self.request else None,elapsed,self.committed,self.tests,sum(self.counts),computing)
   metrics=self.metrics.sample(list(self.workers.values()),self.threads)
   return dict(resident_result_handoff=True,result_resident_policy=self.keep_result_workers,
-   mining_rates=science_rates,memory_pages=self.memory_pages_status(),cpu_telemetry=metrics,session_rate_positions_per_second=rate,state=self.state,enabled=self.enabled,generation=self.generation,requested_threads=self.threads,threads_active=active,active_workers=active,resident_workers=len(self.workers),effective_affinity=[c for c,w in self.workers.items()if w.ready],coordinator_cpu=self.coordinator_cpu,coordinator_cpu_seconds=sum(os.times()[:2])-self.own_cpu_start,worker_statistics=[dict(cpu=c,**v)for c,v in self.history.items()]+[dict(cpu=c,positions=str(w.positions),native_seconds=w.native_seconds,pid=w.p.pid,resident=True)for c,w in self.workers.items()],worker_pids=[dict(pid=w.p.pid,cpu=c,busy=w.task is not None)for c,w in self.workers.items()],completed_positions=str(self.committed),durable_completed_positions=str(self.committed),total_positions=str(self.total),inflight_pieces=active,buffered_closed_pieces=len(self.completed),maximum_buffered_closed_pieces=self.max_buffered,completed_piece_count=self.completed_piece_count,rate_positions_per_second=measured_rate,positions_per_second=measured_rate,compute_seconds=self.compute_seconds,wall_active_seconds=elapsed,machine_load_percent=self.load.value,maximum_machine_load_percent=self.maximum_machine_load,total_load_limit_percent=75,budget_refused=self.budget_refused,error=self.failure,result_ready=self.result is not None,probe=self.probe,request_sha256=digest(self.request)if self.request else None,coverage_contract=COVERAGE,production_admitted=False,network_accepted=False,compute_started=computing,session=self.session)
+   mining_rates=science_rates,memory_pages=self.memory_pages_status(),cpu_telemetry=metrics,session_rate_positions_per_second=rate,state=self.state,enabled=self.enabled,generation=self.generation,requested_threads=self.threads,threads_active=active,active_workers=active,resident_workers=len(self.workers),effective_affinity=[c for c,w in self.workers.items()if w.ready],coordinator_cpu=self.coordinator_cpu,coordinator_cpu_seconds=sum(os.times()[:2])-self.own_cpu_start,worker_statistics=[dict(cpu=c,**v)for c,v in self.history.items()]+[dict(cpu=c,positions=str(w.positions),native_seconds=w.native_seconds,pid=w.p.pid,resident=True)for c,w in self.workers.items()],worker_pids=[dict(pid=w.p.pid,cpu=c,busy=w.task is not None)for c,w in self.workers.items()],completed_positions=str(self.committed),durable_completed_positions=str(self.committed),total_positions=str(self.total),inflight_pieces=active,buffered_closed_pieces=len(self.completed),maximum_buffered_closed_pieces=self.max_buffered,completed_piece_count=self.completed_piece_count,rate_positions_per_second=measured_rate,positions_per_second=measured_rate,compute_seconds=self.compute_seconds,wall_active_seconds=elapsed,machine_load_percent=self.load.value,maximum_machine_load_percent=self.maximum_machine_load,total_load_limit_percent=None,budget_refused=False,error=self.failure,result_ready=self.result is not None,probe=self.probe,request_sha256=digest(self.request)if self.request else None,coverage_contract=COVERAGE,production_admitted=False,network_accepted=False,compute_started=computing,session=self.session)
  def reply(self,c,ok=True,error=None,**extra):
   v=dict(id=c.get('id'),ok=ok,status=self.status(),**extra)
   if error:v['error']=dict(code='REFUSED',message=str(error)[:300])
@@ -202,7 +175,7 @@ class Service:
    v['status']['details']='Full telemetry available through status command'
   emit(v)
  def load_inventory(self):
-  v=dict(self.inv);v.update(compute_started=False,owned_bits=[68],planned_bits=[67,95],worker_supported=True,production_admitted=False,normal_total_load_limit_percent=75,allocator_supported=True,memory_pages_schema='PGN_CPU_MEMORY_PAGES_V1',control_version=CONTROL_VERSION,normal_cycle_executor=True,standalone_audit_allocation=False,owned_work_schema=cycle_work.SCHEMA)
+  v=dict(self.inv);v.update(compute_started=False,owned_bits=[68],planned_bits=[67,95],worker_supported=True,production_admitted=False,normal_total_load_limit_percent=None,allocator_supported=True,memory_pages_schema='PGN_CPU_MEMORY_PAGES_V1',control_version=CONTROL_VERSION,normal_cycle_executor=True,standalone_audit_allocation=False,owned_work_schema=cycle_work.SCHEMA)
   return v
  def evidence(self):
   return dict(schema='PGN_CPU_CYCLE_EVIDENCE_V1',request=self.request,request_sha256=digest(self.request)if self.request else None,executor=dict(host=self.inv['host'],processor_group=self.inv.get('processor_group',0)),counts100=[str(c)for c in self.counts],best=self.best,frontiers=cycle_work.frontier(self.parts,self.committed),completed_positions=str(self.committed),candidate_tests=str(self.tests),complete=self.committed==self.total and self.request is not None,identity=self.identity(),coverage_contract=COVERAGE,production_admitted=False,network_accepted=False)
@@ -228,7 +201,7 @@ class Service:
    if self.committed==self.total:
     self.result=self.computed_result()
     self.state=self.result['state']
-    if not self.keep_result_workers or self.budget_refused:self.enabled=False
+    if not self.keep_result_workers:self.enabled=False
    self.persist()
  def pump(self,timeout=.01):
   try:w,r=self.events.get(timeout=timeout);self.native_event(w,r)
@@ -263,7 +236,7 @@ class Service:
   if type(keep_resident)is not bool or (keep_resident and (probe or request['stage']!='search')):
    raise ValueError('Resident handoff requires explicit normal search work')
   self.keep_result_workers=keep_resident
-  self.request=request;self.parts=parts;self.probe=probe;self.total=sum(integer(p['end'])-integer(p['start'])for p in parts);self.committed=0;self.next_offset=0;self.counts=[0]*len(parts);self.completed={};self.result=None;self.compute_seconds=0.;self.completed_piece_count=0;self.running_seconds=0.;self.run_start=None;self.state='PAUSED';self.rate_base=0;self.budget_refused=False;self.failure=None;self.best=[];self.tests=0;self.persist()
+  self.request=request;self.parts=parts;self.probe=probe;self.total=sum(integer(p['end'])-integer(p['start'])for p in parts);self.committed=0;self.next_offset=0;self.counts=[0]*len(parts);self.completed={};self.result=None;self.compute_seconds=0.;self.completed_piece_count=0;self.running_seconds=0.;self.run_start=None;self.state='PAUSED';self.rate_base=0;self.failure=None;self.best=[];self.tests=0;self.persist()
  def locate(self,offset):
   base=0
   for k,p in enumerate(self.parts):
@@ -274,9 +247,7 @@ class Service:
  def dispatch(self):
   value=self.load.update()
   if value is not None and any(w.task for w in self.workers.values()):self.maximum_machine_load=max(self.maximum_machine_load,value)
-  if not self.enabled or not self.request or self.result or self.pending or self.budget_refused:return
-  if self.load.update()is not None and self.load.value>LOAD_LIMIT_PERCENT:
-   self.budget_refused=True;self.state='DRAINING_BUDGET';return
+  if not self.enabled or not self.request or self.result or self.pending:return
   for w in self.workers.values():
    if w.task or not w.ready:continue
    outstanding=len(self.completed)+sum(x.task is not None for x in self.workers.values())
@@ -292,19 +263,17 @@ class Service:
   if any(w.task for w in self.workers.values()):return
   if self.run_start is not None:self.running_seconds+=time.monotonic()-self.run_start;self.run_start=None
   if self.result and self.pending is None:
-   if not self.enabled or self.budget_refused or not self.keep_result_workers:self.stop_workers()
-   self.budget_refused=False;self.state=self.result['state'];return
-  if self.budget_refused and self.pending is None:self.stop_workers();self.state='BUDGET_PAUSED';self.recover_budget();return
+   if not self.enabled or not self.keep_result_workers:self.stop_workers()
+   self.state=self.result['state'];return
   if self.pending is None:return
   c=self.pending;self.pending=None;action=c['action']
   if action in('configure','pause'):
    enabled=c.get('enabled',False)if action=='configure'else False
    if action=='configure':self.threads=c['threads'];self.affinity=c['affinity']
-   self.generation=c['generation'];self.enabled=enabled;self.budget_refused=False;self.budget_resume_since=None
+   self.generation=c['generation'];self.enabled=enabled
    if not enabled:self.stop_workers();self.state='PAUSED'if self.request else 'OFF'
    elif self.request and self.result is None:
     self.stop_workers(keep=self.affinity)
-    if not self.admit_budget():self.stop_workers();self.budget_refused=True;self.state='BUDGET_PAUSED';self.reply(c);return
     self.start_workers();self.state='RUNNING'
    else:self.stop_workers();self.state='WAITING_NORMAL_CYCLE'if self.result is None else self.result['state']
    self.persist();self.reply(c);return
@@ -326,8 +295,7 @@ class Service:
   if a in('execute','probe'):
    self.new_work(c,a=='probe')
    if self.enabled:
-    if not self.admit_budget():self.budget_refused=True;self.state='BUDGET_PAUSED'
-    else:self.start_workers();self.state='RUNNING'
+    self.start_workers();self.state='RUNNING'
    self.reply(c);return
   if a in('configure','pause'):
    g=c.get('generation')
@@ -344,7 +312,7 @@ class Service:
    if c.get('request_sha256')!=(digest(self.request)if self.request else None)or self.request is None:raise ValueError('Explicit matching request digest required')
    if a=='ack_result'and self.result is None:raise ValueError('No complete result toacknowledge')
    if a=='discard'and self.result is not None:raise ValueError('Unconsumed result requires ack_result')
-   keep_workers=a=='ack_result' and self.keep_result_workers and self.enabled and not self.budget_refused
+   keep_workers=a=='ack_result' and self.keep_result_workers and self.enabled
    if any(w.task for w in self.workers.values()) or (self.workers and not keep_workers):
     raise ValueError('Pause anddrain before clearing assignment')
    self.request=None;self.parts=[];self.counts=[];self.best=[];self.tests=0;self.result=None;self.total=self.committed=self.next_offset=0

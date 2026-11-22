@@ -1,8 +1,6 @@
 import pathlib,sys,unittest
-from types import SimpleNamespace
-from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
-from service import ControlLease,Service
+from service import ControlLease
 
 class ControlLeaseTests(unittest.TestCase):
  def setUp(self):self.now=0.;self.lease=ControlLease(45,5,lambda:self.now)
@@ -22,19 +20,5 @@ class ControlLeaseTests(unittest.TestCase):
  def test_invalid_limits_rejected(self):
   for timeout,grace in[(0,5),(-1,5),(45,-1)]:
    with self.assertRaises(ValueError):ControlLease(timeout,grace)
-
-class BudgetScaleTests(unittest.TestCase):
- def service(self,system=12,background=21):
-  s=Service.__new__(Service);s.threads=2;s.inv=dict(available_cpus=[2,4,6],logical_cpus_system=system);s.load=SimpleNamespace(reset=lambda:None,update=lambda:background);return s
- def test_restricted_affinity_keeps_machine_load_units(self):
-  s=self.service();self.assertAlmostEqual(s.estimated_worker_load(),100/6)
-  with patch('service.time.sleep'):self.assertTrue(s.admit_budget())
-  self.assertEqual(s.inv['available_cpus'],[2,4,6])
- def test_real_machine_budget_still_refuses_excess_load(self):
-  with patch('service.time.sleep'):self.assertFalse(self.service(background=70).admit_budget())
- def test_unknown_invalid_and_multigroup_inventory_stays_conservative(self):
-  for value in[None,True,0,2,128]:
-   s=self.service(system=value);self.assertAlmostEqual(s.estimated_worker_load(),200/3)
-   with patch('service.time.sleep'):self.assertFalse(s.admit_budget())
 
 if __name__=='__main__':unittest.main()
