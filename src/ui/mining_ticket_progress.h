@@ -27,6 +27,8 @@ public:
  void bindTicketLookup(TicketLookup);
  using AuditLookup=std::function<void(const QJsonArray&,std::function<void(QJsonObject,QString)>)>;
  void bindAuditLookup(AuditLookup);
+ using LegacyAuditLookup=std::function<void(const QJsonObject&,std::function<void(QJsonObject,QString)>)>;
+ void bindLegacyAuditLookup(LegacyAuditLookup);
  void setRecordEligibility(const QJsonArray&);
 protected:
  bool event(QEvent*)override;
@@ -55,9 +57,12 @@ private:
  void pollLandings();
  void pollAuditVerdicts();
  AuditLookup auditLookup_;
+ LegacyAuditLookup legacyAuditLookup_;
+ QJsonObject legacyAuditScope_,legacyAuditSnapshot_;
+ QJsonArray legacyAuditWatch_;
  QJsonArray auditRequests_,auditVerdicts_;
  qint64 nextAuditLookupAt_{},nextAuditRequestScanAt_{},auditObservedAt_{-1};
- quint64 auditBinding_{};
+ quint64 auditBinding_{},legacyAuditGeneration_{};
  bool auditLookupBusy_{};
  QString reportTooltipAt(const QPointF& point)const;
  QRectF bar()const;

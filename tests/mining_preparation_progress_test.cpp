@@ -218,6 +218,68 @@ int main(int argc,char** argv){
         "Connection wait still presented active ticket progress");
   check(currentAssignmentPresentation(search)==search&&currentAssignmentPresentation(paused)==paused,"Valid searching or paused checkpoint changed");
   render(search,"captures/assignment-restored.png");check(rail.property("pgn_ticket_progress_fraction").isValid(),"Fresh verified assignment could not restore progress");
+  auto relayed=firstSearch;
+  const auto relayedRequest=QString(64,'c');
+  relayed["request_id"]=relayedRequest;
+  auto secondBound=secondRef;
+  secondBound.insert("commitment",commitment);
+  auto catchupBound=catchupRef;
+  catchupBound.insert("audit_id",extra);
+  catchupBound.insert("commitment",commitment);
+  int legacyReads=0;
+  rail.bindLegacyAuditLookup([&](const QJsonObject& scope,auto done){
+   const auto ids=scope.value("extra_audit_ids").toArray();
+   check(scope.value("request_id")==relayedRequest && scope.value("ticket_id")==relayed.value("ticket_id") &&
+         !ids.isEmpty() && ids[0]==extra,
+         "A legacy role lost its exact search and catch-up identities");
+   if(legacyReads>0){
+    const auto remembered=scope.value("remembered").toArray();
+    check(ids.size()==2&&remembered.size()==1&&remembered[0].toObject().value("audit_id")==extra,
+          "Adding a catch-up audit dropped the previous terminal audit locator");
+   }
+   ++legacyReads;
+   done(QJsonObject{{"regular_refs",QJsonArray{firstRef,secondBound}},{"extra_refs",QJsonArray{catchupBound}},
+       {"audits",QJsonArray{states.first(),stateRow(secondRequest,0,8,"committed",commitment),
+          stateRow(catchupRequest,1,9,legacyReads>1?"passed":"committed",commitment)}}},{});
+  });
+  rail.present(relayed);
+  rail.show();
+  QElapsedTimer legacyTimeout;legacyTimeout.start();
+  while(!legacyReads&&legacyTimeout.elapsed()<2000){app.processEvents();QThread::msleep(15);}
+  check(legacyReads==1,"The old relay did not request its authenticated Core verdicts");
+  render(relayed,"captures/legacy-relay-resolved.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray()==QJsonArray{"#69efc5","#ffbd69","#ffbd69"},
+        "The relay lost the green confirmation or treated engaged and pending audits as passed");
+  check(rail.property("pgn_ticket_progress_fraction").toDouble()==0.,"Legacy audit progress moved the start of search");
+  const QString nextExtra(64,'d');
+  auto extraCycle=relayed.value("audit_service").toObject().value("cycle").toObject();
+  extraCycle["completed_extra_audit_ids"]=QJsonArray{extra,nextExtra};
+
+  extraCycle["extra_audit_ids"]=QJsonArray{extra,nextExtra};
+  auto extraFrame=relayed;
+  extraFrame["audit_service"]=QJsonObject{{"cycle",extraCycle}};
+  render(extraFrame,"captures/legacy-relay-extra-request.png");
+  legacyTimeout.restart();
+  while(legacyReads<2&&legacyTimeout.elapsed()<2000){app.processEvents();QThread::msleep(15);}
+  check(legacyReads==2,"A newly added catch-up audit did not trigger its own lookup");
+  render(extraFrame,"captures/legacy-relay-extra-terminal.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().at(2)=="#69efc5",
+        "Resolved terminal verdicts were lost on a growing catch-up list");
+
+  auto another=extraFrame;
+  another["ticket_id"]=QString(64,'9');
+  rail.present(another);
+  rail.repaint();
+  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#69efc5"),
+        "The previous search verdict colored a different ticket with the same request");
+
+  // Present both frames synchronously. The old verdict must already have
+  // disappeared when paint occurs, before the next verdict poll.
+  rail.present(extraFrame);
+  rail.repaint();
+  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#69efc5"),
+        "An A-to-B-to-A switch revived an old legacy verdict before polling");
+  rail.bindLegacyAuditLookup({});
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";
   return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

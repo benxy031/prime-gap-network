@@ -658,6 +658,9 @@ int main(int argc,char** argv) {
   ticketProgressRail->bindAuditLookup([&inspectWallet](const QJsonArray& watched,auto consume){
    pgn::ui::readWalletAuditVerdicts(inspectWallet,watched,std::move(consume));
   });
+  ticketProgressRail->bindLegacyAuditLookup([&inspectWallet](const QJsonObject& scope,auto consume){
+   pgn::ui::readWalletLegacyCycleAudits(inspectWallet,scope,std::move(consume));
+  });
  auto socialConnection=std::make_shared<QPointer<pgn::social::CoreSocialService>>();
  auto displayConnection=std::make_shared<QPointer<pgn::ui::SocialDisplaySession>>();
  auto accessConnection=std::make_shared<QPointer<pgn::ui::SocialAccessSession>>();

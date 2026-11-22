@@ -3,6 +3,7 @@
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
 #include "wallet/audit_activity_snapshot.h"
+#include "wallet/legacy_cycle_audit_verdicts.h"
 #include "wallet/ticket_atlas_snapshot.h"
 #include "wallet/confirmed_snapshot_anchor.h"
 #include "wallet/explorer_projection.h"
@@ -1112,13 +1113,112 @@ void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void
  });
 }
 
-void CoreRuntime::readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){
+void CoreRuntime::checkLegacyCycleAncestor(const QString& anchor,const QString& ancestor,int remaining,
+ std::function<bool()> current,std::function<void(bool)> done){
  static const QRegularExpression hash("^[0-9a-f]{64}$");
- if(!connected_||!processAlive()||afterHeight<0||watched.size()>64||(afterHeight>0&&!hash.match(afterHash).hasMatch())){consume({},"Verified Core and bounded audit cursor required");return;}
+ if(!current()||!hash.match(anchor).hasMatch()||!hash.match(ancestor).hasMatch()){
+  done(false);
+  return;
+ }
+ if(anchor==ancestor){done(true);return;}
+ if(remaining<=0){done(false);return;}
+ rpc("getblockheader",{anchor,true},[this,anchor,ancestor,remaining,current=std::move(current),done=std::move(done)]
+     (QJsonValue value,QString error)mutable{
+  const auto header=value.toObject();
+  if(!error.isEmpty()||!current()||header.value("hash")!=anchor||header.value("confirmations").toInteger(-1)<=0){
+   done(false);
+   return;
+  }
+  checkLegacyCycleAncestor(header.value("previousblockhash").toString(),ancestor,remaining-1,std::move(current),std::move(done));
+ });
+}
+
+void CoreRuntime::readLegacyCycleAudits(const QJsonObject& scope,std::function<void(QJsonObject,QString)> consume){
+ const auto request=scope.value("request_id").toString();
+ const auto ticket=scope.value("ticket_id").toString();
+ const auto extras=scope.value("extra_audit_ids").toArray();
+ const auto remembered=scope.value("remembered").toArray();
+ static const QRegularExpression hash("^[0-9a-f]{64}$");
+ if(!connected_||!processAlive()||!hash.match(request).hasMatch()||request==QString(64,'0')||
+    !hash.match(ticket).hasMatch()||ticket==QString(64,'0')||extras.size()>4){
+  consume({},"Verified Core and a legacy search cycle are required");
+  return;
+ }
  const auto owner=epoch();
- rpc("getpgnauditactivity",{afterHeight,64,watched},[this,owner,afterHeight,afterHash,watched,consume=std::move(consume)](QJsonValue result,QString error){
+ const auto current=[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();};
+ rpc("getpgnscientificwork",{request,QString(64,'0')},
+     [this,current,request,ticket,extras,remembered,consume=std::move(consume)](QJsonValue value,QString error)mutable{
+  const auto work=value.toObject();
+  if(!error.isEmpty()||!current()||!legacyCycleWorkMatches(work,request,ticket,profile_.genesisHash)){
+   consume({},"Core legacy audit assignment unavailable");
+   return;
+  }
+  const auto service=work.value("native_audit_service").toObject();
+  const auto credits=service.value("credits").toArray();
+  if(service.value("enforced")!=QJsonValue(true)||credits.size()>2){
+   consume({},"Core did not confirm an audit service receipt for this search");
+   return;
+  }
+  QJsonArray watched;
+  for(const auto& item:credits){
+   const auto request=item.toObject().value("request_id").toString();
+   if(!hash.match(request).hasMatch()||request==QString(64,'0')){
+    consume({},"Core audit service credit identity unavailable");
+    return;
+   }
+   if(!watched.contains(request))watched.append(request);
+  }
+  QSet<QString> known;
+  for(const auto& item:remembered){
+   const auto ref=item.toObject();
+   const auto requestId=ref.value("request").toString();
+   const auto id=projectedAuditId(requestId,ref.value("slot").toInteger(-1),ref.value("attempt").toInteger(-1));
+   if(id.isEmpty()||!extras.contains(id))continue;
+   known.insert(id);
+   if(!watched.contains(requestId))watched.append(requestId);
+  }
+  const auto genesis=profile_.genesisHash;
+  auto read=[this,current,request,extras,genesis,service,consume=std::move(consume)]
+      (QJsonObject snapshot,QString activityError)mutable{
+   if(!activityError.isEmpty()||!current()){consume({},activityError.isEmpty()?QString("Core epoch changed"):activityError);return;}
+   const auto anchor=snapshot.value("state").toObject().value("bestblockhash").toString();
+   const auto parent=service.value("view_parent").toString();
+   checkLegacyCycleAncestor(anchor,parent,8,current,[request,extras,genesis,service,snapshot,parent,consume=std::move(consume)](bool linked)mutable{
+    if(!linked){consume({},"Core branches differ, or the audit snapshots drifted");return;}
+    const auto result=resolveLegacyCycleAudits(request,extras,genesis,service,snapshot,parent);
+    if(!result){consume({},"Core snapshots do not identify the same audit cycle");return;}
+    consume(*result,{});
+   });
+  };
+  if(known.size()!=extras.size()||watched.isEmpty()){
+   readAuditActivity(0,{},watched,std::move(read));
+   return;
+  }
+  // Use one anchored projection. If a watched report is absent, discard
+  // unrelated rows that may have filled its place in the bounded response.
+  readAuditActivity(0,{},watched,[watched,read=std::move(read)](QJsonObject activity,QString error)mutable{
+   QJsonArray rows;
+   for(const auto& item:activity.value("audits").toArray())
+    if(watched.contains(item.toObject().value("request_id")))rows.append(item);
+   activity.insert("audits",rows);
+   read(activity,error);
+  },int(watched.size()));
+ });
+}
+
+void CoreRuntime::readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,
+                                    std::function<void(QJsonObject,QString)> consume,int limit){
+ static const QRegularExpression hash("^[0-9a-f]{64}$");
+ if(!connected_||!processAlive()||afterHeight<0||limit<1||limit>64||watched.size()>limit||
+    (afterHeight>0&&!hash.match(afterHash).hasMatch())){
+  consume({},"Verified Core and bounded audit cursor required");
+  return;
+ }
+ const auto owner=epoch();
+ rpc("getpgnauditactivity",{afterHeight,limit,watched},
+     [this,owner,afterHeight,afterHash,watched,limit,consume=std::move(consume)](QJsonValue result,QString error){
   if(!error.isEmpty()||!owner.matches(epoch())||!connected_||!processAlive()){consume({},error.isEmpty()?QString("Core audit activity connection changed"):error);return;}
-  const auto view=result.toObject();const auto invalid=validateAuditActivity(view,profile_.genesisHash,afterHeight,64,watched);if(!invalid.isEmpty()){consume({},invalid);return;}
+  const auto view=result.toObject();const auto invalid=validateAuditActivity(view,profile_.genesisHash,afterHeight,limit,watched);if(!invalid.isEmpty()){consume({},invalid);return;}
   auto verify=[this,owner,consume=std::move(consume)](QJsonObject value)mutable{
    verifyConfirmedSnapshotAnchor(value.value("state").toObject(),[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[value,consume=std::move(consume)](QString reason){consume(reason.isEmpty()?value:QJsonObject{},reason);});
   };

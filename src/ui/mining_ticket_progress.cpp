@@ -20,6 +20,32 @@
 namespace pgn::ui {
 namespace {
 constexpr int PrimaryWorkHeight=120, ConcurrentWorkRowHeight=24;
+QJsonObject legacyAuditScope(const QJsonObject& frame){
+ if(frame.value("work_role")!="search"||frame.value("source_stale").toBool()||
+    frame.value("phase")=="Waiting for connection"||frame.value("phase")=="Synchronizing")return {};
+ const auto cycle=frame.value("audit_service").toObject().value("cycle").toObject();
+ const auto request=cycle.value("request_id").toString();
+ const auto ticket=frame.value("ticket_id").toString();
+ if(cycle.value("schema")!="PGN_MINING_CYCLE_VIEW_V1"||cycle.contains("extra_audit_refs")||
+    cycle.value("audits").toArray().size()!=2||request.isEmpty()||ticket.isEmpty()||frame.value("request_id")!=request)return {};
+ return {{"request_id",request},{"ticket_id",ticket},{"extra_audit_ids",cycle.value("extra_audit_ids").toArray()}};
+}
+QJsonObject withLegacyAuditRefs(QJsonObject frame,const QJsonObject& snapshot){
+ auto service=frame.value("audit_service").toObject();
+ auto cycle=service.value("cycle").toObject();
+ auto regular=cycle.value("audits").toArray();
+ const auto refs=snapshot.value("regular_refs").toArray();
+ for(qsizetype i=0;i<std::min(regular.size(),refs.size());++i){
+  auto task=regular[i].toObject();
+  if(task.value("state")=="committed")task.insert("audit_ref",refs[i]);
+  regular[i]=task;
+ }
+ cycle.insert("audits",regular);
+ cycle.insert("extra_audit_refs",snapshot.value("extra_refs"));
+ service.insert("cycle",cycle);
+ frame.insert("audit_service",service);
+ return frame;
+}
 constexpr qint64 RosetteCollectMs = 2800;
 constexpr qint64 RosetteMorphMs = 700;
 constexpr qint64 RosetteHoldMs = 650;
@@ -368,7 +394,7 @@ void MiningTicketProgress::presentResourceActivity(const QString& device,const Q
 }
 bool MiningTicketProgress::selectWorkSource(const QString& source){
  if(source!=workSource_&&!workViews_.contains(source))return false;
- if(source!=workSource_){auto& old=workViews_[workSource_];old.flow=flow_;old.cycle=cycleHistory_;workSource_=source;const auto view=workViews_.value(source);flow_=view.flow;cycleHistory_=view.cycle;frame_={};}
+ if(source!=workSource_){auto& old=workViews_[workSource_];old.flow=flow_;old.cycle=cycleHistory_;workSource_=source;++legacyAuditGeneration_;legacyAuditWatch_={};legacyAuditScope_={};legacyAuditSnapshot_={};const auto view=workViews_.value(source);flow_=view.flow;cycleHistory_=view.cycle;frame_={};}
  auto value=workViews_.value(source).frame;
  if(value.isEmpty())value={{"schema","PGN_HORIZON_MINING_VIEW_V1"},{"phase","Waiting for a ticket"},{"source_device",source},{"source_stale",true},{"scopes",QJsonObject{}}};
  updateWorkHeight();applyFrame(value);if(onWorkSelected)onWorkSelected(value);
@@ -386,6 +412,13 @@ void MiningTicketProgress::present(const QJsonObject& frame){
  setProperty("pgn_selected_work_source",source);
 }
 void MiningTicketProgress::applyFrame(const QJsonObject& frame){
+ if(legacyAuditScope(frame_)!=legacyAuditScope(frame)){
+  ++legacyAuditGeneration_;
+  if(!legacyAuditSnapshot_.isEmpty()){
+   legacyAuditSnapshot_={};auditVerdicts_={};auditObservedAt_=-1;
+  }
+  nextAuditLookupAt_=0;
+ }
  const auto remember=[this](const QJsonObject& packet){
   if(packet.value("work_role")=="audit")return;
   const auto ticket=packet.value("ticket_id").toString(),request=packet.value("request_id").toString();
@@ -485,7 +518,10 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  }
  const auto accent=transition?QColor("#ffbd69"):QColor("#69efc5");
  const double total=frame_.value("positions_total").toString().toDouble(),done=frame_.value("positions").toString().toDouble();
- const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());
+ const auto legacyFresh=legacyAuditScope_==legacyAuditScope(frame_)&&!legacyAuditScope_.isEmpty()&&
+      auditObservedAt_>=0&&clock_.elapsed()-auditObservedAt_<=15000&&!legacyAuditSnapshot_.isEmpty();
+ const auto frameForCycle=legacyFresh?withLegacyAuditRefs(frame_,legacyAuditSnapshot_):frame_;
+ const auto cycle=miningCycleProgress(frameForCycle,cycleHistory_.audits(),cycleHistory_.search());
  const auto fraction=total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
  const auto trackFraction=cycle.known&&!cycle.preparing?std::optional<double>(cycle.fraction):fraction;
  if(cycle.known&&(active||phase=="Auditing"))displayPhase=cycle.phase;
@@ -521,7 +557,8 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  for(const auto& slice:cycle.slices){
   const auto state=confirmedProgressAuditState(verdicts,slice.auditRef);
   const auto color=slice.role=="search"||state=="passed"?QColor("#69efc5"):
-                   state=="failed"?QColor("#ff6f7d"):slice.active&&working?QColor("#62cfff"):QColor("#658a96");
+                   state=="failed"?QColor("#ff6f7d"):slice.active&&working?QColor("#62cfff"):
+                   state=="committed"?QColor("#ffbd69"):QColor("#658a96");
   if(slice.role!="search")auditColors.append(color.name());const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.pendingAssignment){painter.fillRect(background,faded(color,20));painter.setPen(QPen(faded(color,100),.8,Qt::DashLine));painter.drawRect(background);}else if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_audit_colors",auditColors);setProperty("pgn_ticket_cycle_fraction",cycle.preparing?QVariant{}:QVariant(cycle.fraction));setProperty("pgn_ticket_cycle_eta_seconds",(active||phase=="Auditing")&&cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else {setProperty("pgn_ticket_cycle_fraction",QVariant{});setProperty("pgn_ticket_audit_colors",QVariant{});}
  if(trackFraction&&!cycle.preparing){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*trackFraction),trackY);
   if(!cycle.known){painter.setPen(QPen(faded(accent,70),4));painter.drawLine(trackStart,measured);painter.setPen(QPen(accent,1.2));painter.drawLine(trackStart,measured);}
@@ -565,17 +602,22 @@ void MiningTicketProgress::bindAuditLookup(AuditLookup lookup) {
  auditLookup_=std::move(lookup);
  ++auditBinding_;
  auditLookupBusy_=false;
- auditRequests_={};auditVerdicts_={};
+ auditRequests_={};auditVerdicts_={};legacyAuditScope_={};legacyAuditSnapshot_={};legacyAuditWatch_={};
  nextAuditLookupAt_=nextAuditRequestScanAt_=0;auditObservedAt_=-1;
  update();
 }
 
+void MiningTicketProgress::bindLegacyAuditLookup(LegacyAuditLookup lookup){
+ legacyAuditLookup_=std::move(lookup);
+ bindAuditLookup(auditLookup_);
+}
+
 void MiningTicketProgress::pollAuditVerdicts() {
  const auto now=clock_.elapsed();
- if(!auditLookup_||now<nextAuditRequestScanAt_)return;
+ if((!auditLookup_&&!legacyAuditLookup_)||now<nextAuditRequestScanAt_)return;
  nextAuditRequestScanAt_=now+250;
  if(auditObservedAt_>=0&&now-auditObservedAt_>15000){
-  auditVerdicts_={};auditObservedAt_=-1;update();
+  auditVerdicts_={};legacyAuditSnapshot_={};auditObservedAt_=-1;update();
  }
  const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());
  QJsonArray requests;
@@ -584,25 +626,61 @@ void MiningTicketProgress::pollAuditVerdicts() {
   const auto request=slice.auditRef.value("request");
   if(!requests.contains(request))requests.append(request);
  }
- if(requests!=auditRequests_){
-  auditRequests_=requests;auditVerdicts_={};auditObservedAt_=-1;update();
+ const auto fallback=requests.isEmpty()&&legacyAuditLookup_?legacyAuditScope(frame_):QJsonObject{};
+ if(requests!=auditRequests_||legacyAuditScope_!=fallback){
+  if(legacyAuditScope_!=fallback){
+   nextAuditLookupAt_=now;
+   QJsonArray retained;
+   if(fallback.value("request_id")==legacyAuditScope_.value("request_id")&&
+      fallback.value("ticket_id")==legacyAuditScope_.value("ticket_id")){
+    const auto wanted=fallback.value("extra_audit_ids").toArray();
+    for(const auto& ref:legacyAuditWatch_)if(wanted.contains(ref.toObject().value("audit_id")))retained.append(ref);
+   }
+   legacyAuditWatch_=retained;
+  }
+  auditRequests_=requests;legacyAuditScope_=fallback;
+  auditVerdicts_={};legacyAuditSnapshot_={};auditObservedAt_=-1;update();
  }
- if(requests.isEmpty()||auditLookupBusy_||now<nextAuditLookupAt_)return;
+ if((requests.isEmpty()&&fallback.isEmpty())||auditLookupBusy_||now<nextAuditLookupAt_)return;
  auditLookupBusy_=true;
  const auto binding=auditBinding_;
  QPointer<MiningTicketProgress> weak(this);
- auditLookup_(requests,[weak,binding,requests](QJsonObject value,QString error){
+ const auto generation=legacyAuditGeneration_;
+ const auto done=[weak,binding,requests,fallback,generation](QJsonObject value,QString error){
   if(!weak||weak->auditBinding_!=binding)return;
   weak->auditLookupBusy_=false;
   const auto observed=weak->clock_.elapsed();
-  weak->nextAuditLookupAt_=observed+5500;
-  if(requests!=weak->auditRequests_)return;
+  if(requests!=weak->auditRequests_||fallback!=weak->legacyAuditScope_||
+     (!fallback.isEmpty()&&generation!=weak->legacyAuditGeneration_))return;
+  weak->nextAuditLookupAt_=observed+(fallback.isEmpty()?5500:error.isEmpty()?9500:1500);
   // Replace the whole snapshot. Rows from different active-branch anchors
   // must never be combined into one set of completed audit indicators.
   weak->auditVerdicts_=error.isEmpty()?value.value("audits").toArray():QJsonArray{};
+  weak->legacyAuditSnapshot_=error.isEmpty()&&!fallback.isEmpty()?value:QJsonObject{};
+  if(!weak->legacyAuditSnapshot_.isEmpty()){
+   const auto ids=fallback.value("extra_audit_ids").toArray();
+   QMap<QString,QJsonObject> locators;
+   auto refs=weak->legacyAuditWatch_;
+   for(const auto& ref:value.value("extra_refs").toArray())refs.append(ref);
+   for(const auto& ref:refs){
+    const auto entry=ref.toObject();
+    const auto id=entry.value("audit_id").toString();
+    if(!id.isEmpty()&&ids.contains(id))locators.insert(id,{{"audit_id",id},{"request",entry.value("request")},
+        {"slot",entry.value("slot")},{"attempt",entry.value("attempt")}});
+   }
+   weak->legacyAuditWatch_={};
+   for(const auto& locator:locators)weak->legacyAuditWatch_.append(locator);
+  }
   weak->auditObservedAt_=error.isEmpty()?observed:-1;
   weak->update();
- });
+ };
+ if(fallback.isEmpty()&&auditLookup_)auditLookup_(requests,done);
+ else if(!fallback.isEmpty()){
+  auto watch=fallback;
+  if(!legacyAuditWatch_.isEmpty())watch.insert("remembered",legacyAuditWatch_);
+  legacyAuditLookup_(watch,done);
+ }
+ else auditLookupBusy_=false;
 }
 
 void MiningTicketProgress::bindTicketLookup(TicketLookup lookup){

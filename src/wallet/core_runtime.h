@@ -67,8 +67,11 @@ public:
  void readTicketNumber(const QString&,std::function<void(QJsonObject,QString)>,
                        std::function<void(QJsonObject)> summary={});
  void readTicketAtlas(const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)>);
- void readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,std::function<void(QJsonObject,QString)>);
+ void readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,
+                        std::function<void(QJsonObject,QString)>,int limit=64);
  void readAuditVerdicts(const QJsonArray&,std::function<void(QJsonObject,QString)>);
+ void readLegacyCycleAudits(const QJsonObject&,std::function<void(QJsonObject,QString)>);
+ void checkLegacyCycleAncestor(const QString&,const QString&,int,std::function<bool()>,std::function<void(bool)>);
  void readBlockAtHeight(int,std::function<void(QJsonObject,QString)>);
  void readBlockPage(int height,std::function<void(QJsonObject,QString)>);
  void readAuditDetails(const QString&,std::function<void(QJsonObject,QString)>);

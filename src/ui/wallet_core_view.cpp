@@ -372,6 +372,10 @@ void readWalletAuditVerdicts(QWidget* widget,const QJsonArray& watched,std::func
   view->networkRuntime()->readAuditVerdicts(watched,std::move(consume));
  else consume({},"Wallet network activity unavailable");
 }
+void readWalletLegacyCycleAudits(QWidget* widget,const QJsonObject& scope,std::function<void(QJsonObject,QString)> consume){
+ if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readLegacyCycleAudits(scope,std::move(consume));
+ else consume({},"Wallet network activity unavailable");
+}
 void readWalletAuditDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditDetails(id,std::move(consume));else consume({},"Wallet audit view unavailable");}
 void bindWalletStartupAttention(QWidget* widget,std::function<void(QString)> receive){if(auto* view=dynamic_cast<WalletCoreView*>(widget)){view->startupAttention=std::move(receive);if(view->property("pgn_wallet_setup_required").toBool()&&view->startupAttention)view->startupAttention("Wallet connection requires attention");}}
 void readWalletLocalConnection(QWidget* widget,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readLocalConnection(std::move(consume));else consume({},"Local wallet connection unavailable");}
