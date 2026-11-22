@@ -23,6 +23,10 @@ Prime Gap Network (PGN) is a collaborative initiative conceived by **Rob Smith**
 
 Select either image to view it at full resolution. These are captures of the current supervised testnet preview.
 
+**Mining replay.** Horizon UI231 replays three public testnet Gold results, including the 1,414 gap from ticket 3570. The session totals cover these samples. Progress and rates are illustrative.
+
+![A 1414 prime gap appears in the Best and Recent tables as Horizon visualizes the discovery](docs/images/horizon-mining-ui231.gif)
+
 ## Windows supervised testnet preview
 
 [Current Windows and Ubuntu downloads](https://github.com/wizz13150/prime-gap-network/releases/tag/horizon-testnet-epoch3) · [Tester guide](docs/TESTING.md)
