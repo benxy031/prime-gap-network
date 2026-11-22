@@ -14,6 +14,24 @@ static CoreRpcResult reply(const QByteArray& body,const QString& method){return 
 int main(int argc,char** argv){QCoreApplication app(argc,argv);
  if(argc==2){QFile input;need(input.open(stdin,QIODevice::ReadOnly),"Native RPC fixture stdin unavailable");const auto raw=input.read(262145);const auto decoded=decodeCoreRpcResponse(raw,"native-money-proof",QString::fromLocal8Bit(argv[1]));need(decoded.error.isEmpty(),"Actual native monetary reply refused");int fields=0;bool gold=false;std::function<void(const QJsonValue&)> visit=[&](const QJsonValue& value){if(value.isObject()){const auto object=value.toObject(),amounts=object.value("_pgn_atomic").toObject();fields+=amounts.size();for(const auto& amount:amounts)gold|=amount.toString()=="1710000000000";for(auto it=object.begin();it!=object.end();++it)if(it.key()!="_pgn_atomic")visit(it.value());}else if(value.isArray())for(const auto& child:value.toArray())visit(child);};visit(decoded.value);std::cout<<QJsonDocument(QJsonObject{{"PASS",true},{"amount_fields",fields},{"gold_171_present",gold}}).toJson(QJsonDocument::Compact).constData()<<"\n";return 0;}
 static_assert(CurrencyDecimalPlaces==10);static_assert(AtomicUnitsPerCoin==10000000000LL);
+ auto history=reply(R"([{"trusted":true,"amount":0.0000000001},{"trusted":false,"amount":-0.0000000001}])",
+                    "listtransactions");
+ need(history.error.isEmpty(),"Transaction history trust flags refused");
+ const auto entries=history.value.toArray();
+ need(entries.size()==2,"Transaction history entries lost");
+ const auto trusted=entries[0].toObject(), untrusted=entries[1].toObject();
+ need(trusted["trusted"].isBool()&&trusted["trusted"].toBool(),"Trusted transaction flag changed");
+ need(untrusted["trusted"].isBool()&&!untrusted["trusted"].toBool(),"Untrusted transaction flag changed");
+ need(!exactAtomicField(trusted,"trusted")&&exactAtomicField(trusted,"amount")==1
+      &&exactAtomicField(untrusted,"amount")==-1,"Transaction trust was treated as money");
+ auto transaction=reply(R"({"trusted":true,"amount":1.0000000001,"fee":-0.0000000001})","gettransaction");
+ need(transaction.error.isEmpty()&&transaction.value.toObject()["trusted"].toBool()
+      &&exactAtomicField(transaction.value.toObject(),"amount")==10000000001LL
+      &&exactAtomicField(transaction.value.toObject(),"fee")==-1,"Transaction trust or exact amounts lost");
+ need(!reply(R"([{"trusted":1,"amount":0}])","listtransactions").error.isEmpty()
+      &&!reply(R"({"trusted":"true","amount":0})","gettransaction").error.isEmpty()
+      &&!reply(R"({"mine":{"trusted":true}})","getbalances").error.isEmpty(),
+      "Trust flag type was accepted in the wrong RPC");
  auto decoded=reply("{\"mine\":{\"trusted\":99999999.9999999999,\"untrusted_pending\":0.0000000001,\"immature\":171.0000000000}}","getbalances");need(decoded.error.isEmpty(),"Exact balance refused");auto mine=decoded.value.toObject()["mine"].toObject();need(exactAtomicField(mine,"trusted")==999999999999999999LL,"Balance lost one atom near supply ceiling");need(exactAtomicField(mine,"untrusted_pending")==1,"Smallest unit vanished");need(exactAtomicField(mine,"immature")==1710000000000LL,"Native denomination changed");need(formatAtomicPgn(*exactAtomicField(mine,"trusted"))=="99999999.9999999999","Display rounded exact amount");
  decoded=reply("[{\"amount\":-0.0000000001,\"fee\":-1.2345678901,\"confirmations\":42,\"description\":\"text: \\\"amount\\\":999\"}]","listtransactions");need(decoded.error.isEmpty(),"Signed native delta refused");auto tx=decoded.value.toArray()[0].toObject();need(exactAtomicField(tx,"amount")==-1&&exactAtomicField(tx,"fee")==-12345678901LL&&tx["confirmations"].toInt()==42,"Delta or numeric metadata changed");
  decoded=reply("{\"tx\":[{\"vout\":[{\"value\":171.0000000001},{\"value\":0.0000000001}]}]}","getblock");need(decoded.error.isEmpty(),"Exact outputs refused");need(exactTransactionOutput(decoded.value.toObject()["tx"].toArray()[0].toObject())==1710000000002LL,"Output sum rounded");
