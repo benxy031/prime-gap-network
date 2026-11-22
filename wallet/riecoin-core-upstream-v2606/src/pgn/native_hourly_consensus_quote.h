@@ -19,7 +19,8 @@ class NativeHourlyHistory {
     friend NativeHourlyHistoryCheck ReadNativeHourlyHistory(
         const CCoinsView&,const CBlockIndex&,const pgn::core::ChainRangePolicy&,
         const pgn::core::NativeRequestHistoryArchive&,const pgn::core::RangePolicyReadBudget&,
-        const pgn::core::RangeScheduleBudget&,pgn::core::ScriptWorkBudget,complete_return_detail::Cache&);
+        const pgn::core::RangeScheduleBudget&,pgn::core::ScriptWorkBudget,complete_return_detail::Cache&,
+        pgn::core::ReplayCacheStorage);
 public:
     NativeHourlyHistory(const NativeHourlyHistory&)=default;
     NativeHourlyHistory& operator=(const NativeHourlyHistory&)=default;
@@ -46,7 +47,8 @@ inline NativeHourlyHistoryCheck ReadNativeHourlyHistory(
     const pgn::core::RangePolicyReadBudget& policy_budget,
     const pgn::core::RangeScheduleBudget& schedule_budget,
     pgn::core::ScriptWorkBudget signature_budget,
-    complete_return_detail::Cache& cache)
+    complete_return_detail::Cache& cache,
+    pgn::core::ReplayCacheStorage storage=pgn::core::ReplayCacheStorage::Persistent)
 {
     AssertLockHeld(cs_main);
     if(!pgn::core::ChainRangePolicyOnBranch(view,parent,policy))
@@ -61,7 +63,7 @@ inline NativeHourlyHistoryCheck ReadNativeHourlyHistory(
     if(!target)return {HourlyConsensusVerdict::InvalidInput,{}};
     HourlyReceiptHistogram histogram;
     const auto rows=ReadNativeCompleteReturns(view,parent,policy,history,
-        policy_budget,schedule_budget,signature_budget,cache,&histogram);
+        policy_budget,schedule_budget,signature_budget,cache,&histogram,storage);
     if(!rows)return {HourlyConsensusVerdict::AwaitHistory,{}};
     HashWriter model{TaggedHash("PGN/HOURLY-C1-M24-B10/1")};
     model<<policy.Id();
@@ -72,9 +74,10 @@ inline HourlyConsensusResult ReadNativeHourlyConsensusQuote(
     const CCoinsView& view,const CBlockIndex& parent,const pgn::core::ChainRangePolicy& policy,
     const pgn::core::NativeRequestHistoryArchive& history,const pgn::core::RangePolicyReadBudget& policy_budget,
     const pgn::core::RangeScheduleBudget& schedule_budget,pgn::core::ScriptWorkBudget signature_budget,
-    complete_return_detail::Cache& cache,uint32_t maximum_header_q16)
+    complete_return_detail::Cache& cache,uint32_t maximum_header_q16,
+    pgn::core::ReplayCacheStorage storage=pgn::core::ReplayCacheStorage::Persistent)
 {
-    const auto checked=ReadNativeHourlyHistory(view,parent,policy,history,policy_budget,schedule_budget,signature_budget,cache);
+    const auto checked=ReadNativeHourlyHistory(view,parent,policy,history,policy_budget,schedule_budget,signature_budget,cache,storage);
     if(!checked.history)return {checked.verdict,{}};
     return checked.history->QuoteAt(parent.nHeight,parent.GetBlockHash(),maximum_header_q16);
 }

@@ -89,15 +89,22 @@ inline std::optional<size_t> NativeWorkDutyRetainedCharge(const NativeDutySpent&
 }
 inline std::optional<NativeWorkDutyState> ReadNativeWorkDutyState(const CCoinsView& view,
     const CBlockIndex& parent,const NativeRequestHistoryArchive& history,const RangePolicyReadBudget& policy_budget,
-    const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget,const NativeWorkDutyActivation& activation)
+    const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget,const NativeWorkDutyActivation& activation,
+    ReplayCacheStorage storage=ReplayCacheStorage::Persistent)
 {
     if(!NativeWorkDutyActivationOnBranch(view,parent,activation))return {};
     using namespace native_audit_replay_detail;
     static Snapshot<NativeDutySpent,NativeWorkDutyActivation> cached;
-    auto result=ReadIncremental(view,parent,history,policy_budget,schedule_budget,signature_budget,cached,activation,
+    static Snapshot<NativeDutySpent,NativeWorkDutyActivation> rpc_cache;
+    const bool read_only=storage==ReplayCacheStorage::MemoryOnly;
+    auto& cache=read_only?rpc_cache:cached;
+    // The RPC projection includes both audit history and spent audit credits.
+    // Its limit affects only retention of the derived state and never consensus.
+    const size_t resident_limit=read_only?48*1024*1024:16*1024*1024;
+    auto result=ReadIncremental(view,parent,history,policy_budget,schedule_budget,signature_budget,cache,activation,
         [&](const NativeAuditLedger& state,const CBlockIndex& prior,const VerifiedNativeRequestBlock& block,NativeDutySpent& spent){
             return ApplyNativeWorkDutyBlock(view,parent,schedule_budget,activation,state,prior,block,spent);
-        },NativeWorkDutyRetainedCharge);
+        },NativeWorkDutyRetainedCharge,resident_limit,storage);
     if(!result)return {};
     return NativeWorkDutyState{std::move(result->audits),std::move(result->extra)};
 }

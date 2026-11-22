@@ -8,6 +8,7 @@ struct RequestHistoryArchiveBudget {size_t coinbase_bytes,proof_bytes;};
 enum class RequestArchiveVerdict {Stored,AlreadyStored,Authenticated,Missing,InvalidParent,InvalidProof,BudgetExceeded,Conflict};
 struct RequestArchiveRead {RequestArchiveVerdict verdict;std::optional<VerifiedNativeRequestBlock> block;};
 struct NativeReplayCheckpointPin {uint256 key;size_t bytes{};std::array<unsigned char,32> digest;};
+enum class ReplayCacheStorage {Persistent, MemoryOnly};
 class NativeRequestHistoryArchive {
     mutable CDBWrapper m_db;
 public:

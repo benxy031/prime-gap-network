@@ -16,7 +16,7 @@ class ChainSciencePolicy {
         :m_chain(chain),m_genesis(genesis),m_id(id),m_effective_parent(effective_parent),m_definition(std::move(definition)){}
     friend ChainSciencePolicyCheck ReadChainSciencePolicy(const CCoinsView&,const CBlockIndex&,
         const NativeRequestHistoryArchive&,RequestHistoryArchiveBudget,RangePolicyReadBudget,
-        const RangeScheduleBudget*,const ScriptWorkBudget*);
+        const RangeScheduleBudget*,const ScriptWorkBudget*,ReplayCacheStorage);
 public:
     ChainSciencePolicy(const ChainSciencePolicy&)=default;
     ChainSciencePolicy& operator=(const ChainSciencePolicy&)=default;
@@ -32,7 +32,8 @@ std::optional<ScienceVerificationDefinition> DecodeCandidateScienceVerificationD
 std::optional<CScript> BuildCandidateSciencePolicyEnvelope(const ScienceVerificationDefinition&,RangePolicyReadBudget);
 ChainSciencePolicyCheck ReadChainSciencePolicy(const CCoinsView&,const CBlockIndex&,
     const NativeRequestHistoryArchive&,RequestHistoryArchiveBudget,RangePolicyReadBudget,
-    const RangeScheduleBudget* schedule=nullptr,const ScriptWorkBudget* signature=nullptr);
+    const RangeScheduleBudget* schedule=nullptr,const ScriptWorkBudget* signature=nullptr,
+    ReplayCacheStorage storage=ReplayCacheStorage::Persistent);
 bool ChainSciencePolicyOnBranch(const CCoinsView&,const CBlockIndex&,const ChainSciencePolicy&);
 // This fixes the initial candidate verifier configuration only: no retarget,
 // proof-weight/fork rule, economics, coverage or approved mainnet profile.

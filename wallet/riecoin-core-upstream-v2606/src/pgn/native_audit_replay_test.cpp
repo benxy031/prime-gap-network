@@ -179,6 +179,15 @@ int main(int argc,char** argv){
     auto first_disk=disk_read();need(first_disk&&spilled.disk&&!spilled.state&&replayed>0,"Full verified prefix was not checkpointed at resident boundary");
     need(NativeAuditReplaySame(first_disk->audits,*restored),"Spilled authenticated state differs from full replay");
     auto immediate=history.LoadReplayCheckpoint(0,*spilled.disk);need(immediate.has_value(),"checkpoint immediate read failed");
+    Snapshot<NoExtraState,uint8_t> rpc_cache;
+    for(unsigned i=0;i<2;++i){
+        const auto rpc=ReadIncremental(view_b,report_b_index,history,policy_budget,schedule,signature_budget,rpc_cache,uint8_t{0},
+            [](const NativeAuditLedger&,const CBlockIndex&,const VerifiedNativeRequestBlock&,NoExtraState&){return true;},
+            [](const NoExtraState&)->std::optional<size_t>{return 0;},1,ReplayCacheStorage::MemoryOnly);
+        need(rpc&&NativeAuditReplaySame(rpc->audits,*fork),"Memory-only branch differs from authenticated replay");
+        need(!rpc_cache.disk&&!rpc_cache.state,"Memory-only reader spilled or exceeded its resident budget");
+        need(history.LoadReplayCheckpoint(0,*spilled.disk)==immediate,"Memory-only reader changed the persisted branch");
+    }
     DataStream immediate_stream{std::span<const unsigned char>{*immediate}};auto immediate_ledger=ReadCheckpointLedger(immediate_stream);
     need(immediate_stream.empty()&&NativeAuditReplaySame(immediate_ledger,*restored),"checkpoint immediate codec mismatch");
     replayed=0;auto second_disk=disk_read();need(second_disk&&spilled.disk&&!spilled.state&&replayed==0,"Resident boundary repeated whole history");

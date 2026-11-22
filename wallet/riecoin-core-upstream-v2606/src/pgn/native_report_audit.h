@@ -424,7 +424,8 @@ inline std::optional<LedgerState<Extra>> ReadIncremental(
     const CCoinsView& view,const CBlockIndex& parent,const NativeRequestHistoryArchive& history,
     const RangePolicyReadBudget& policy_budget,const RangeScheduleBudget& schedule_budget,
     ScriptWorkBudget signature_budget,Snapshot<Extra,Context>& cached,const Context& context,
-    BeforeBlock&& before_block,ExtraCharge&& extra_charge,size_t resident_limit=16*1024*1024)
+    BeforeBlock&& before_block,ExtraCharge&& extra_charge,size_t resident_limit=16*1024*1024,
+    ReplayCacheStorage storage=ReplayCacheStorage::Persistent)
 {
     AssertLockHeld(cs_main);
     const auto full=[&]() -> std::optional<LedgerState<Extra>> {
@@ -438,7 +439,7 @@ inline std::optional<LedgerState<Extra>> ReadIncremental(
     };
     // Recover only a digest this process retained after actual validation.
     // A restart has no digest and must use the independent full replay oracle.
-    if(!cached.state&&cached.disk){
+    if(storage==ReplayCacheStorage::Persistent&&!cached.state&&cached.disk){
         try{
             const auto raw=history.LoadReplayCheckpoint(ExtraCodec<Extra>::id,*cached.disk);
             RequireAudit(raw.has_value(),"Changed replay checkpoint");
@@ -496,7 +497,7 @@ inline std::optional<LedgerState<Extra>> ReadIncremental(
             next.chain=head->chain;next.tip=parent.GetBlockHash();next.height=parent.nHeight;
             next.archive=&history;next.budgets=key;next.context=context;
             if(charge&&Fits(result->audits,*charge,resident_limit))next.state=*result;
-            else{
+            else if(storage==ReplayCacheStorage::Persistent){
                 DataStream stream;std::vector<std::pair<uint256,size_t>> offsets;
                 WriteCheckpointLedger(stream,result->audits,&offsets);
                 uint256 extra_id;extra_id.begin()[0]=2;offsets.emplace_back(extra_id,stream.size());
@@ -520,13 +521,16 @@ inline std::optional<LedgerState<Extra>> ReadIncremental(
 } // namespace native_audit_replay_detail
 inline std::optional<NativeAuditLedger> ReadNativeAuditLedger(
     const CCoinsView& view,const CBlockIndex& parent,const NativeRequestHistoryArchive& history,
-    const RangePolicyReadBudget& policy_budget,const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget)
+    const RangePolicyReadBudget& policy_budget,const RangeScheduleBudget& schedule_budget,ScriptWorkBudget signature_budget,
+    ReplayCacheStorage storage=ReplayCacheStorage::Persistent)
 {
     using namespace native_audit_replay_detail;
     static Snapshot<NoExtraState,uint8_t> cached;
-    auto result=ReadIncremental(view,parent,history,policy_budget,schedule_budget,signature_budget,cached,uint8_t{0},
+    static Snapshot<NoExtraState,uint8_t> rpc_cache;
+    auto& cache=storage==ReplayCacheStorage::MemoryOnly?rpc_cache:cached;
+    auto result=ReadIncremental(view,parent,history,policy_budget,schedule_budget,signature_budget,cache,uint8_t{0},
         [](const NativeAuditLedger&,const CBlockIndex&,const VerifiedNativeRequestBlock&,NoExtraState&){return true;},
-        [](const NoExtraState&)->std::optional<size_t>{return 0;});
+        [](const NoExtraState&)->std::optional<size_t>{return 0;},16*1024*1024,storage);
     if(!result)return {};
     return std::move(result->audits);
 }

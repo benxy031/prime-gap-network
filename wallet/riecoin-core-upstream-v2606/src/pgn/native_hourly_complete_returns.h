@@ -34,6 +34,11 @@ struct Context {
     bool operator==(const Context&)const=default;
 };
 using Cache=native_audit_replay_detail::Snapshot<State,Context>;
+inline Cache& RpcHourlyReplayCache(){
+    AssertLockHeld(cs_main);
+    static Cache cache;
+    return cache;
+}
 }
 }
 
@@ -128,12 +133,16 @@ inline std::optional<std::vector<AdmittedReturn>> ReadNativeCompleteReturns(
     const pgn::core::RangePolicyReadBudget& policy_budget,
     const pgn::core::RangeScheduleBudget& schedule_budget,
     pgn::core::ScriptWorkBudget signature_budget,
-    complete_return_detail::Cache& cached,HourlyReceiptHistogram* histogram=nullptr)
+    complete_return_detail::Cache& cached,HourlyReceiptHistogram* histogram=nullptr,
+    pgn::core::ReplayCacheStorage storage=pgn::core::ReplayCacheStorage::Persistent)
 {
     using namespace pgn::core;
     using namespace complete_return_detail;
     AssertLockHeld(cs_main);
     if(!ChainRangePolicyOnBranch(view,parent,policy))return {};
+    // Both RPC consumers share this bounded projection. The cache identity
+    // still includes the archive, policy, exact ancestor and read budgets.
+    const size_t resident_limit=storage==ReplayCacheStorage::MemoryOnly?48*1024*1024:16*1024*1024;
     const auto before=[&](const NativeAuditLedger& ledger,const CBlockIndex& prior,
                           const VerifiedNativeRequestBlock& block,State& state){
         if(!Flush(ledger,prior,state)||block.Height()!=prior.nHeight+1)return false;
@@ -171,7 +180,7 @@ inline std::optional<std::vector<AdmittedReturn>> ReadNativeCompleteReturns(
         return with_pending+state.histogram.bins.capacity()*sizeof(uint64_t);
     };
     auto result=native_audit_replay_detail::ReadIncremental(view,parent,history,policy_budget,
-        schedule_budget,signature_budget,cached,Context{policy.Id()},before,charge);
+        schedule_budget,signature_budget,cached,Context{policy.Id()},before,charge,resident_limit,storage);
     if(!result||!Flush(result->audits,parent,result->extra))return {};
     Prune(result->extra,parent.GetMedianTimePast());
     if(histogram)*histogram=result->extra.histogram;
@@ -179,7 +188,7 @@ inline std::optional<std::vector<AdmittedReturn>> ReadNativeCompleteReturns(
     // never truncates, drops or changes the returned consensus-derived facts.
     const auto bytes=charge(result->extra);
     if(cached.state){
-        if(bytes&&native_audit_replay_detail::Fits(result->audits,*bytes))cached.state->extra=result->extra;
+        if(bytes&&native_audit_replay_detail::Fits(result->audits,*bytes,resident_limit))cached.state->extra=result->extra;
         else cached.state.reset(); // Preserve any authenticated on-disk fallback.
     }
     std::vector<AdmittedReturn> rows;rows.reserve(result->extra.recent.size());

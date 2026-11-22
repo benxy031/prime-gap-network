@@ -85,7 +85,8 @@ std::shared_ptr<const NativeAuditLedger> ReadRpcAuditLedger(ChainstateManager& m
   if(snapshot){LogDebug(BCLog::RPC,"PGN RPC audit snapshot direct-child %s\n",tip.GetBlockHash().GetHex());return snapshot;}
  }
  saved.reset(); // Release the old retained ledger before rebuilding another tip.
- auto ledger=ReadNativeAuditLedger(active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature);
+ auto ledger=ReadNativeAuditLedger(active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature,
+     ReplayCacheStorage::MemoryOnly);
  if(!ledger)return {};
  auto snapshot=std::make_shared<const NativeAuditLedger>(std::move(*ledger));
  // Retain one immutable snapshot by charge budget, not an unrelated row
@@ -129,7 +130,8 @@ RPCMethod getpgnstate(){
   const auto money=active.CoinsTip().GetPgnIssuanceState();if(!money||!money->pools||!money->partition)
     throw JSONRPCError(RPC_MISC_ERROR,"Native monetary state unavailable; no zero fallback");
   const auto range=ReadChainRangePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
-  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,&budget.schedule,&budget.signature);
+  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,
+      &budget.schedule,&budget.signature,ReplayCacheStorage::MemoryOnly);
   if(!range.policy||!science.policy)throw JSONRPCError(RPC_MISC_ERROR,"Own native definitions unavailable");
    const auto offset=request.params[0].isNull()?0:request.params[0].getInt<int64_t>(),limit=request.params[1].isNull()?100:request.params[1].getInt<int64_t>();if(offset<0||limit<1||limit>100)throw JSONRPCError(RPC_INVALID_PARAMETER,"Bounded lease page required");
    std::optional<uint256> selected;if(!request.params[2].isNull()){const auto text=request.params[2].get_str();selected=uint256::FromHex(text);if(!selected||selected->IsNull()||selected->GetHex()!=text)throw JSONRPCError(RPC_INVALID_PARAMETER,"Canonical request lookup required");}
@@ -324,7 +326,8 @@ RPCMethod getpgnscientificwork(){
   Digest root{};const auto rootBytes=ParseHex(rootText);std::copy(rootBytes.begin(),rootBytes.end(),root.begin());
   const auto history=ReadOwnHistory(manager);const auto& budget=*manager.m_options.pgn_candidate_science_budget;
   const auto range=ReadChainRangePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
-  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,&budget.schedule,&budget.signature);
+  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,
+      &budget.schedule,&budget.signature,ReplayCacheStorage::MemoryOnly);
   if(!range.policy||!science.policy)throw JSONRPCError(RPC_MISC_ERROR,"Own native policies held");
   const auto allocation=DeriveNativeCandidateReservation(active.CoinsTip(),tip,*range.policy,history.archive,budget.schedule,*id);
   if(!allocation.reservation)throw JSONRPCError(RPC_VERIFY_ERROR,"Request is not eligible at current parent");
@@ -351,7 +354,8 @@ RPCMethod getpgnscientificwork(){
   service.pushKV("issuance_block",issued->GetBlockHash().GetHex());service.pushKV("issuance_height",confirmed.location->height);
   UniValue credits{UniValue::VARR};
   if(enforced){
-   const auto duties=ReadNativeWorkDutyState(active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature,*activation);
+   const auto duties=ReadNativeWorkDutyState(active.CoinsTip(),tip,history.archive,budget.policy,budget.schedule,budget.signature,
+       *activation,ReplayCacheStorage::MemoryOnly);
    if(!duties)throw JSONRPCError(RPC_MISC_ERROR,"Confirmed audit service accounting held");
    for(const auto& [ref,consumer]:duties->spent){
     if(consumer!=*id)continue;
@@ -382,7 +386,8 @@ RPCMethod getpgnscientifictemplate(){
   const auto text=request.params[0].get_str();if(text.empty()||text.size()>2*budget.maximum_script_bytes||!IsHex(text))throw JSONRPCError(RPC_INVALID_PARAMETER,"Bounded canonical proof hex required");
   const auto bytes=ParseHex(text);if(HexStr(bytes)!=text)throw JSONRPCError(RPC_INVALID_PARAMETER,"Canonical proof hex required");
   const auto history=ReadOwnHistory(manager);const auto money=ReadChainMonetaryPolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
-  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,&budget.schedule,&budget.signature);
+  const auto science=ReadChainSciencePolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy,
+      &budget.schedule,&budget.signature,ReplayCacheStorage::MemoryOnly);
   const auto target=science.policy?NativeScientificHeaderTarget(*science.policy):std::nullopt;
   if(!money.policy||!target)throw JSONRPCError(RPC_MISC_ERROR,"Actual monetary policy or target held");
   CMutableTransaction cb;cb.vin.resize(1);cb.vin[0].prevout.SetNull();cb.vin[0].scriptSig=CScript{}<<(tip.nHeight+1)<<OP_0;cb.vout.emplace_back(0,CScript{bytes.begin(),bytes.end()});
@@ -662,7 +667,8 @@ RPCMethod getpgnworkdutystatus(){
   const bool enforced=activation&&int64_t(tip.nHeight)+1>=activation->height;out.pushKV("enforced",enforced);
   if(!enforced){out.pushKV("status","not_activated");return out;}
   const auto history=ReadOwnHistory(manager);const auto& b=*manager.m_options.pgn_candidate_science_budget;
-  const auto state=ReadNativeWorkDutyState(manager.ActiveChainstate().CoinsTip(),tip,history.archive,b.policy,b.schedule,b.signature,*activation);
+  const auto state=ReadNativeWorkDutyState(manager.ActiveChainstate().CoinsTip(),tip,history.archive,b.policy,b.schedule,b.signature,
+      *activation,ReplayCacheStorage::MemoryOnly);
   if(!state)throw JSONRPCError(RPC_MISC_ERROR,"Authenticated work-duty history held");
   const auto selected=InspectAutomaticNativeWorkDuty(state->audits,tip,actor,state->spent,activation->first_assignment_height);
   std::string status;
@@ -915,9 +921,9 @@ RPCMethod getpgnnetworkmetrics(){
     if(activation&&(activation->genesis!=genesis||activation->median_time<0||activation->median_time%3600))
         throw std::runtime_error("Invalid hourly target activation");
     if(activation&&tip.GetMedianTimePast()>=activation->median_time){
-        static pgn::discussion::complete_return_detail::Cache hourly_cache;
         const auto checked=pgn::discussion::ReadNativeHourlyHistory(active.CoinsTip(),tip,*range.policy,history.archive,
-            budget.policy,budget.schedule,budget.signature,hourly_cache);
+            budget.policy,budget.schedule,budget.signature,pgn::discussion::complete_return_detail::RpcHourlyReplayCache(),
+            ReplayCacheStorage::MemoryOnly);
         if(!checked.history)throw std::runtime_error("Authenticated hourly target history unavailable");
         hourly_history=checked.history;
     }

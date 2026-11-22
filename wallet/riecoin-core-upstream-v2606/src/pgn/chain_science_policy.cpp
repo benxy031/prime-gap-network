@@ -14,7 +14,7 @@ namespace pgn::core {
 namespace {using namespace science_policy_codec;}
 ChainSciencePolicyCheck ReadChainSciencePolicy(const CCoinsView& view,const CBlockIndex& parent,
     const NativeRequestHistoryArchive& archive,RequestHistoryArchiveBudget archiveBudget,RangePolicyReadBudget budget,
-    const RangeScheduleBudget* schedule,const ScriptWorkBudget* signature){
+    const RangeScheduleBudget* schedule,const ScriptWorkBudget* signature,ReplayCacheStorage storage){
     auto payload=ReadCandidateGenesisPolicyPayload(view,parent,archive,archiveBudget,budget,SciencePolicyEnvelopeTag);
     if(!payload.genesis)return {payload.verdict,{}};
     const auto hourly=ConfiguredNativeHourlyMerit(payload.genesis->Block());
@@ -40,8 +40,10 @@ ChainSciencePolicyCheck ReadChainSciencePolicy(const CCoinsView& view,const CBlo
             const auto ranges=ReadChainRangePolicy(view,parent,archive,archiveBudget,budget);
             if(!ranges.policy)return {ranges.verdict,{}};
             static pgn::discussion::complete_return_detail::Cache cached;
+            auto& cache=storage==ReplayCacheStorage::MemoryOnly
+                ?pgn::discussion::complete_return_detail::RpcHourlyReplayCache():cached;
             const auto quote=pgn::discussion::ReadNativeHourlyConsensusQuote(view,parent,*ranges.policy,archive,
-                budget,*schedule,*signature,cached,target->maximum_q16);
+                budget,*schedule,*signature,cache,target->maximum_q16,storage);
             if(!quote.quote)return {quote.verdict==pgn::discussion::HourlyConsensusVerdict::AwaitHistory?
                 ChainRangePolicyVerdict::MissingHistory:ChainRangePolicyVerdict::InvalidParent,{}};
             definition->evidence.target_numerator=quote.quote->target.proof_numerator;
