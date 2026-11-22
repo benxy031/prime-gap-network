@@ -15,7 +15,7 @@ inline QString exactWorkTicketNumber(const QString& input)
     const auto first=value.indexOf(QRegularExpression("[1-9]"));
     return first<0?QString("0"):value.mid(first);
 }
-inline constexpr int WorkTicketSearchDelayMs = 120;
+inline constexpr int WorkTicketSearchDelayMs = 40;
 
 class WorkSearchIndicator final:public QWidget {
     QTimer timer_;
