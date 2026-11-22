@@ -4,6 +4,8 @@
 #include <QImage>
 #include <QJsonArray>
 #include <QDir>
+#include <QHelpEvent>
+#include <QToolTip>
 #include <iostream>
 #include <stdexcept>
 using namespace pgn::ui;
@@ -72,7 +74,39 @@ int main(int argc,char** argv){
   publishing.remove("message");
   check(auditCompletionStatus(publishing)=="Finalizing audit results","Publication with no message lacks a caption");
   render(second,"captures/preparation-second.png");
+  auto firstSearch=search;
+  firstSearch["positions"]="0";
+  auto currentService=firstSearch["audit_service"].toObject();
+  auto assigned=currentService["cycle"].toObject();
+  const auto extra=QString(64,'e');
+  assigned["extra_audit_ids"]=QJsonArray{extra};
+  assigned["completed_extra_audit_ids"]=QJsonArray{extra};
+  currentService["cycle"]=assigned;
+  firstSearch["audit_service"]=currentService;
+  render(firstSearch,"captures/search-after-three-audits.png");
+  check(rail.property("pgn_ticket_progress_fraction").isValid()&&rail.property("pgn_ticket_progress_fraction").toDouble()==0.,
+        "Search inherited progress from the three preceding audits");
+  check(rail.property("pgn_ticket_cycle_fraction").toDouble()>0.,
+        "Starting search erased the completed audit segments");
   render(search,"captures/assigned-search.png");
+  const auto ticket=QString(64,'d'),request=QString(64,'e');
+  rail.present(QJsonObject{{"ticket_id",ticket},{"request_id",request},{"work_role","search"},
+                           {"title","Ticket 9003"},{"phase","Report ready"}});
+  rail.present(second);
+  rail.setToolTip("Audit 1/2: verifying computed results");
+  rail.setProperty("pgn_ticket_report_hits",QJsonArray{QJsonObject{{"ticket",ticket},
+      {"request",request},{"confirmed",true},{"audited",false},{"x",710},{"y",35}}});
+  const QPoint rosette(710,35);
+  QHelpEvent hint(QEvent::ToolTip,rosette,rail.mapToGlobal(rosette));
+  QApplication::sendEvent(&rail,&hint);
+  check(QToolTip::text().startsWith("Ticket 9003\nReport recorded"),
+        "Current audit replaced the previous ticket's rosette tooltip");
+  const QPoint away(675,35);
+  QHelpEvent normalHint(QEvent::ToolTip,away,rail.mapToGlobal(away));
+  QApplication::sendEvent(&rail,&normalHint);
+  check(QToolTip::text().contains("verifying computed results"),
+        "Audit tooltip disappeared outside the rosette");
+  QToolTip::hideText();
   check(rail.property("pgn_ticket_progress_scope").toString()=="ticket_cycle","Actual widget did not switch to assigned cycle");
   auto paused=search;paused["phase"]="Paused";rail.present(paused);app.processEvents();
   QImage pausedImage(rail.size(),QImage::Format_ARGB32_Premultiplied);pausedImage.fill(QColor("#03151b"));rail.render(&pausedImage);

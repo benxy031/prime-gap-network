@@ -27,6 +27,7 @@ public:
  void bindTicketLookup(TicketLookup);
  void setRecordEligibility(const QJsonArray&);
 protected:
+ bool event(QEvent*)override;
  void paintEvent(QPaintEvent*)override;
  void mouseMoveEvent(QMouseEvent*)override;
  void mousePressEvent(QMouseEvent*)override;
@@ -50,6 +51,7 @@ private:
  quint64 lookupGeneration_{},activeLookup_{};qint64 nextLookupAt_{};bool lookupBusy_{};
  bool workMarksActive(qint64)const;
  void pollLandings();
+ QString reportTooltipAt(const QPointF& point)const;
  QRectF bar()const;
  void ensureOverlay();
 };

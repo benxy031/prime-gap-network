@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QTableWidget>
 #include <QToolTip>
+#include <QHelpEvent>
 #include <QRegularExpression>
 #include <cmath>
 
@@ -28,6 +29,17 @@ constexpr qint64 RosetteValidationMs = RosetteMorphMs + RosetteHoldMs + RosetteE
 QString resourceLabel(const QString& source){
  if(source=="GPU")return source;
  return QString("CPU %1 #%2").arg(source.section('/',1,1),source.section('/',2,2));
+}
+QString ticketNumber(const QString& value){
+ static const QRegularExpression decimal("^[1-9][0-9]{0,79}$");
+ return decimal.match(value).hasMatch()?value:QString{};
+}
+QString ticketNumberFromFrame(const QJsonObject& frame){
+ const auto number=ticketNumber(frame.value("ticket_number").toVariant().toString());
+ if(!number.isEmpty())return number;
+ // Earlier engine hosts carry the lease number in the exact search title.
+ const auto title=frame.value("title").toString();
+ return title.startsWith("Ticket ")?ticketNumber(title.mid(7)):QString{};
 }
 double ease(double x){x=std::clamp(x,0.,1.);return x*x*(3-2*x);}
 QImage glow(const QColor& color){
@@ -189,7 +201,7 @@ protected:
    if(opacity>.25){
     const auto hit=position-offset;
     reportHits.append(QJsonObject{{"request",entry.request},{"ticket",entry.ticket},{"confirmed",entry.confirmed},
-                                  {"audited",validating},{"x",hit.x()},{"y",hit.y()}});
+                                  {"audited",entry.audited},{"x",hit.x()},{"y",hit.y()}});
    }
    reportPositions.insert(entry.ticket,holding+QPointF(0,RosetteRestOffset));
    workTokens.append(QJsonObject{{"ticket_id",entry.ticket},{"request_id",entry.request},
@@ -381,7 +393,7 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
   QVector<MeritTier> signature;
   for(const auto& node:flow_.collected())
    if(node.gap.ticket()==ticket)signature.append(node.gap.tier);
-  const auto number=packet.value("ticket_number").toVariant().toString();
+  const auto number=ticketNumberFromFrame(packet);
   rememberReportVisual(reportVisualKey(request,ticket),std::move(signature),number);
   for(auto& entry:landings_)if(entry.ticket==ticket&&entry.request==request){if(!entry.complete&&packet.value("phase")=="Report ready"){entry.complete=true;entry.born=clock_.elapsed();}return;}
   Landing entry;entry.ticket=ticket;entry.request=request;entry.complete=packet.value("phase")=="Report ready";entry.born=clock_.elapsed();landings_.append(entry);
@@ -473,7 +485,9 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  }
  const auto accent=transition?QColor("#ffbd69"):QColor("#69efc5");
  const double total=frame_.value("positions_total").toString().toDouble(),done=frame_.value("positions").toString().toDouble();
- const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());const auto fraction=cycle.known&&!cycle.preparing?std::optional<double>(cycle.fraction):total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
+ const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());
+ const auto fraction=total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
+ const auto trackFraction=cycle.known&&!cycle.preparing?std::optional<double>(cycle.fraction):fraction;
  if(cycle.known&&(active||phase=="Auditing"))displayPhase=cycle.phase;
  const auto field=bar();const double seconds=flow_.moving()?clock_.elapsed()/1000.:0.;
  double pressure=0.;
@@ -501,7 +515,7 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const double trackY=84.;const QPointF trackStart(field.left(),trackY),trackEnd(field.right(),trackY);
  painter.setPen(QPen(QColor("#17383e"),1));painter.drawLine(trackStart,trackEnd);
  if(cycle.known){double offset=0;int auditIndex=0;for(const auto& slice:cycle.slices){const auto color=slice.role=="search"?QColor("#69efc5"):slice.role=="catch_up"?QColor("#f0b761"):auditIndex++==0?QColor("#b791ee"):QColor("#7aa9e8");const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.pendingAssignment){painter.fillRect(background,faded(color,20));painter.setPen(QPen(faded(color,100),.8,Qt::DashLine));painter.drawRect(background);}else if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_cycle_fraction",cycle.preparing?QVariant{}:QVariant(cycle.fraction));setProperty("pgn_ticket_cycle_eta_seconds",(active||phase=="Auditing")&&cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else setProperty("pgn_ticket_cycle_fraction",QVariant{});
- if(fraction&&!cycle.preparing){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*fraction),trackY);
+ if(trackFraction&&!cycle.preparing){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*trackFraction),trackY);
   if(!cycle.known){painter.setPen(QPen(faded(accent,70),4));painter.drawLine(trackStart,measured);painter.setPen(QPen(accent,1.2));painter.drawLine(trackStart,measured);}
   painter.setPen(Qt::NoPen);painter.setBrush(accent);painter.drawEllipse(measured,2.,2.);
  }
@@ -566,6 +580,12 @@ void MiningTicketProgress::pollLandings(){
    weak->lookupBusy_=false;
    auto at=std::find_if(weak->landings_.begin(),weak->landings_.end(),[&](const auto& item){return item.ticket==ticket&&item.request==request&&item.checking&&item.query==query;});
    if(at==weak->landings_.end())return;
+   const auto leases=state.value("leases").toArray();
+   if(error.isEmpty()&&leases.size()==1){
+    const auto lease=leases.first().toObject();
+    if(lease.value("request")==request)
+     rememberReportVisual(reportVisualKey(request,ticket),{},ticketNumber(lease.value("ticket_number").toString()));
+   }
    const auto evidence=ticketFlowEvidence(request,ticket,state,error);
    const auto observedAt=weak->clock_.elapsed();
    const bool previouslyConfirmed=at->confirmed;
@@ -604,20 +624,38 @@ void MiningTicketProgress::pollLandings(){
   });
  }
 }
+QString MiningTicketProgress::reportTooltipAt(const QPointF& point)const{
+ double distance=12.;
+ QJsonObject closest;
+ for(const auto& value:property("pgn_ticket_report_hits").toJsonArray()){
+  const auto hit=value.toObject();
+  const auto range=std::hypot(point.x()-hit.value("x").toDouble(),point.y()-hit.value("y").toDouble());
+  if(range>=distance)continue;
+  distance=range;
+  closest=hit;
+ }
+ if(closest.isEmpty())return {};
+ return reportVisualTooltip(closest.value("request").toString(),closest.value("ticket").toString(),
+                            closest.value("confirmed").toBool(),closest.value("audited").toBool());
+}
+bool MiningTicketProgress::event(QEvent* event){
+ if(event->type()==QEvent::ToolTip){
+  const auto* help=static_cast<QHelpEvent*>(event);
+  const auto reportTip=reportTooltipAt(help->pos());
+  if(!reportTip.isEmpty()){
+   QToolTip::showText(help->globalPos(),reportTip,this);
+   setProperty("pgn_ticket_report_tooltip",true);
+   return true;
+  }
+ }
+ return QWidget::event(event);
+}
 void MiningTicketProgress::mouseMoveEvent(QMouseEvent* event){
  pointer_=event->position();QString closest;double distance=12.;
  for(const auto& hit:hits_){const double d=std::hypot(pointer_.x()-hit.point.x(),pointer_.y()-hit.point.y());if(d<distance){distance=d;closest=hit.pair;}}
  const bool showingReport=property("pgn_ticket_report_tooltip").toBool();
- bool showReport=false;
- QString reportTip;
- for(const auto& value:property("pgn_ticket_report_hits").toJsonArray()){
-  const auto hit=value.toObject();
-  const auto range=std::hypot(pointer_.x()-hit.value("x").toDouble(),pointer_.y()-hit.value("y").toDouble());
-  if(range>=distance)continue;
-  distance=range;
-  reportTip=reportVisualTooltip(hit.value("request").toString(),hit.value("ticket").toString(),hit.value("confirmed").toBool(),hit.value("audited").toBool());
-  showReport=true;
- }
+ const auto reportTip=reportTooltipAt(pointer_);
+ const bool showReport=!reportTip.isEmpty();
  if(showReport){
   QToolTip::showText(event->globalPosition().toPoint(),reportTip,this);
   closest.clear();

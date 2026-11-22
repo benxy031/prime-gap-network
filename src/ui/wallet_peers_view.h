@@ -5,19 +5,38 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLocale>
 #include <QPointer>
 #include <QPushButton>
 #include <QSet>
 #include <QShowEvent>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTimer>
 #include <QTimeZone>
 #include <QVBoxLayout>
 #include <cmath>
+#include <iterator>
 #include <functional>
 
 namespace pgn::ui {
 class WalletPeersView final:public QWidget {
+ class TransferSizeDelegate final:public QStyledItemDelegate {
+ public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+  QString displayText(const QVariant& value,const QLocale&)const override{
+   const auto bytes=value.toLongLong();
+   if(bytes<1000)return QString("%1 B").arg(bytes);
+   static constexpr const char* units[]{"kB","MB","GB","TB","PB","EB"};
+   double scaled=double(bytes)/1000.;
+   size_t unit=0;
+   while(scaled>=1000.&&unit+1<std::size(units)){
+    scaled/=1000.;
+    ++unit;
+   }
+   return QString("%1 %2").arg(scaled,0,'f',1).arg(QString::fromLatin1(units[unit]));
+  }
+ };
 public:
  using Reader=std::function<void(std::function<void(QJsonArray,QString)>)>;
  explicit WalletPeersView(Reader read,QWidget* parent=nullptr):QWidget(parent),read_(std::move(read)){
@@ -26,7 +45,10 @@ public:
   auto* layout=new QVBoxLayout(this);layout->setContentsMargins(8,8,8,8);
   auto* tools=new QHBoxLayout;status_=new QLabel("Peer information has not been read yet");status_->setObjectName("pgn-peers-status");status_->setTextFormat(Qt::PlainText);status_->setWordWrap(true);tools->addWidget(status_,1);
   refresh_=new QPushButton("Refresh peers");refresh_->setObjectName("pgn-peers-refresh");tools->addWidget(refresh_);layout->addLayout(tools);
-  table_=new QTableWidget(0,8);table_->setObjectName("pgn-wallet-peers");table_->setHorizontalHeaderLabels({"ID","Connection","Endpoint","Client","Connected since (UTC)","Latency (estimated)","Received (bytes)","Sent (bytes)"});
+  table_=new QTableWidget(0,8);table_->setObjectName("pgn-wallet-peers");table_->setHorizontalHeaderLabels({"ID","Connection","Endpoint","Client","Connected since (UTC)","Latency (estimated)","Received","Sent"});
+  auto* sizeDelegate=new TransferSizeDelegate(table_);
+  table_->setItemDelegateForColumn(6,sizeDelegate);
+  table_->setItemDelegateForColumn(7,sizeDelegate);
   table_->setEditTriggers(QAbstractItemView::NoEditTriggers);table_->setSelectionBehavior(QAbstractItemView::SelectRows);table_->setSelectionMode(QAbstractItemView::SingleSelection);table_->setAlternatingRowColors(true);table_->verticalHeader()->hide();table_->verticalHeader()->setDefaultSectionSize(26);table_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);table_->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);table_->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);table_->setSortingEnabled(true);table_->sortItems(0);layout->addWidget(table_,1);
   connect(refresh_,&QPushButton::clicked,this,[this]{refresh();});timer_.setInterval(5000);connect(&timer_,&QTimer::timeout,this,[this]{if(isVisible())refresh();});timer_.start();
  }
@@ -51,7 +73,12 @@ public:
    const auto p=peers[i].toObject();
    const auto put=[&](int col,QVariant value){auto* item=new QTableWidgetItem;item->setData(Qt::DisplayRole,value);item->setTextAlignment(col==0||col>=5?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter);table_->setItem(i,col,item);};
    put(0,p.value("id").toInteger());put(1,p.value("inbound").toBool()?"Inbound":"Outbound");put(2,p.value("addr").toString());put(3,p.value("subver").toString());put(4,QDateTime::fromSecsSinceEpoch(p.value("conntime").toInteger(),QTimeZone("UTC")).toString("yyyy-MM-dd HH:mm:ss"));
-   const auto ping=p.value("pingtime");put(5,ping.isDouble()&&std::isfinite(ping.toDouble())&&ping.toDouble()>=0?QString("≈ %1 ms").arg(ping.toDouble()*1000,0,'f',1):QString("—"));put(6,p.value("bytesrecv").toInteger());put(7,p.value("bytessent").toInteger());
+   const auto ping=p.value("pingtime");put(5,ping.isDouble()&&std::isfinite(ping.toDouble())&&ping.toDouble()>=0?QString("≈ %1 ms").arg(ping.toDouble()*1000,0,'f',1):QString("—"));const auto putTransfer=[&](int col,qint64 bytes){
+    put(col,bytes);
+    table_->item(i,col)->setToolTip(QString("%1 bytes").arg(bytes));
+   };
+   putTransfer(6,p.value("bytesrecv").toInteger());
+   putTransfer(7,p.value("bytessent").toInteger());
   }
   table_->setSortingEnabled(true);
   for(int i=0;i<table_->rowCount();++i)if(table_->item(i,0)->data(Qt::DisplayRole).toLongLong()==selected){table_->setCurrentCell(i,0);table_->selectRow(i);break;}

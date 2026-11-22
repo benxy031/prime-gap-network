@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 static void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 static QJsonObject peer(qint64 id,bool inbound){return {{"id",id},{"addr",inbound?"[2001:db8::1]:48933":"192.0.2.5:48933"},{"subver","/PGN:1.0/"},{"inbound",inbound},{"conntime",qint64(1700000000)},{"bytesrecv",qint64(9007199254740993LL)},{"bytessent",qint64(512)},{"pingtime",.03215}};}
 int main(int argc,char** argv){
@@ -16,6 +17,18 @@ int main(int argc,char** argv){
  reply({peer(10,true),peer(2,false)},{});auto* table=view->findChild<QTableWidget*>("pgn-wallet-peers");auto* status=view->findChild<QLabel*>("pgn-peers-status");
  require(table->rowCount()==2&&table->item(0,0)->text()=="2","Peer IDs were sorted lexically");
  require(table->item(0,6)->text()=="9007199254740993","Byte counters lost integer precision");
+ require(table->item(0,6)->toolTip()=="9007199254740993 bytes","Exact byte count is unavailable on hover");
+ const auto* delegate=static_cast<const QStyledItemDelegate*>(table->itemDelegateForColumn(6));
+ for(const auto& [count,suffix]:std::vector<std::pair<qint64,QString>>{
+      {512," B"},{411869," kB"},{1000000," MB"},{3000000000LL," GB"}}){
+  require(delegate->displayText(QVariant::fromValue(count),QLocale::c()).endsWith(suffix),
+          "Adaptive transfer units used an incorrect scale");
+ }
+ auto low=peer(9,false);low.insert("bytesrecv",411869);
+ auto high=peer(11,false);high.insert("bytesrecv",1000000);
+ view->present({high,low});table->sortItems(6,Qt::AscendingOrder);
+ require(table->item(0,0)->text()=="9","Peer transfers sorted by the formatted label");
+ table->sortItems(0,Qt::AscendingOrder);view->present({peer(2,false),peer(10,true)});
  require(table->item(0,1)->text()=="Outbound"&&table->item(1,1)->text()=="Inbound"&&table->item(0,5)->text().startsWith("≈ "),"Connection direction or latency estimate is wrong");
  table->setCurrentCell(1,0);view->present({peer(2,false),peer(10,true)});require(table->item(table->currentRow(),0)->text()=="10","Refresh lost the selected peer identity");
  view->refresh();reply({},"RPC disconnected");require(table->rowCount()==2&&view->property("pgn_peers_stale").toBool()&&status->text().contains("previous snapshot"),"Read failure erased known peers or claimed freshness");
