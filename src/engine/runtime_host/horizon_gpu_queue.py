@@ -34,6 +34,7 @@ class GpuJob:
     storage_retry_after: float = 0.0
     storage_retries: int = 0
     completed_result: dict | None = None
+    retired: bool = False
 
 class ResidentGpuQueue:
     minimum_service_ns = 1_000_000_000
@@ -87,6 +88,27 @@ class ResidentGpuQueue:
             self.condition.notify_all()
             return job.future
 
+    def retire_audit(self, position, request, slot, attempt):
+        """Remove queued work for an exact assignment that Core has retired."""
+        with self.condition:
+            retired = {key: job for key, job in self.jobs.items()
+                       if (job.context.get("role"), job.context.get("audit_position"),
+                           job.context.get("audit_request_id"), job.context.get("audit_slot"),
+                           job.context.get("audit_attempt")) == ("audit", position, request, slot, attempt)}
+            if not retired:
+                return
+            for job in retired.values():
+                job.retired = True
+            self.audits = deque(job for job in self.audits if not job.retired)
+            if self.resume_job is not None and self.resume_job.retired:
+                self.resume_job = None
+            for key, job in retired.items():
+                if job is not self.active:
+                    self.jobs.pop(key)
+                    if not job.future.done():
+                        job.future.set_exception(CancelledError("Audit assignment retired; local results retained"))
+            self.condition.notify_all()
+
     def wake(self):
         with self.condition:
             self.condition.notify_all()
@@ -137,6 +159,15 @@ class ResidentGpuQueue:
             return self.search.popleft()
         return None
 
+    def complete(self, job, result, finished=None):
+        self.on_result(job, copy.deepcopy(result))
+        with self.condition:
+            if job.retired:
+                return
+            self.last_completed = (job.ticket["ticket_id"], finished if finished is not None else self.clock_ns())
+            self.jobs.pop(job.ticket["ticket_id"], None)
+            job.future.set_result(copy.deepcopy(result))
+
     def run(self):
         announced_pause = False
         announced_generation = -1
@@ -162,6 +193,7 @@ class ResidentGpuQueue:
                             waiting_since = time.monotonic()
                         self.condition.wait(.05)
                         continue
+                    self.active = job
             except Exception as error:
                 if retryable_storage_error(error):
                     self.on_error(error)
@@ -174,17 +206,14 @@ class ResidentGpuQueue:
                 self.last_completed = None
                 continue
             waiting_since = None
-            self.active = job
             try:
+                if job.retired:
+                    continue
                 if job.completed_result is not None:
                     # Computation already finished. Retry only the durable
                     # handoff: reactivation could regress a completed cycle to
                     # running, repeat arithmetic, or alter presentation binding.
-                    self.on_result(job, copy.deepcopy(job.completed_result))
-                    self.last_completed = (job.ticket['ticket_id'], self.clock_ns())
-                    job.future.set_result(copy.deepcopy(job.completed_result))
-                    with self.condition:
-                        self.jobs.pop(job.ticket['ticket_id'], None)
+                    self.complete(job, job.completed_result)
                     continue
                 preparation_started = self.clock_ns()
                 self.on_start(job)
@@ -198,14 +227,18 @@ class ResidentGpuQueue:
                                     lambda: self.should_yield(job, started))
                           if callable(scheduled) else self.engine.run_ticket(job.ticket, job.maximum_piece))
                 finished = self.clock_ns()
+                if job.retired:
+                    continue
                 if result.get("state") == "YIELDED":
                     if result.get("ticket_id") != job.ticket["ticket_id"]:
                         raise ValueError("Scheduler checkpoint belongs to another ticket")
                     # Retain the same job and Future. Its next presentation
                     # needs a fresh monotonic sequence after another job's view;
                     # otherwise consumers would discard the resumed frames.
-                    job.view_sequence = None
                     with self.condition:
+                        if job.retired:
+                            continue
+                        job.view_sequence = None
                         (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
                     self.last_completed = None
                     continue
@@ -213,6 +246,8 @@ class ResidentGpuQueue:
                     # OFF/ON controls own the desired state. This older job's
                     # pause acknowledgement must not erase a newer ON.
                     with self.condition:
+                        if job.retired:
+                            continue
                         if self.resume_job is None:
                             self.resume_job = job
                         else:
@@ -226,43 +261,37 @@ class ResidentGpuQueue:
                 # Persist the completed handoff before publishing another active
                 # job. This callback must never perform network requests.
                 job.completed_result = copy.deepcopy(result)
-                self.on_result(job, copy.deepcopy(job.completed_result))
-                self.last_completed = (job.ticket["ticket_id"],finished)
-                job.future.set_result(copy.deepcopy(job.completed_result))
-                with self.condition:
-                    self.jobs.pop(job.ticket["ticket_id"], None)
-            except SessionIndexWalBudgetExceeded as error:
-                # Keep the same Future, identity and retained output. Only this
-                # database waits; independently ready jobs may still run. An
-                # explicit OFF remains OFF and shutdown still owns cancellation.
-                job.storage_retries += 1
-                job.storage_retry_after = time.monotonic() + min(2.0, .25 * 2 ** min(job.storage_retries - 1, 3))
-                job.view_sequence = None
-                with self.condition:
-                    (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
-                self.on_error(error)
-                self.last_completed = None
+                self.complete(job, job.completed_result, finished)
             except Exception as error:
-                if retryable_storage_error(error):
-                    job.storage_retries += 1
-                    job.storage_retry_after = time.monotonic() + min(2.0, .25 * 2 ** min(job.storage_retries - 1, 3))
-                    job.view_sequence = None
-                    with self.condition:
-                        (self.search if job.context['role'] == 'search' else self.audits).appendleft(job)
+                storage_retry = isinstance(error, SessionIndexWalBudgetExceeded) or retryable_storage_error(error)
+                with self.condition:
+                    if job.retired:
+                        continue
+                    if storage_retry:
+                        job.storage_retries += 1
+                        job.storage_retry_after = time.monotonic() + min(2.0, .25 * 2 ** min(job.storage_retries - 1, 3))
+                        job.view_sequence = None
+                    else:
+                        # Retain a failed job and require explicit restart.
+                        self.enabled.clear()
+                    (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
+                if storage_retry:
                     self.on_error(error)
                     self.last_completed = None
                     continue
-                # Retain this bound job until an explicit restart. Never skip
-                # failed work, invent completion or select another arithmetic.
-                self.enabled.clear()
-                with self.condition:
-                    (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
                 self.on_error(error)
                 self.on_paused()
                 announced_pause = True
                 self.last_completed = None
             finally:
                 with self.condition:
+                    if job.retired and self.jobs.get(job.ticket["ticket_id"]) is job:
+                        self.jobs.pop(job.ticket["ticket_id"])
+                        self.audits = deque(item for item in self.audits if item is not job)
+                        if self.resume_job is job:
+                            self.resume_job = None
+                        if not job.future.done():
+                            job.future.set_exception(CancelledError("Audit assignment retired; local results retained"))
                     self.active = None
                     self.condition.notify_all()
         with self.condition:

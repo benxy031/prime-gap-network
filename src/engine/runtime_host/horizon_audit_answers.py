@@ -4,7 +4,7 @@ The Core remains the verdict authority. A fork rechecks catalogue identities in
 small batches; ordinary extension never scans historical answer files. SQLite
 stores identities/digests only; private answers remain in their existing files.
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import hashlib
 import json
@@ -16,7 +16,7 @@ import threading
 import time
 import errno
 from report_commitment import audit_commitment, canonical_bytes
-from pgn_paths import state_path
+from pgn_paths import readonly_sqlite_uri, state_path
 
 NAME=re.compile(r'([0-9a-f]{64})-([01])-(0|[1-9][0-9]{0,9})\Z')
 HASH=re.compile(r'[0-9a-f]{64}\Z')
@@ -166,6 +166,21 @@ class AuditAnswers:
             self.retain_seal(name,value,digest)
             return value
         raise AuditSealRecoveryPending('Computed audit retained; recovering its original sealed answer in bounded archive steps')
+
+    def records_seal(self, name):
+        """Check one scheduling identity without creating or rewriting a catalogue."""
+        self.checked_name(name)
+        if ((self.folder / (name + '.json')).is_file()
+                or (self.folder / 'sealed-answers' / (name + '.json')).is_file()):
+            return True
+        if not self.file.is_file():
+            return False
+        if self.file.stat().st_size > self.max_pages * 4096:
+            raise BufferError('Audit catalogue exceeds its storage budget')
+        with closing(sqlite3.connect(readonly_sqlite_uri(self.file), uri=True, timeout=.3)) as db:
+            if db.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='answers'").fetchone() is None:
+                return False
+            return db.execute('SELECT 1 FROM answers WHERE name=?', (name,)).fetchone() is not None
 
     def recover_seal(self,name,expected):
         """Recover before any nonce generation or mutable answer-file write."""

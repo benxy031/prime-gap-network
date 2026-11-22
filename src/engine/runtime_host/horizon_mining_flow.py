@@ -38,12 +38,18 @@ class AuditGpuProxy:
         self.position = position
         self.audit = None
         self.prepared = {}
+        self.verifying = False
 
     def finalize_report(self, work, computed):
-        # NetworkAudits calls this after its GPU Future returns, on the audit
-        # preparation thread. Never do expensive residual work in on_result.
+        # This only runs after the GPU Future returns on the audit lane.
         finalizer = getattr(self.flow.worker.source, 'finalize_report', None)
-        return finalizer(work, computed) if callable(finalizer) else computed
+        if not callable(finalizer):
+            return computed
+        self.verifying = True
+        try:
+            return finalizer(work, computed)
+        finally:
+            self.verifying = False
 
     def register_preparation(self, tickets):
         register = getattr(self.flow.worker.source, 'register_preparation', None)
@@ -69,9 +75,11 @@ class AuditGpuProxy:
     def queue_ticket(self, ticket, maximum_piece):
         if ticket['ticket_id'] in self.prepared:
             previous, limit, future = self.prepared[ticket['ticket_id']]
-            if previous != ticket or limit != maximum_piece:
-                raise ValueError('Prepared audit partition identity changed')
-            return future
+            if not future.cancelled() and not (future.done() and isinstance(future.exception(), CancelledError)):
+                if previous != ticket or limit != maximum_piece:
+                    raise ValueError('Prepared audit partition identity changed')
+                return future
+            self.prepared.pop(ticket['ticket_id'])
         audit = self.audit.current_audit
         self.flow.bind_audit_cycle(self.position, audit)
         part = next((p for p in audit['ranges'] if p['start'] == ticket['start'] and p['end'] == ticket['end']), None)
@@ -471,6 +479,7 @@ class MiningFlow:
             self.gpu.wake()
 
     def retire_audit_cycle(self, position, audit, anchor):
+        self.gpu.retire_audit(position, *self.service_identity(audit))
         with self.unbound_service_lock:
             self.unbound_service_audits.discard(self.service_identity(audit))
             self.unbound_service_completed.discard(self.service_identity(audit))
@@ -719,7 +728,11 @@ class MiningFlow:
             done, total = len(counts), len(ranges)
             if not 0 <= done <= total:
                 continue
-            stage = ('verifying computed results' if done < total else 'result publication pending')
+            if done == total:
+                stage = 'result publication pending'
+            else:
+                proxy = getattr(getattr(lane, 'worker', None), 'source', None)
+                stage = 'verifying computed results' if getattr(proxy, 'verifying', False) else 'waiting for GPU results'
             pending.append('Audit ' + str(position + 1) + '/' + str(len(lanes))
                            + ': ' + stage)
         if pending:

@@ -3,11 +3,18 @@
 This reader never selects a new assignment, invents an answer or waives duty.
 One bounded coherent page is scanned per call; the cursor survives restarts.
 """
+from http.client import HTTPException
 from pathlib import Path
 import hashlib
 import json
+from horizon_audit_answers import AuditAnswers, AuditSealRecoveryRequired
+from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes, audit_commitment
+
+
+class AssignmentRecoveryRpcUnavailable(RuntimeError):
+    """An optional assignment recovery read could not complete."""
 
 
 def digest(value):
@@ -76,10 +83,19 @@ class AssignedAuditRecovery:
                                             sha256=hashlib.sha256(raw).hexdigest()))
         return candidate
 
-    def claim(self, folder):
+    def claim(self, folder, *, verify_signer=False):
         worker = self.worker
+        def read(operation, *args):
+            try:
+                return operation(*args)
+            except (CoreRpcError, CoreRpcUnavailable, ConnectionError, TimeoutError, HTTPException) as error:
+                if not verify_signer:
+                    raise
+                raise AssignmentRecoveryRpcUnavailable() from error
+
         with worker.network_lock:
-            identity = worker.rpc.call('validateaddress', [worker.address()])
+            address = read(worker.address)
+            identity = read(worker.rpc.call, 'validateaddress', [address])
             actor = identity.get('scriptPubKey')
             if identity.get('isvalid') is not True or not canonical_signing_script(actor):
                 raise ValueError('Authenticated miner signing script required for audit recovery')
@@ -98,7 +114,7 @@ class AssignedAuditRecovery:
                 # A different authenticated identity starts a new scan.
                 if (saved['genesis'], saved['actor']) == (worker.args.genesis, actor):
                     offset = previous_offset
-            view = worker.rpc.call('getpgnworkview', ['audits', offset, 100])
+            view = read(worker.rpc.call, 'getpgnworkview', ['audits', offset, 100])
             state = view.get('state', {})
             reports, rows = view.get('reports'), view.get('audits')
             if (view.get('schema') != 'PGN_WORK_VIEW_V1' or view.get('kind') != 'audits'
@@ -124,6 +140,7 @@ class AssignedAuditRecovery:
                 value = json.loads(journal.read_bytes())
                 reserved.add((value.get('request_id'), value.get('slot'), value.get('attempt')))
             candidate = None
+            waiting_for_seal_lane = False
             seen = set()
             for row in rows:
                 request = row.get('request_id')
@@ -149,6 +166,14 @@ class AssignedAuditRecovery:
                         raise ValueError('Assigned actor lacks authenticated audit policy permission')
                     if (request, slot, attempt) in reserved:
                         continue
+                    name = f'{request}-{slot}-{attempt}'
+                    seal_lanes = [AuditAnswers(path.parent) for path in journals]
+                    holders = [lane.folder for lane in seal_lanes if lane.records_seal(name)]
+                    if len(holders) > 1:
+                        raise AuditSealRecoveryRequired('Audit seal recorded in both active lanes')
+                    if holders and holders[0] != AuditAnswers(folder).folder:
+                        waiting_for_seal_lane = True
+                        continue
                     ranges = job.get('ranges')
                     if not isinstance(ranges, list) or len(ranges) != 5:
                         raise ValueError('Recovered audit requires five exact partitions')
@@ -167,20 +192,24 @@ class AssignedAuditRecovery:
                             raise ValueError('Empty recovered audit partition')
                     candidate = dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request,
                                      ticket=report['ticket'], report_root=report['report_root'],
-                                     slot=slot, attempt=attempt, ranges=ranges, counts=[],
+                                     slot=slot, attempt=attempt, actor=actor, ranges=ranges, counts=[],
                                      recovered_assignment_anchor=state['bestblockhash'])
                     break
                 if candidate is not None:
                     break
             if candidate is not None:
+                if verify_signer:
+                    from horizon_audit_batch import signable_actor
+                    if not read(signable_actor, worker, actor):
+                        return None, False
                 candidate = self.retain_legacy_answer(candidate)
-            if worker.rpc.call('getbestblockhash') != state['bestblockhash']:
+            if read(worker.rpc.call, 'getbestblockhash') != state['bestblockhash']:
                 return None, False  # No cursor/journal mutation from a stale page.
-            complete = len(reports) < 100
+            complete = len(reports) < 100 and not waiting_for_seal_lane
             # Stay on a page with a candidate so the second lane can recover
             # another job there. Each successful claim is durable under the
             # shared publication lock before another lane can inspect it.
-            next_offset = offset if candidate else (0 if complete else offset + 100)
+            next_offset = offset if candidate or waiting_for_seal_lane else (0 if complete else offset + 100)
             if candidate is not None:
                 journal = Path(folder) / 'current.json'
                 if journal.exists():

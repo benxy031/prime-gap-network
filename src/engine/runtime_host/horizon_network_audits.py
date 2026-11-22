@@ -8,7 +8,7 @@ import time
 from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import audit_commitment, canonical_bytes
-from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged
+from horizon_coordination import confirm_candidate, validate_intent, CoordinationParentChanged, PublicationPending
 from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch
 from horizon_owner_reports import OwnerReports
 from horizon_audit_progress import partition_identity, presentation as audit_presentation
@@ -587,6 +587,8 @@ class NetworkAudits:
             if journal.stat().st_size > 262144:
                 raise ValueError("Current audit exceeds budget")
             audit = json.loads(journal.read_bytes())
+            if audit.get("commit_ready") is True:
+                return self.resume_grouped_commit(journal, audit)
             # A historic seal belongs only to its exact scientific work.
             # Check the authoritative assignment before touching recovery,
             # so an obsolete cursor cannot block a different live cycle.
@@ -754,12 +756,59 @@ class NetworkAudits:
             save(self.folder / (name + ".json"), audit)
         if getattr(self.worker, 'audit_prefix_supported', False):
             from horizon_audit_batch import commit_ready
-            audit['commit_ready'] = True
-            save(journal, audit)
-            receipt = commit_ready(self, audit, retain_publication)
+            # The calculation barrier is above this block. Once ready, only
+            # publish or reconcile the journal under the shared lane lock.
+            with self.worker.network_lock:
+                audit['commit_ready'] = True
+                save(journal, audit)
+                receipt = commit_ready(self, audit, retain_publication)
+                return self.finish_commit(journal, audit, receipt)
         else:
             receipt = self.apply("commit", audit["request_id"], audit["slot"], audit["attempt"], answer["commitment"],
                                  on_intent=retain_publication if self.on_committed is not None else None)
+        return self.finish_commit(journal, audit, receipt)
+
+    def resume_grouped_commit(self, journal, observed):
+        from horizon_audit_batch import (commit_ready, identity as audit_identity, prefix_capability,
+                                         ready_audit_view, verify_committed_event)
+        with self.worker.network_lock:
+            audit = json.loads(journal.read_bytes())
+            binding = ("ticket", "report_root", "actor", "ranges", "answer")
+            if (audit_identity(audit) != audit_identity(observed)
+                    or any(audit.get(key) != observed.get(key) for key in binding)
+                    or not audit.get("commit_ready") or not audit.get("answer")):
+                raise PublicationPending("Ready audit changed during reconciliation; seal retained")
+            anchor, state, job = ready_audit_view(self, audit)
+            bound = (job and audit.get("actor") and job.get("actor") == audit["actor"]
+                     and job.get("ranges") == audit["ranges"] and job.get("expired") is False)
+            assigned = bound and job["state"] == "assigned" and job.get("actor_policy_accepted") is True
+            committed = (bound and job["state"] in ("committed", "passed", "failed")
+                         and job.get("commitment") == audit["answer"]["commitment"])
+            intent = audit.get("publication_intent") if committed else None
+            if committed and not intent and self.on_retired is None:
+                raise RetainedAuditPublicationError("Canonical audit has no local block receipt; seal retained")
+            if not assigned and not intent:
+                if self.on_retired is None:
+                    raise PublicationPending("Ready audit is no longer assigned; seal retained")
+                # A canonical commitment already satisfied this assignment.
+                # Without its exact local receipt, release only the scheduling
+                # cursor. Never acknowledge the same answer a second time.
+                from horizon_audit_recovery import retain_changed_assignment
+                retain_changed_assignment(self.folder, audit, state, anchor, self.worker.rpc, self.on_retired)
+                return "retired"
+            if committed:
+                verify_committed_event(self.worker.rpc, audit, intent, anchor)
+                return self.finish_commit(journal, audit, dict(available=True, confirmed_block=intent["hash"]))
+            if assigned:
+                if getattr(self.worker, "audit_prefix_supported", None) is None:
+                    self.worker.audit_prefix_supported = prefix_capability(self)
+                if not self.worker.audit_prefix_supported:
+                    raise PublicationPending("Core cannot resume the grouped audit; seal retained")
+                self.reconcile_reassigned_answer(audit)
+                save(journal, audit)
+            return self.finish_commit(journal, audit, commit_ready(self, audit, lambda intent: None))
+
+    def finish_commit(self, journal, audit, receipt):
         if not receipt.get("available"):
             raise RuntimeError("Audit commitment unavailable; private answer retained")
         if self.on_committed is not None:

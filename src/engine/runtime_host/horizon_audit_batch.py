@@ -6,13 +6,82 @@ coordination journal owns ambiguous sends; immutable answers remain on disk.
 import hashlib
 import json
 from pathlib import Path
+from time import monotonic
 
-from horizon_coordination import CoordinationParentChanged, confirm_candidate, validate_intent
+from horizon_assigned_audit_recovery import AssignmentRecoveryRpcUnavailable
+from horizon_audit_answers import AuditAnswers
+from horizon_coordination import CoordinationParentChanged, active_candidate, confirm_candidate, validate_intent
 from horizon_core_rpc import CoreRpcError
+from horizon_audit_snapshot import identity as hash_identity
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
 
+ASSIGNMENT_RECOVERY_RETRY_SECONDS = 5
 LEGACY_AUDIT_USAGE = 'getpgnauditevent "action" "miner" ( "request_id" slot attempt "body" "signature" )'
+_AUDIT_TAG = b'\x6a\x10PGNAUDIT-EVENT-1'
+
+
+def _field_size(size):
+    if size < 253:
+        return bytes([size])
+    return b'\xfd' + size.to_bytes(2, 'little')
+
+
+def _commit_output_matches(output, audit, parent):
+    # Core has accepted the block. Match the full commitment identity in its
+    # canonical OP_RETURN, including the script signer and exact digest.
+    text = output.get('scriptPubKey', {}).get('hex')
+    if (output.get('value') != 0 or not isinstance(text, str)
+            or len(text) > 160000 or len(text) % 2):
+        return False
+    try:
+        raw = bytes.fromhex(text)
+        actor = bytes.fromhex(audit['actor'])
+        commitment = bytes.fromhex(audit['answer']['commitment'])
+    except ValueError:
+        return False
+    if not raw.startswith(_AUDIT_TAG) or not 0 < len(actor) <= 4096 or len(commitment) != 32:
+        return False
+    offset = len(_AUDIT_TAG)
+    if offset >= len(raw):
+        return False
+    opcode = raw[offset]
+    width = {76: 1, 77: 2, 78: 4}.get(opcode, 0)
+    if opcode > 78 or len(raw) < offset+1+width:
+        return False
+    start = offset+1+width
+    size = int.from_bytes(raw[offset+1:start], 'little') if width else opcode
+    expected_opcode = size if size <= 75 else 76 if size <= 255 else 77 if size <= 65535 else 78
+    if size != len(raw)-start or opcode != expected_opcode:
+        return False
+    expected = (b'\x01' + bytes.fromhex(audit['request_id'])[::-1] + bytes.fromhex(parent)[::-1]
+                + bytes([1, audit['slot']]) + audit['attempt'].to_bytes(4, 'little')
+                + _field_size(len(actor)) + actor + b'\x20' + commitment)
+    payload = raw[start:]
+    if not payload.startswith(expected):
+        return False
+    signature = payload[len(expected):]
+    if not signature:
+        return False
+    width = 3 if signature[0] == 253 else 1
+    size = int.from_bytes(signature[1:3], 'little') if width == 3 else signature[0]
+    return size <= 4096 and signature[:width] == _field_size(size) and len(signature) == width+size
+
+
+def verify_committed_event(rpc, audit, intent, anchor):
+    if not active_candidate(rpc, intent):
+        raise CoordinationParentChanged('Retained audit block is no longer active')
+    block = rpc.call('getblock', [intent['hash'], 2])
+    txs = block.get('tx', [])
+    coinbase = txs[0] if txs else {}
+    inputs = coinbase.get('vin', [])
+    outputs = coinbase.get('vout', [])
+    if (block.get('hash') != intent['hash'] or block.get('previousblockhash') != intent['parent']
+            or not inputs or 'coinbase' not in inputs[0] or len(outputs) > 4096
+            or sum(_commit_output_matches(out, audit, intent['parent']) for out in outputs) != 1):
+        raise ValueError('Active block lacks this exact audit commitment; seal retained')
+    if rpc.call('getbestblockhash') != anchor:
+        raise CoordinationParentChanged('Audit commitment evidence changed during reconciliation')
 
 
 def prefix_capability(publisher):
@@ -72,7 +141,7 @@ def retain_group_history(journal, raw, observation):
         atomic_bytes(receipt, observed)
 
 
-def apply_group(operations, *, on_intent=None, on_prepared=None):
+def apply_group(operations, *, on_intent=None, on_prepared=None, required_parent=None):
     """Ordered (publisher, action, request, slot, attempt, body) ready rows.
 
     Re-sign the entire group after a parent conflict. Never re-use signatures
@@ -96,6 +165,8 @@ def apply_group(operations, *, on_intent=None, on_prepared=None):
             with lock:
                 proposals, envelopes = [], []
                 parent = rpc.call('getbestblockhash')
+                if required_parent is not None and parent != required_parent:
+                    raise CoordinationParentChanged('Audit assignment view changed; seal retained')
                 for publisher, action, request, slot, attempt, body in operations:
                     if getattr(publisher.worker, 'quitting', None) is not None and publisher.worker.quitting.is_set():
                         raise RuntimeError('Audit publication stopped; durable work retained')
@@ -124,10 +195,14 @@ def apply_group(operations, *, on_intent=None, on_prepared=None):
                     proposals = [dict(p, confirmed_block=block) if p.get('available') else p for p in proposals]
                 return proposals
         except CoordinationParentChanged:
-            if retry:
+            if retry or required_parent is not None:
                 raise
-        except CoreRpcError:
-            if retry or rpc.call('getbestblockhash') == parent:
+        except CoreRpcError as error:
+            if rpc.call('getbestblockhash') == parent:
+                raise
+            if required_parent is not None:
+                raise CoordinationParentChanged('Audit assignment view changed; seal retained') from error
+            if retry:
                 raise
 
 
@@ -173,6 +248,30 @@ def reserve_assignments(publisher):
         if not supported:
             return NotImplemented  # Existing Core keeps its original single path.
         idle = [p for p in peers if not (p.folder / 'current.json').exists()]
+        # The journal above handles our own ambiguous sends. Also look for a
+        # pre-existing Core assignment when starting with empty lane journals.
+        # Each idle lane scans at most one page per turn. A page without a job
+        # leaves the fresh assignment path available and retains its cursor.
+        for peer in idle:
+            recover = getattr(peer.worker, 'recover_assigned_audit', None)
+            if not callable(recover) or getattr(peer, 'assignment_recovery_retry_at', 0) > monotonic():
+                continue
+            try:
+                recovered, complete = recover(peer.folder, verify_signer=True)
+            except AssignmentRecoveryRpcUnavailable:
+                # A failed optional read must not delay another lane's
+                # normal assignment. Pace retries while the RPC recovers.
+                retry_at = monotonic() + ASSIGNMENT_RECOVERY_RETRY_SECONDS
+                for lane in idle:
+                    lane.assignment_recovery_retry_at = retry_at
+                break
+            if recovered is None and complete:
+                # The shared durable cursor may have resumed near the end.
+                # A later round can still find work on preceding pages.
+                peer.assignment_recovery_retry_at = monotonic() + ASSIGNMENT_RECOVERY_RETRY_SECONDS
+            elif recovered is not None and peer is publisher:
+                return recovered
+        idle = [p for p in idle if not (p.folder / 'current.json').exists()]
         if publisher not in idle:
             return None
         # No peer is added later, and no busy lane is polled or waited for.
@@ -261,10 +360,35 @@ def retain_assignments(peers, group):
     return dict(anchor=anchor,rows=observations)
 
 
+def ready_audit_view(peer, audit, anchor=None):
+    request = audit['request_id']
+    value = peer.worker.rpc.call('getpgnworkview', ['audits', 0, 1, request])
+    state = value.get('state', {})
+    current = state.get('bestblockhash')
+    reports, audits = value.get('reports'), value.get('audits')
+    genesis = getattr(getattr(peer.worker, 'args', None), 'genesis', state.get('genesis'))
+    if (value.get('schema') != 'PGN_WORK_VIEW_V1' or value.get('kind') != 'audits'
+            or value.get('request_id') != request or not hash_identity(current)
+            or not hash_identity(genesis) or state.get('genesis') != genesis
+            or not isinstance(reports, list) or len(reports) > 1
+            or not isinstance(audits, list) or len(audits) > 1
+            or any(row.get('request_id') != request for row in reports+audits)):
+        raise ValueError('Invalid anchored audit work view; seal retained')
+    if anchor is not None and current != anchor:
+        raise CoordinationParentChanged('Audit work view changed; seal retained')
+    row = audits[0] if audits else {}
+    report = reports[0] if reports else {}
+    job = next((j for j in row.get('jobs', []) if (j['slot'], j['attempt']) ==
+                (audit['slot'], audit['attempt'])), None)
+    exact = report.get('ticket') == audit['ticket'] and report.get('report_root') == audit['report_root']
+    return current, row, job if exact else None
+
+
 def commit_ready(publisher, audit, retain_self):
     """Include only seals whose own before_commit boundary has already passed."""
     peers = getattr(publisher.worker, 'audit_publishers', (publisher,))
     with publisher.worker.network_lock:
+        anchor = publisher.worker.rpc.call('getbestblockhash')
         selected = []
         for peer in peers:
             path = peer.folder / 'current.json'
@@ -273,29 +397,50 @@ def commit_ready(publisher, audit, retain_self):
             row = json.loads(path.read_bytes())
             if not row.get('commit_ready') or not row.get('answer'):
                 continue
-            state = peer.state(row['request_id'])
-            job = next((j for j in state.get('jobs', []) if (j['slot'], j['attempt']) == (row['slot'], row['attempt'])), None)
-            if job and job['state'] == 'assigned':
+            _, _, job = ready_audit_view(peer, row, anchor)
+            if (job and job['state'] == 'assigned' and job.get('expired') is False
+                    and job.get('actor_policy_accepted') is True
+                    and row.get('actor') and job.get('actor') == row['actor']
+                    and job.get('ranges') == row['ranges']):
                 selected.append((peer, row))
         if not any(peer is publisher for peer, _ in selected):
             current = json.loads((publisher.folder / 'current.json').read_bytes())
-            state = publisher.state(audit['request_id'])
-            job = next((j for j in state.get('jobs', []) if (j['slot'], j['attempt']) == (audit['slot'], audit['attempt'])), None)
-            if job and job.get('commitment') == audit['answer']['commitment'] and current.get('publication_intent'):
-                confirm_candidate(publisher.worker.rpc, current['publication_intent'], seconds=0, rebase=True)
+            _, _, job = ready_audit_view(publisher, audit, anchor)
+            if (identity(current) == identity(audit) and current.get('answer') == audit['answer']
+                    and job and job.get('actor') == audit.get('actor')
+                    and job.get('ranges') == audit['ranges']
+                    and job.get('commitment') == audit['answer']['commitment']
+                    and current.get('publication_intent')):
+                verify_committed_event(publisher.worker.rpc, audit, current['publication_intent'], anchor)
                 audit['publication_intent'] = current['publication_intent']
                 return dict(available=True, confirmed_block=current['publication_intent']['hash'])
             raise RuntimeError('Ready audit changed before grouped commitment; seal retained')
+        # A lost or duplicated local cursor cannot put two commitments for
+        # the same canonical attempt in a single signed prefix.
+        own = identity(audit)
+        copies = [(peer, row) for peer, row in selected if identity(row) == own]
+        if len(copies) > 1:
+            for _, row in copies:
+                AuditAnswers.check_binding(row, audit)
+            # Both rows now prove the exact same ranges and counts. The
+            # requesting lane commits its existing seal under the group lock.
+            # Keep the other lane's seal intact for canonical reconciliation.
+            selected = [(peer, row) for peer, row in selected if identity(row) != own or peer is publisher]
+        included = []
+        def retain_included(proposals):
+            included[:] = [entry for entry, proposal in zip(selected, proposals) if proposal.get('available')]
         def retain(intent):
-            for peer, row in selected:
+            for peer, row in included:
                 row['publication_intent'] = dict(intent)
                 name = '-'.join(str(v) for v in identity(row))
                 save(peer.folder / (name+'.json'), row)
                 save(peer.folder / 'current.json', row)
                 if peer is publisher:
                     audit['publication_intent'] = dict(intent)
-            retain_self(intent)
-        outcomes = apply_group([(peer, 'commit', *identity(row), row['answer']['commitment']) for peer, row in selected], on_intent=retain)
+            if any(peer is publisher for peer, _ in included):
+                retain_self(intent)
+        outcomes = apply_group([(peer, 'commit', *identity(row), row['answer']['commitment']) for peer, row in selected],
+                               on_intent=retain, on_prepared=retain_included, required_parent=anchor)
         return outcomes[next(i for i, (peer, _) in enumerate(selected) if peer is publisher)]
 
 
