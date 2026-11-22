@@ -62,6 +62,7 @@ struct CycleSlice {
  QString role;
  bool skipped{},pendingAssignment{},active{};
  QJsonObject auditRef;
+ bool workerReportedCommit{};
 };
 
 inline bool validProgressAuditRef(const QJsonObject& ref) {
@@ -160,7 +161,10 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
    const bool committed=countKnown&&i<confirmed;
    const double fraction=committed?1.:i==active?local:0.;
    const auto ref=view.value("audit_refs").toArray().at(i).toObject();
-   out.slices.append({.05,fraction,"audit",false,!countKnown,i==active,ref});
+   // An older worker exposes its last service credit without a slot locator.
+   // This can indicate an engagement, but never an audit verdict.
+   const bool reportedCommit=committed&&!view.contains("audit_refs")&&!frame.value("source_stale").toBool();
+   out.slices.append({.05,fraction,"audit",false,!countKnown,i==active,ref,reportedCommit});
    out.fraction+=.05*fraction;
   }
   // There is no assigned search range yet. A dashed placeholder is a phase,

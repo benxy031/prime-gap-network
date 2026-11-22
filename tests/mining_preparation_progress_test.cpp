@@ -63,6 +63,27 @@ int main(int argc,char** argv){
    const auto expected=state=="Paused"?QString("Audit paused"):state=="Stopping"?QString("Stopping"):state=="Report ready"?QString("Audit computed"):state;
    check(rail.property("pgn_ticket_display_phase").toString()==expected,"Cycle caption concealed the real stop/wait/publication state");
   }
+  auto legacyAttention=second;
+  legacyAttention["phase"]="Needs attention";
+  legacyAttention["message"]="Audit 1: Audit commitment already fixed";
+  legacyAttention["positions"]=legacyAttention.value("positions_total");
+  render(legacyAttention,"captures/legacy-audit-commit-needs-attention.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray()==QJsonArray{"#ba9aee","#658a96"},
+        "Legacy worker credit was hidden or the unverified active audit received a verdict");
+  check(!rail.property("pgn_ticket_cycle_eta_seconds").isValid(),"Blocked legacy audit invented an ETA");
+  auto explicitPreparation=preparation(1,1);
+  explicitPreparation["audit_refs"]=QJsonArray{QJsonObject{{"request","invalid"}}};
+  auto exactAttention=frame(explicitPreparation);
+  exactAttention["phase"]="Needs attention";
+  exactAttention["message"]=legacyAttention["message"];
+  render(exactAttention,"captures/exact-audit-invalid-ref-needs-attention.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray()==QJsonArray{"#658a96","#658a96"},
+        "An invalid explicit locator was passed off as a legacy credit");
+  legacyAttention["source_stale"]=true;
+  render(legacyAttention,"captures/stale-legacy-audit-commit.png");
+  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#ba9aee"),
+        "A stale source colored a legacy credit");
+
   auto publishing=second;
   publishing["phase"]="Completing audits";
   publishing["message"]="Audit 2/2: result publication pending";
