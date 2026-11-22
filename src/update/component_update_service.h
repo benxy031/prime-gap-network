@@ -58,6 +58,7 @@ public:
     std::function<void(const QJsonObject&)> onProgress;
 private:
     void complete();
+    void releaseSchedulingSlot();
     ComponentUpdateDeployment deployment_;
     QProcess* process_{};
     QTimer* timer_{};

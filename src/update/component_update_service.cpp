@@ -66,6 +66,10 @@ bool terminalInstallResult(const QJsonObject& value)
 void require(bool value,const char* text){if(!value)throw std::runtime_error(text);}
 QMutex diagnosticMutex;
 QJsonArray diagnosticHistory;
+// Foreground preparations and idle retirement share one installation writer.
+// These services run on the UI thread and are scoped to their update genesis.
+QHash<QString,QSet<ComponentUpdateService*>> foregroundPreparations;
+QHash<QString,QPointer<ComponentUpdateService>> idleRetirement;
 
 constexpr qsizetype SavedDiagnosticLimit=16*1024;
 constexpr qsizetype SavedDiagnosticCount=24;
@@ -443,7 +447,17 @@ ComponentUpdateService::ComponentUpdateService(ComponentUpdateDeployment deploym
     connect(process_,&QProcess::errorOccurred,this,[this](QProcess::ProcessError error){if(error==QProcess::FailedToStart)complete();});
     connect(timer_,&QTimer::timeout,this,[this]{timedOut_=true;process_->kill();});
 }
+void ComponentUpdateService::releaseSchedulingSlot(){
+    const auto scope=deployment_.context.value("genesis_hash").toString();
+    if(idleRetirement.value(scope)==this)idleRetirement.remove(scope);
+    auto foreground=foregroundPreparations.find(scope);
+    if(foreground!=foregroundPreparations.end()){
+        foreground->remove(this);
+        if(foreground->isEmpty())foregroundPreparations.erase(foreground);
+    }
+}
 ComponentUpdateService::~ComponentUpdateService(){
+    releaseSchedulingSlot();
     if(!settled_)recordDiagnostic(diagnosticOperation_,action_,{{"event","failed"},{"reason","closed_during_update"}},
                                  deployment_.context.value("genesis_hash").toString());
     settled_=true;timer_->stop();
@@ -456,6 +470,9 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     if(action!="check"&&action!="prepare"&&action!="prepare_install"&&action!="inspect_storage"&&action!="clean_storage"&&action!="retire_installations")return false;
     const auto data=QJsonDocument(request).toJson(QJsonDocument::Compact);
     if(data.size()>MessageLimit)return false;
+    const auto scope=deployment_.context.value("genesis_hash").toString();
+    const bool retirement=action=="retire_installations";
+    if(retirement&&(foregroundPreparations.contains(scope)||idleRetirement.value(scope)))return false;
     output_.clear();errors_.clear();progressBuffer_.clear();downloadHighWater_.clear();settled_=false;cancelled_=oversized_=timedOut_=false;action_=action;
     diagnosticOperation_=QUuid::createUuid().toString(QUuid::WithoutBraces);
     recordDiagnostic(diagnosticOperation_,action_,{{"event","started"}},deployment_.context.value("genesis_hash").toString());
@@ -463,6 +480,12 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     disconnect(startedConnection_);
     startedConnection_=connect(process_,&QProcess::started,this,[this,data]{disconnect(startedConnection_);process_->write(data);process_->closeWriteChannel();});
     const QPointer<ComponentUpdateService> guard(this);
+    if(retirement)idleRetirement.insert(scope,this);
+    if(action=="prepare"||action=="prepare_install"){
+        foregroundPreparations[scope].insert(this);
+        if(const auto cleanup=idleRetirement.value(scope))cleanup->cancel();
+    }
+    if(!guard)return true;
     if(onStatus)onStatus(action=="retire_installations"?"Cleaning obsolete installations…":action=="inspect_storage"?"Inspecting unused update files…":action=="clean_storage"?"Cleaning verified unused files…":action=="check"?"Checking signed component versions…":"Downloading and verifying the selected components…");
     if(!guard)return true;
     if(cancelled_){complete();return true;}
@@ -471,6 +494,7 @@ bool ComponentUpdateService::start(const QJsonObject& request){
 void ComponentUpdateService::cancel(){if(busy()){cancelled_=true;process_->kill();}}
 void ComponentUpdateService::complete(){
     if(settled_)return;settled_=true;timer_->stop();disconnect(startedConnection_);
+    releaseSchedulingSlot();
     output_+=process_->readAllStandardOutput();
     QString error;
     if(cancelled_)error="Update preparation cancelled. Installed components are unchanged.";
