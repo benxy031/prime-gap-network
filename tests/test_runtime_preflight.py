@@ -1,7 +1,7 @@
 """Loader checks use mocks; inert test PE files must never be executed."""
 from pathlib import Path
 from unittest.mock import patch
-import os,subprocess,sys,tempfile,unittest
+import json,os,subprocess,sys,tempfile,unittest
 P=Path(__file__).resolve().parents[1];sys.path[:0]=[str(P/'tools'),str(P/'src/update')]
 import horizon_runtime_preflight as runtime
 
@@ -9,7 +9,12 @@ class PreflightTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
   self.files={p.casefold():dict(sha256='a'*64)for p in ('EngineRuntime/network/horizon-engine-host.exe','UpdateRuntime/horizon-updater.exe')}
-  self.inventory=patch.object(runtime,'inventory',return_value=({},self.files,'b'*64,0));self.inventory.start()
+  self.deployment=self.root/'UpdateRuntime/deployment.json'
+  self.deployment.parent.mkdir()
+  self.configuration=dict(schema='PGN_UPDATE_DEPLOYMENT_V1',network='testnet',helper='UpdateRuntime/horizon-updater.exe',sha256='a'*64)
+  self.deployment.write_text(json.dumps(self.configuration),encoding='utf8')
+  self.files['updateruntime/deployment.json']=dict(sha256='c'*64)
+  self.inventory=patch.object(runtime,'inventory',return_value=(dict(network='testnet'),self.files,'b'*64,0));self.inventory.start()
  def tearDown(self):self.inventory.stop();self.temp.cleanup()
  def test_loader_modes_no_work_and_bootstrap_environment_removed(self):
   with patch.dict(os.environ,{'PGN_PRIVATE_OWNER_BOOTSTRAP':'must not execute'}),patch.object(runtime.subprocess,'run',return_value=subprocess.CompletedProcess([],0))as run:
@@ -18,6 +23,13 @@ class PreflightTests(unittest.TestCase):
   self.assertEqual([x.args[0][-1]for x in run.call_args_list],['--help','--self-test'])
   for call in run.call_args_list:
    self.assertNotIn('PGN_PRIVATE_OWNER_BOOTSTRAP',call.kwargs['env']);self.assertEqual(call.kwargs['env']['PYINSTALLER_RESET_ENVIRONMENT'],'1');self.assertEqual(call.kwargs['timeout'],20)
+ def test_wrong_helper_binding_never_starts_a_loader(self):
+  self.configuration['sha256']='d'*64
+  self.deployment.write_text(json.dumps(self.configuration),encoding='utf8')
+  with patch.object(runtime.subprocess,'run')as run:
+   with self.assertRaisesRegex(ValueError,'helper fingerprint differs'):
+    runtime.candidate_runtime_preflight(self.root)
+  run.assert_not_called()
  def test_failed_first_loader_stops_before_second(self):
   with patch.object(runtime.subprocess,'run',return_value=subprocess.CompletedProcess([],1))as run:
    with self.assertRaisesRegex(ValueError,'loader failed before update'):runtime.candidate_runtime_preflight(self.root)

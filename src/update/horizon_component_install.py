@@ -524,10 +524,10 @@ class CohortStore:
             else:
                 self.require_resolved_transaction()
         if (self.before_preparation and self.context['platform']=='windows-x86_64' and
-            list(selected)==['ui'] and getattr(client,'github_ranges',False)):
+            list(selected) in (['ui'], ['cpu']) and getattr(client,'github_ranges',False)):
             from horizon_update_ranges import RangeUnavailable
             try:
-                return self._prepare_ranged_ui(client,base_cohort,writer_wait)
+                return self._prepare_ranged_components(client,selected,base_cohort,writer_wait)
             except RangeUnavailable:
                 # Old clients, mirrors without Range support and files we
                 # cannot reuse keep the full authenticated ZIP path.
@@ -537,12 +537,12 @@ class CohortStore:
         with client.prepared(selected,discard_after=not retain_download) as receipt:
             return self._prepare_authenticated_receipt(receipt,base_cohort=base_cohort,verify_running_base=verify_running_base,writer_wait=writer_wait)
 
-    def _prepare_ranged_ui(self,client,base_cohort,writer_wait):
+    def _prepare_ranged_components(self,client,selected,base_cohort,writer_wait):
         import horizon_update_progress as progress
-        from horizon_update_ranges import RangeUnavailable, authenticated_ui_changes, copy_changed_member
+        from horizon_update_ranges import RangeUnavailable, authenticated_component_changes, copy_changed_member
         selector,base=self._read_selection()
         if (base_cohort is None or stage._plain_chain(base_cohort)!=base or base.parent!=self.root/'cohorts'):
-            raise RangeUnavailable("No managed UI base for selected preparation")
+            raise RangeUnavailable("No managed Windows base for selected preparation")
         local_manifest=base/'components.json'
         try:
             raw=stage._read_plain(local_manifest,stage.MAX_MANIFEST)
@@ -555,21 +555,28 @@ class CohortStore:
         # This read is only a selection hint. The later writer section verifies
         # the selector and all file bytes before it can reuse any candidate file.
         local=stage._json(raw)
-        ui=next((row for row in local['components'] if row['id']=='ui'),None)
-        if ui is None:
-            raise RangeUnavailable("No local UI inventory")
-        hint={'payload/ui/'+row['path']:(row['bytes'],row['sha256']) for row in ui['files']}
-        with client.selected_windows_ui() as (receipt,manifest,source), ExitStack() as download:
+        hint={f"payload/{component['id']}/{COMPONENT_PREFIX[component['id']]}{row['path']}":(row['bytes'],row['sha256'])
+              for component in local['components'] for row in component['files']}
+        with client.selected_windows_components(selected) as (receipt,manifest,source), ExitStack() as download:
             progress.report('download',completed=0,total=0,force=True)
             prepared={}
-            with authenticated_ui_changes(source,manifest,self.context,hint) as (archive,changed):
+            with authenticated_component_changes(source,manifest,self.context,selected,hint) as (archive,changed):
                 size=sum(spec['bytes'] for spec in changed.values())
                 if size>source.MEMBER_BUDGET or size+16*1024*1024>shutil.disk_usage(client.cache).free:
                     raise RangeUnavailable("Selected download exceeds the staging budget")
+                totals={}
+                completed={}
                 for name,spec in changed.items():
+                    component=name.split('/')[1]
+                    totals[component]=totals.get(component,0)+spec['bytes']
+                for name,spec in changed.items():
+                    component=name.split('/')[1]
                     file=download.enter_context(TemporaryFile(dir=client.cache))
                     copy_changed_member(archive,name,spec,file)
                     prepared[name]=file
+                    completed[component]=completed.get(component,0)+spec['bytes']
+                    progress.report('download',component=component,completed=completed[component],
+                                    total=totals[component],force=True)
             return self._prepare_authenticated_receipt(receipt,base_cohort=base,writer_wait=writer_wait,
                 range_payload=(manifest,selector,prepared,hint))
 
@@ -631,7 +638,8 @@ class CohortStore:
             if destination.exists():
                 _,_,digest,_=inventory(destination);stage.require(digest==expected_digest,'Existing prepared cohort differs from authenticated files')
                 if range_payload is not None:
-                    stage._primary_format(destination/primary_programs(self.context['platform'])['ui'],self.context['platform'])
+                    for component in chosen:
+                        stage._primary_format(destination/primary_programs(self.context['platform'])[component],self.context['platform'])
                 return self._remember_prepared(dict(schema='PGN_PREPARED_COHORT_V1',cohort=str(destination),inventory_sha256=digest,
                     expected_current=before,base_cohort=str(base),sequence=manifest['sequence'],selected=sorted(chosen),cohort_key_sha256=key))
             # Reuse code only from a verified immutable cohort in this store.
@@ -640,8 +648,7 @@ class CohortStore:
             files={f['relative']:f['file']for f in old_files.values()if f['component']not in chosen}
             range_changes={}
             if range_payload is not None:
-                ui_manifest=next(c for c in manifest['components'] if c['id']=='ui')
-                specs={f['path']:f for f in ui_manifest['files']}
+                specs={f['path']:f for c in manifest['components'] if c['id'] in chosen for f in c['files']}
             for relative,path in payload.items():
                 stage.require(relative not in files,'Component install path overlaps')
                 if range_payload is None:
@@ -652,7 +659,7 @@ class CohortStore:
                 else:
                     row=old_files.get(relative.casefold())
                     if row is None or (row['bytes'],row['sha256'])!=hint.get(path):
-                        raise RangeUnavailable("A reused UI file changed during download")
+                        raise RangeUnavailable("A reused component file changed during download")
                     files[relative]=row['file']
             reusable={}
             if base.parent==self.root/'cohorts':
@@ -694,7 +701,8 @@ class CohortStore:
                 _,_,digest,_=inventory(pending)
                 stage.require(digest==expected_digest,'Prepared inventory differs from the authenticated manifest')
                 if range_payload is not None:
-                    stage._primary_format(pending/primary_programs(self.context['platform'])['ui'],self.context['platform'])
+                    for component in chosen:
+                        stage._primary_format(pending/primary_programs(self.context['platform'])[component],self.context['platform'])
                 self._quota()
                 stage._publish_pending(pending,destination,lambda:False)
             finally:

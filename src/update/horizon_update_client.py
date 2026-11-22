@@ -441,15 +441,13 @@ class AuthenticatedUpdates:
             yield manifest,chosen
 
     @contextmanager
-    def selected_windows_ui(self):
-        from horizon_update_ranges import GitHubRangeSource, RangeUnavailable
+    def selected_windows_components(self, selected):
+        from horizon_update_ranges import GitHubRangeSource
         with locked_cache(self.cache,wait_seconds=self.cache_wait_seconds):
             self._pins.clear()
             self._cache_size()
             updater=self._updater()
-            catalog,manifest,_,chosen,_=self._catalog(updater,["ui"])
-            if set(chosen)!={"ui"}:
-                raise RangeUnavailable("The authenticated dependency closure is not UI only")
+            catalog,manifest,_,chosen,_=self._catalog(updater,selected)
             bundle=catalog["bundle_target"]
             artifact=self._signed_target(updater,bundle,MAX_TARGET)
             url=self.target_url+artifact.hashes["sha256"]+"."+bundle

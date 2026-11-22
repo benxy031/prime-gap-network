@@ -124,10 +124,10 @@ class GitHubRangeSource:
 
 
 @contextmanager
-def authenticated_ui_changes(source,manifest,context,verified_base):
+def authenticated_component_changes(source,manifest,context,selected,verified_base):
     with ExitStack() as stack:
         try:
-            opened=stack.enter_context(changed_windows_members(source,manifest,context,["ui"],verified_base))
+            opened=stack.enter_context(changed_windows_members(source,manifest,context,selected,verified_base))
         except (StageError,zipfile.BadZipFile,EOFError,zlib.error,UnicodeDecodeError) as error:
             raise RangeUnavailable("The range ZIP did not match the verified catalogue") from error
         yield opened

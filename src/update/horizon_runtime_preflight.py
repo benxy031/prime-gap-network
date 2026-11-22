@@ -17,12 +17,22 @@ def candidate_runtime_preflight(cohort,*,expected_inventory_sha256=None):
     if expected_inventory_sha256 is not None:
         stage.require(digest==expected_inventory_sha256,'Candidate runtime differs from authenticated preparation')
     suffix='.exe' if value.get('platform','windows-x86_64')=='windows-x86_64' else ''
+    helper='UpdateRuntime/horizon-updater'+suffix
+    descriptor='UpdateRuntime/deployment.json'
+    stage.require(helper.casefold() in files and descriptor.casefold() in files,
+        'Required update helper or deployment descriptor is missing')
+    config=stage._json(stage._read_plain(cohort/descriptor,8192))
+    stage.require(config.get('schema')=='PGN_UPDATE_DEPLOYMENT_V1'
+        and config.get('network')==value['network'] and config.get('helper')==helper,
+        'Candidate update deployment differs from its installed network or helper')
+    stage.require(config.get('sha256')==files[helper.casefold()]['sha256'],
+        'Candidate update helper fingerprint differs from its deployment')
     environment=dict(os.environ,PYINSTALLER_RESET_ENVIRONMENT='1')
     environment.pop('PGN_PRIVATE_OWNER_BOOTSTRAP',None)
     checks=[]
     for relative,argument in (
         ('EngineRuntime/network/horizon-engine-host'+suffix,'--help'),
-        ('UpdateRuntime/horizon-updater'+suffix,'--self-test'),
+        (helper,'--self-test'),
     ):
         stage.require(relative.casefold()in files,'Required runtime loader is missing')
         executable=cohort/relative
