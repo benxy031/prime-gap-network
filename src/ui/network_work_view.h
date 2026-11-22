@@ -91,6 +91,8 @@ private:
     TicketNumberReader numberReader_;
     WorkSearchIndicator* searchProgress_{};
     QJsonObject exactSnapshot_;
+    QHash<QString,QJsonObject> exactTicketCache_;
+    std::function<bool(const QJsonObject&)> ticketCacheAnchorValidator_;
     QString exactSnapshotNumber_,exactError_,activeExactNumber_;
     quint64 numberSearchGeneration_{};
     bool numberLookupBusy_{},numberLookupQueued_{};
@@ -98,6 +100,15 @@ private:
         const auto pageHeight=snapshot_.value("height").toInteger(-1),height=state.value("height").toInteger(-1);
         const auto pageTip=snapshot_.value("bestblockhash").toString(),tip=state.value("bestblockhash").toString();
         return !tip.isEmpty()&&(pageTip.isEmpty()||height>pageHeight||(height==pageHeight&&tip==pageTip));
+    }
+    QJsonObject cachedExactTicket(const QString& number)const{
+        const auto value=exactTicketCache_.value(number);
+        const auto tip=snapshot_.value("bestblockhash");
+        if(tip.toString().isEmpty()||value.value("bestblockhash")!=tip||
+           value.value("height")!=snapshot_.value("height")||
+           value.value("genesis")!=snapshot_.value("genesis"))return {};
+        if(ticketCacheAnchorValidator_&&!ticketCacheAnchorValidator_(snapshot_))return {};
+        return value;
     }
     void readExactNumber(const QString& number,quint64 generation){
         if(generation!=numberSearchGeneration_)return;
@@ -111,6 +122,12 @@ private:
                 if(error.isEmpty()&&!guard->currentTicketSearchAnchor(state)){
                     error="Ticket lookup changed ledger snapshot · refresh work to retry";
                     state={};
+                }
+                const auto leases=state.value("leases").toArray();
+                if(error.isEmpty()&&leases.size()==1&&leases.first().toObject().value("ticket_number")==number){
+                    auto& cache=guard->exactTicketCache_;
+                    if(cache.size()>=64&&!cache.contains(number))cache.erase(cache.begin());
+                    cache.insert(number,state);
                 }
                 guard->exactSnapshot_=std::move(state);
                 guard->exactSnapshotNumber_=number;
@@ -133,7 +150,7 @@ private:
         setProperty("pgn_selected_ticket_evidence",QJsonObject{});
         openBlock_->setEnabled(false);copy_->setEnabled(false);
     }
-    void searchChanged(){
+    void searchChanged(bool bypassExactCache=false){
         exactSnapshot_={};exactSnapshotNumber_.clear();exactError_.clear();
         if(numberReader_&&(!exactWorkTicketNumber(search_->text()).isEmpty()||
            !activeExactNumber_.isEmpty()))clearInspection();
@@ -148,9 +165,10 @@ private:
                 const auto lease=entry.toObject();
                 if(lease.value("ticket_number")!=number)continue;
                 exactSnapshot_=pageDetail(lease.value("request").toString());
-                if(!exactSnapshot_.isEmpty())exactSnapshotNumber_=number;
                 break;
             }
+            if(exactSnapshot_.isEmpty()&&!bypassExactCache)exactSnapshot_=cachedExactTicket(number);
+            if(!exactSnapshot_.isEmpty())exactSnapshotNumber_=number;
             if(exactSnapshotNumber_.isEmpty())
                 QTimer::singleShot(WorkTicketSearchDelayMs,this,[this,number,generation]{readExactNumber(number,generation);});
         }
@@ -278,10 +296,10 @@ private:
         });
     }
     void refresh(bool retryExact=false){if(busy_)return;busy_=true;const int page=offset_;const QPointer<NetworkWorkView> guard(this);pageReader_(page,[guard,page,retryExact](QJsonObject state,QString error){
-        if(!guard)return;guard->busy_=false;if(page!=guard->offset_){guard->refresh();return;}if(!error.isEmpty()){if(guard->snapshot_.isEmpty())guard->timer_.setInterval(500);guard->presentStatus(error,true);return;}
+        if(!guard)return;guard->busy_=false;if(page!=guard->offset_){guard->refresh();return;}if(!error.isEmpty()){guard->exactTicketCache_.clear();if(guard->snapshot_.isEmpty())guard->timer_.setInterval(500);guard->presentStatus(error,true);return;}
         guard->timer_.setInterval(5000);const bool changed=guard->snapshot_.value("bestblockhash")!=state.value("bestblockhash")||guard->renderedOffset_!=page;guard->snapshot_=state;guard->renderedOffset_=page;const auto coverage=scientificCoveragePresentation(state);guard->coverage_->setText(coverage.available?coverage.richText:coverage.text);guard->coverage_->setAccessibleDescription(coverage.text);guard->coverage_->setToolTip(coverage.tooltip);
         const bool exact=guard->numberReader_&&!exactWorkTicketNumber(guard->search_->text()).isEmpty();
-        if(exact&&(changed||retryExact))guard->searchChanged();
+        if(exact&&(changed||retryExact))guard->searchChanged(retryExact);
         else if(changed)guard->render();
         if(guard->selectedId_.isEmpty()&&guard->table_->rowCount()){guard->table_->selectRow(0);}
         else if(!exact&&changed&&!guard->selectedId_.isEmpty())guard->inspect(guard->selectedId_);
@@ -298,6 +316,9 @@ protected:
 void presentStatus(const QString& text,bool error=false){status_->setText(status_->fontMetrics().elidedText(text,Qt::ElideRight,statusSlot_->width()));status_->setToolTip(text);statusSlot_->setCurrentWidget(summary_);if(table_)table_->setToolTip(text);}
 public:
     void setTicketNumberReader(TicketNumberReader reader){numberReader_=std::move(reader);}
+    void setTicketCacheAnchorValidator(std::function<bool(const QJsonObject&)> validator){
+        ticketCacheAnchorValidator_=std::move(validator);
+    }
     void prepareStartupMap(){if(atlas_)atlas_->prepareStartup();}
     QJsonObject auditProjection(const QJsonArray& audits,QWidget* surface)const{return atlas_?atlas_->auditProjection(audits,surface):QJsonObject{};}
     void resetAuditLayout(){if(!workspace_||workspace_->count()<2)return;QList<int> sizes;for(int i=0;i<workspace_->count();++i)sizes.append(0);sizes[0]=290;sizes.last()=std::max(1,workspace_->height()-290-(workspace_->count()-1)*workspace_->handleWidth());workspace_->setSizes(sizes);}

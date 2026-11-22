@@ -194,11 +194,11 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
       {"start","1000"},{"end","2000"},{"tracked_assignments",1},{"visible_assignments",1},
       {"details_truncated",false},{"details",QJsonArray{atlasTicket}},{"totals",atlasStages},
       {"bins",QJsonArray{QJsonObject{{"start","1000"},{"end","2000"},{"stages",atlasStages}}}}};
-  int heldSeeks=0;bool holdPageSeek=false;
+  int heldSeeks=0;bool holdPageSeek=false;QString exactPageError;
   const auto wait=[&]{QEventLoop loop;QTimer::singleShot(260,&loop,&QEventLoop::quit);loop.exec();};
   NetworkWorkView searchable([&](int offset,NetworkWorkView::Result done){
       if(holdPageSeek&&offset>0){++heldSeeks;return;}
-      done(currentPage,{});
+      done(currentPage,exactPageError);
     },[&](const QString&,NetworkWorkView::Result done){++extraDetailReads;done({},"Unexpected extra detail request");},
     nullptr,[&](const QString&,const QString&,int,auto done){done(atlasSample,{});});
   searchable.setTicketNumberReader([&](const QString& number,NetworkWorkView::Result done,auto summary){
@@ -303,9 +303,34 @@ int main(int argc,char** argv){QApplication app(argc,argv);app.setStyleSheet(pgn
   filter->setCurrentIndex(0);
   need(result->rowCount()==1&&copy->isEnabled(),"clearing exact filter did not restore matching evidence");
   field->clear();
+  field->setText("102");
+  need(result->rowCount()==1&&result->item(0,0)->text()=="Ticket 102"&&copy->isEnabled()&&
+       !progress->isVisible()&&lookups.isEmpty(),
+       "an already verified off-page ticket must render synchronously at the same tip");
+  reload->click();wait();
+  need(lookups.size()==1&&lookups.front().number=="102",
+       "explicit refresh must revalidate even a cached off-page ticket");
+  lookups.takeFirst().callback(match,{});
+  field->clear();
+  searchable.setTicketCacheAnchorValidator([](const QJsonObject&){return false;});
+  field->setText("102");
+  need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),
+       "a cache hit at a lagging page tip must wait for the latest Core anchor");
+  field->clear();
+  searchable.setTicketCacheAnchorValidator({});
+  exactPageError="Fixture Core unavailable";
+  reload->click();app.processEvents();
+  field->setText("102");
+  need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),
+       "a failed Core refresh must retire the exact cache");
+  field->clear();
+  exactPageError.clear();
   currentPage.insert("height",202);currentPage.insert("bestblockhash",QString(64,'3'));
   currentPage.insert("reports",QJsonArray{});currentPage.insert("audits",QJsonArray{});
   reload->click();app.processEvents();
+  field->setText("102");
+  need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),
+       "an old-tip off-page ticket must not be reused as current evidence");
   field->setText("ticket 33");
   need(result->rowCount()==0&&progress->isVisible()&&!copy->isEnabled(),
        "an incomplete on-page ticket reused old detail evidence");

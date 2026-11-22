@@ -529,7 +529,14 @@ int main(int argc,char** argv) {
  pgn::ui::selectNativeGraphAxis(canvas,"length");
  QWidget* community=nullptr;QTableWidget* testnetTickets=nullptr;
  pgn::ui::NetworkWorkView* networkWork=nullptr;pgn::ui::AuditAnimationView* auditAnimation=nullptr;
- if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});networkWork->setTicketNumberReader([&inspectWallet](const QString& number,auto done,auto summary){pgn::ui::readWalletTicketNumber(inspectWallet,number,std::move(done),std::move(summary));});community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
+ if(testnetMode){networkWork=new pgn::ui::NetworkWorkView([&inspectWallet](int offset,auto consume){pgn::ui::readWalletTicketPage(inspectWallet,offset,std::move(consume));},[&inspectWallet](const QString& id,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,id,std::move(consume));},nullptr,[&inspectWallet](const QString& start,const QString& end,int bins,auto consume){pgn::ui::readWalletTicketAtlas(inspectWallet,start,end,bins,std::move(consume));});networkWork->setTicketNumberReader([&inspectWallet](const QString& number,auto done,auto summary){pgn::ui::readWalletTicketNumber(inspectWallet,number,std::move(done),std::move(summary));});
+  networkWork->setTicketCacheAnchorValidator([networkObservation](const QJsonObject& snapshot){
+   const auto& current=*networkObservation;
+   return current&&current->freshAt(QDateTime::currentDateTimeUtc())&&
+      current->genesis==snapshot.value("genesis").toString()&&
+      current->tipHash==snapshot.value("bestblockhash").toString()&&
+      current->height==snapshot.value("height").toInteger(-1);
+  });community=networkWork;}else community=pgn::ui::createCommunityView(bookings,nullptr,[canvas](const QString& id){return pgn::ui::miningDeviceAccent(canvas,id);});tabs->addTab(community,testnetMode?"Network work":"Community");
 #ifdef Q_OS_WIN
  if(networkWork){auto* animation=new pgn::ui::AuditAnimationView([&inspectWallet](qint64 height,const QString& hash,const QJsonArray& watched,auto done){pgn::ui::readWalletAuditActivity(inspectWallet,height,hash,watched,std::move(done));},[networkWork](const QJsonArray& rows,QWidget* surface){return networkWork->auditProjection(rows,surface);});networkWork->onAtlasProjectionChanged=[animation]{animation->reproject();};animation->onAtlasCommand=[networkWork](const QJsonObject& command){networkWork->atlasCommand(command);};networkWork->setAuditAnimation(animation);auditAnimation=animation;}
 #endif
