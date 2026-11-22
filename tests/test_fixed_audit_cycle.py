@@ -66,6 +66,38 @@ class FixedAuditCycleTests(unittest.TestCase):
             self.assertIsNotNone(p.service_observation())
         finally:stop.set();publish_old.set();p.close(3)
 
+    def test_confirmed_audit_wakes_blocked_ticket_request(self):
+        from horizon_ticket_prefetch import TicketPrefetch
+        from horizon_native_work_duty import NativeAuditServiceRequired
+        observed=threading.Event()
+        ready=threading.Event()
+        enabled=threading.Event()
+        enabled.set()
+        stop=threading.Event()
+        attempts=[]
+        def assign():
+            attempts.append(1)
+            if len(attempts)==1:
+                raise NativeAuditServiceRequired("Audit required",dict(enforced=True,may_request=False))
+            return {"ticket":"admitted"}
+        prefetch=TicketPrefetch(SimpleNamespace(assign=assign),enabled,stop,threading.RLock(),lambda *_:ready.set())
+        publish=prefetch.publish_service_observation
+        def watch(generation,status):
+            result=publish(generation,status)
+            observed.set()
+            return result
+        prefetch.publish_service_observation=watch
+        prefetch.start()
+        try:
+            self.assertTrue(observed.wait(3))
+            self.assertFalse(ready.wait(.05))
+            prefetch.invalidate_native_service_status()
+            self.assertTrue(ready.wait(.6))
+            self.assertEqual(prefetch.ready,{"ticket":"admitted"})
+        finally:
+            stop.set()
+            self.assertTrue(prefetch.close(3))
+
     def test_two_startup_deliveries_cannot_become_unlimited_drain(self):
         f=make(lanes=[audit(100),audit(101)])
         self.assertTrue(f.may_unbound_audit(job(100)));self.assertTrue(f.may_unbound_audit(job(101)))

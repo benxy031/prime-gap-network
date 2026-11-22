@@ -278,13 +278,20 @@ class PreparationProvider:
     def pump(self, **resources):
         return self.queue.pump(self.producer, **resources)
 
-    def prepared(self, identity, *, logical_cpu):
+    def prepared(self, identity, *, logical_cpu, work_id=None):
         plan, job, _ = self._input(identity)
+        indices=range(len(plan.scopes))
+        if work_id is not None:
+            work=next((item for item in plan.selected if item.work_id==work_id),None)
+            if work is None:
+                raise ValueError('Issued work is not in the prepared source plan')
+            indices=(next(i for i,(a,b) in enumerate(plan.scopes)
+                          if a<=work.left_prime<=work.start<work.end<=work.right_prime<b),)
         bundle, _ = self.queue.ready(job, self.producer, logical_cpu=logical_cpu)
         if bundle.scopes != plan.scopes:
             raise ValueError('Producer outputs escape the prepared plan')
-        bank = ComplementFeedBank(tuple(prepare(bundle, i, self.exact_prime) for i in range(len(plan.scopes))))
-        return PreparedSourcePlan(plan, bundle, bank, self.exact_prime)
+        bank=ComplementFeedBank(tuple(prepare(bundle,i,self.exact_prime) for i in indices))
+        return PreparedSourcePlan(plan,bundle,bank,self.exact_prime)
 
     def runtime(self, identity, worker, table, cache, architecture, *, logical_cpu):
         prepared = self.prepared(identity, logical_cpu=logical_cpu)

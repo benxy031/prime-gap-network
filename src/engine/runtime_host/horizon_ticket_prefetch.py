@@ -78,6 +78,13 @@ class TicketPrefetch:
                     if status is not None:
                         self.publish_service_observation(observation_generation, status)
                     self.condition.notify_all()
+                    if isinstance(status,dict) and status.get("enforced") is True and status.get("may_request") is False:
+                        # A confirmed audit already invalidates this observation.
+                        # React to it immediately, while preserving the retry delay
+                        # for a network error or an unchanged service requirement.
+                        self.condition.wait_for(lambda: self.stopping.is_set() or
+                            self.native_service_generation != observation_generation, timeout=1)
+                        continue
                 self.stopping.wait(1)
 
     def take(self, promote, timeout=.2):

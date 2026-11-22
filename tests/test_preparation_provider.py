@@ -91,6 +91,23 @@ class PreparationProviderTests(unittest.TestCase):
         self.assertEqual(bound.feeds.select(self.a, self.a+100).batch.start, plan.scopes[0][0])
         self.assertFalse(bound.bundle.whole95_coverage)
 
+    def test_one_partition_prepares_only_its_bound_feed(self):
+        other=dict(work_id='b'*64,start=self.a+300,end=self.a+500)
+        identity,plan=self.provider.request([self.work,other],halo_limit=20)
+        self.assertEqual(len(plan.scopes),2)
+        bundle=ResidualBundle(10000000,plan.scopes,((),()),'a'*64,'b'*64,('c'*64,'d'*64))
+        with patch.object(self.provider.queue,'ready',return_value=(bundle,{})) as ready:
+            with patch('horizon_preparation_provider.prepare',wraps=prepare) as prepare_feed:
+                partial=self.provider.prepared(identity,logical_cpu=4,work_id=other['work_id'])
+                self.assertEqual([call.args[1] for call in prepare_feed.call_args_list],[1])
+                self.assertEqual(len(partial.feeds.feeds),1)
+            full=self.provider.prepared(identity,logical_cpu=4)
+            expected=full.feeds.select(other['start'],other['end']).fingerprint
+            self.assertEqual(partial.feeds.select(other['start'],other['end']).fingerprint,expected)
+            with self.assertRaisesRegex(ValueError,'work is not in'):
+                self.provider.prepared(identity,logical_cpu=4,work_id='e'*64)
+            self.assertEqual(ready.call_count,2)
+
     def test_lost_work_bad_scope_index_and_unproved_sentinels_are_rejected(self):
         identity, plan = self.request()
         doc = plan.document()

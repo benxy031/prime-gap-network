@@ -244,7 +244,7 @@ class PreparationResolver:
                 if entry is None or entry['state'] == 'failed':
                     raise PreparationRecoveryRequired('Assigned source needs explicit recovery; original work retained')
                 if entry['state'] == 'ready':
-                    return self.provider.prepared(row['plan'], logical_cpu=self.resources['logical_cpu'])
+                    return self.provider.prepared(row['plan'],logical_cpu=self.resources['logical_cpu'],work_id=row['work_id'])
             if time.monotonic() >= deadline:
                 raise TimeoutError('Source resolver wait budget reached; input retained')
             try:
