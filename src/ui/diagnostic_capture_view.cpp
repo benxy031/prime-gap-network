@@ -129,8 +129,8 @@ public:
   storageTree_=new QTreeWidget(maintenance);storageTree_->setObjectName("pgn-storage-folders");
   storageTree_->setHeaderLabels({"Folder","File size","Details"});
   storageTree_->header()->setSectionResizeMode(0,QHeaderView::Stretch);
-  storageTree_->setMinimumHeight(200);storageTree_->hide();storageBox->addWidget(storageTree_);
-  connect(&storageScan_,&QFutureWatcher<DiagnosticStorageInventory>::finished,this,[this]{showFolderInventory();});
+  storageTree_->hide();
+  storageBox->addWidget(storageTree_,1);
   connect(storageTree_,&QTreeWidget::itemExpanded,this,[this](QTreeWidgetItem* item){
    if(item->childCount())return;
    const auto parent=inventory_.folders.value(item->data(0,Qt::UserRole).toString());
@@ -139,7 +139,16 @@ public:
     item->addChild(folderItem(QFileInfo(folder.path).fileName(),folder));
    }
   });
-  maintenance->setStyleSheet("QFrame#pgn-diagnostics-storage{background:#071e26;border:1px solid #28515b;border-radius:8px;}");box->addWidget(maintenance);box->addStretch();
+  maintenance->setStyleSheet("QFrame#pgn-diagnostics-storage{background:#071e26;border:1px solid #28515b;border-radius:8px;}");
+  const int storagePanelIndex=box->count();
+  box->addWidget(maintenance);
+  box->addStretch(1);
+  connect(&storageScan_,&QFutureWatcher<DiagnosticStorageInventory>::finished,this,[this,box,storagePanelIndex]{
+   showFolderInventory();
+   const bool hasInventory=!storageTree_->isHidden();
+   box->setStretch(storagePanelIndex,hasInventory?1:0);
+   box->setStretch(storagePanelIndex+1,hasInventory?0:1);
+  });
   connect(inspectStorage_,&QPushButton::clicked,this,[this]{analyzeFolders();storage("inspect_storage");});connect(cleanStorage_,&QPushButton::clicked,this,[this]{storage("clean_storage");});
   timer_.setInterval(1000);connect(&timer_,&QTimer::timeout,this,[this]{capture();});
   connect(start_,&QPushButton::clicked,this,[this]{if(exporting_)return;samples_={};bytes_=0;setProperty("pgn_capture_saved",QVariant{});start_->setEnabled(false);stop_->setEnabled(true);save_->setEnabled(false);timer_.start();capture();});

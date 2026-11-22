@@ -5,6 +5,7 @@
 #include <QTemporaryDir>
 #include <QPushButton>
 #include <QTreeWidget>
+#include <QScrollBar>
 #include <QFile>
 #include <QElapsedTimer>
 #include <QThread>
@@ -71,6 +72,18 @@ int main(int argc,char** argv){
   if(!resolvedOffGui.load()||!core||!wallets||core->text(0)!="Core"||wallets->toolTip(1)!="7 bytes")return 50;
   tree->expandItem(tree->topLevelItem(0));
   if(core->childCount()!=3||core->child(0)->text(0)!=".nested"||core->child(0)->toolTip(1)!="7 bytes")return 51;
+  for(int i=0;i<18;++i)tree->addTopLevelItem(new QTreeWidgetItem({QString("Sample folder %1").arg(i)}));
+  view->resize(820,480);
+  view->show();
+  app.processEvents();
+  const int smallTable=tree->viewport()->height();
+  if(tree->verticalScrollBar()->maximum()<=0)return 55;
+  view->resize(820,920);
+  app.processEvents();
+  if(tree->viewport()->height()<smallTable+250||tree->verticalScrollBar()->maximum()!=0)return 56;
+  view->resize(820,480);
+  app.processEvents();
+  if(tree->verticalScrollBar()->maximum()<=0)return 57;
   delete view;
   return 0;
  }
