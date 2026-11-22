@@ -10,10 +10,16 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTimer>
+#include <QFutureWatcher>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QDateTime>
 #include <QFrame>
 #include <QPointer>
+#include <QTreeWidget>
+#include <QHeaderView>
+#include <QtConcurrent>
+#include <QLocale>
 #include <cmath>
 #include <memory>
 
@@ -28,6 +34,48 @@ class DiagnosticCaptureView final:public QWidget {
  QLabel* status_{};QPushButton *start_{},*stop_{},*save_{};
  QLabel* storageStatus_{};QPushButton *inspectStorage_{},*cleanStorage_{};DiagnosticStorageRequest storageRequest_;bool storageBusy_{};quint64 storageGeneration_{};
  std::function<QJsonObject()> context_;
+ std::function<DiagnosticStorageRoots()> storageRoots_;
+ std::function<void(DiagnosticStorageRoots&,QStringList&)> resolveStorageRoots_;
+ QFutureWatcher<DiagnosticStorageInventory> storageScan_;
+ DiagnosticStorageInventory inventory_;
+ QTreeWidget* storageTree_{};
+ QLabel* scanStatus_{};
+ static QString displaySize(quint64 bytes){
+  return QLocale::c().formattedDataSize(qint64(bytes),1,QLocale::DataSizeSIFormat);
+ }
+ QTreeWidgetItem* folderItem(const QString& label,const DiagnosticStorageFolder& folder){
+  auto* item=new QTreeWidgetItem({label,displaySize(folder.bytes),
+                     folder.status.isEmpty()&&folder.partial?QString("Partial"):folder.status});
+  item->setToolTip(0,folder.path);
+  item->setToolTip(1,QString("%1 bytes").arg(folder.bytes));
+  item->setData(0,Qt::UserRole,storagePathKey(folder.path));
+  if(!folder.folders.isEmpty())item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+  return item;
+ }
+ void analyzeFolders(){
+  if(!storageRoots_||storageScan_.isRunning())return;
+  scanStatus_->setText("Measuring Horizon folders…");
+  storageScan_.setFuture(QtConcurrent::run([roots=storageRoots_(),resolve=resolveStorageRoots_]() mutable {
+   QStringList notes;
+   if(resolve)resolve(roots,notes);
+   auto inventory=scanDiagnosticStorage(roots);
+   inventory.notes=std::move(notes);
+   inventory.partial=inventory.partial||!inventory.notes.isEmpty();
+   return inventory;
+  }));
+ }
+ void showFolderInventory(){
+  inventory_=storageScan_.result();
+  storageTree_->clear();
+  for(auto it=inventory_.roots.cbegin();it!=inventory_.roots.cend();++it)
+   storageTree_->addTopLevelItem(folderItem(it.key(),inventory_.folders.value(storagePathKey(it.value()))));
+  storageTree_->setVisible(!inventory_.roots.isEmpty());
+  auto summary=QString("Total file size · %1%2")
+    .arg(displaySize(inventory_.uniqueRootBytes),inventory_.partial?QString(" · some folders are partial"):QString{});
+  if(!inventory_.notes.isEmpty())summary+='\n'+inventory_.notes.join('\n');
+  scanStatus_->setText(summary);
+ }
+
  void storage(const QString& action){
   if(!storageRequest_||storageBusy_)return;
   storageBusy_=true;const auto generation=++storageGeneration_;inspectStorage_->setEnabled(false);cleanStorage_->setEnabled(false);
@@ -77,8 +125,22 @@ public:
   inspectStorage_->setObjectName("pgn-diagnostics-storage-inspect");cleanStorage_->setObjectName("pgn-diagnostics-storage-clean");
   for(auto* button:{inspectStorage_,cleanStorage_}){button->setMinimumHeight(34);button->setEnabled(false);storageButtons->addWidget(button);}storageButtons->addStretch();storageBox->addLayout(storageButtons);
   storageStatus_=new QLabel("Storage maintenance is not configured.",maintenance);storageStatus_->setObjectName("pgn-diagnostics-storage-status");storageStatus_->setTextFormat(Qt::PlainText);storageStatus_->setWordWrap(true);storageStatus_->setTextInteractionFlags(Qt::TextSelectableByMouse);storageBox->addWidget(storageStatus_);
+  scanStatus_=new QLabel(maintenance);scanStatus_->setWordWrap(true);storageBox->addWidget(scanStatus_);
+  storageTree_=new QTreeWidget(maintenance);storageTree_->setObjectName("pgn-storage-folders");
+  storageTree_->setHeaderLabels({"Folder","File size","Details"});
+  storageTree_->header()->setSectionResizeMode(0,QHeaderView::Stretch);
+  storageTree_->setMinimumHeight(200);storageTree_->hide();storageBox->addWidget(storageTree_);
+  connect(&storageScan_,&QFutureWatcher<DiagnosticStorageInventory>::finished,this,[this]{showFolderInventory();});
+  connect(storageTree_,&QTreeWidget::itemExpanded,this,[this](QTreeWidgetItem* item){
+   if(item->childCount())return;
+   const auto parent=inventory_.folders.value(item->data(0,Qt::UserRole).toString());
+   for(const auto& key:parent.folders){
+    const auto folder=inventory_.folders.value(key);
+    item->addChild(folderItem(QFileInfo(folder.path).fileName(),folder));
+   }
+  });
   maintenance->setStyleSheet("QFrame#pgn-diagnostics-storage{background:#071e26;border:1px solid #28515b;border-radius:8px;}");box->addWidget(maintenance);box->addStretch();
-  connect(inspectStorage_,&QPushButton::clicked,this,[this]{storage("inspect_storage");});connect(cleanStorage_,&QPushButton::clicked,this,[this]{storage("clean_storage");});
+  connect(inspectStorage_,&QPushButton::clicked,this,[this]{analyzeFolders();storage("inspect_storage");});connect(cleanStorage_,&QPushButton::clicked,this,[this]{storage("clean_storage");});
   timer_.setInterval(1000);connect(&timer_,&QTimer::timeout,this,[this]{capture();});
   connect(start_,&QPushButton::clicked,this,[this]{if(exporting_)return;samples_={};bytes_=0;setProperty("pgn_capture_saved",QVariant{});start_->setEnabled(false);stop_->setEnabled(true);save_->setEnabled(false);timer_.start();capture();});
   connect(stop_,&QPushButton::clicked,this,[this]{stop();});
@@ -88,6 +150,10 @@ public:
   });
  }
  void setStorageActions(DiagnosticStorageRequest request){storageRequest_=std::move(request);inspectStorage_->setEnabled(bool(storageRequest_));cleanStorage_->setEnabled(false);storageStatus_->setText(storageRequest_?"Analyze storage to see its locations and reclaimable space.":"Storage maintenance is unavailable.");}
+ void setRoots(std::function<DiagnosticStorageRoots()> provider,std::function<void(DiagnosticStorageRoots&,QStringList&)> resolve){
+  storageRoots_=std::move(provider);
+  resolveStorageRoots_=std::move(resolve);
+ }
  void setContextProvider(std::function<QJsonObject()> provider){context_=std::move(provider);}
  void exportTo(const QString& file){
   if(exporting_||samples_.isEmpty()||file.isEmpty())return;stop();
@@ -130,6 +196,52 @@ public:
 }
 QWidget* createDiagnosticCaptureView(QString exporter,std::function<QJsonObject()> sample,QWidget* parent){return new DiagnosticCaptureView(std::move(exporter),std::move(sample),parent);}
 void setDiagnosticStorageActions(QWidget* view,DiagnosticStorageRequest request){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->setStorageActions(std::move(request));}
+void resolveDiagnosticCoreStorage(DiagnosticStorageRoots& locations,QStringList& notes){
+ const auto coreData=locations.value("Core data");
+ const auto chainState=locations.value("Chain state");
+ if(coreData.isEmpty()||chainState.isEmpty())return;
+ const QDir network(QFileInfo(chainState).absolutePath());
+ static const QRegularExpression customCorePath(
+    R"(^\s*(?:(?:test|main)\.)?(?:blocksdir|walletdir|includeconf|conf|settings)\s*=)",
+    QRegularExpression::CaseInsensitiveOption|QRegularExpression::MultilineOption);
+ bool unresolved=false;
+ for(const auto& name:{"pgn.conf","riecoin.conf"}){
+  QFile config(QDir(coreData).filePath(name));
+  if(!config.exists())continue;
+  if(!config.open(QIODevice::ReadOnly)||config.size()>65536||
+      customCorePath.match(QString::fromUtf8(config.readAll())).hasMatch()){
+   unresolved=true;
+   break;
+  }
+ }
+ QFile settings(network.filePath("settings.json"));
+ if(settings.exists()){
+  QJsonParseError error;
+  const bool readable=settings.open(QIODevice::ReadOnly)&&settings.size()<=65536;
+  const auto document=readable?QJsonDocument::fromJson(settings.readAll(),&error):QJsonDocument{};
+  if(!readable||error.error!=QJsonParseError::NoError||!document.isObject())unresolved=true;
+  else{
+   const auto value=document.object();
+   const auto apply=[&](const QString& key,const QString& label,const QString& suffix){
+    if(!value.contains(key))return;
+    const auto path=value.value(key).toString();
+    if(!QFileInfo(path).isAbsolute()){unresolved=true;return;}
+    locations.insert(label,suffix.isEmpty()?path:QDir(path).filePath(suffix));
+   };
+   const auto chain=QDir(coreData).relativeFilePath(network.absolutePath());
+   if(chain=="."||chain=="testnet")
+    apply("blocksdir","Blockchain",chain=="."?QString("blocks"):chain+"/blocks");
+   else if(value.contains("blocksdir"))unresolved=true;
+   apply("walletdir","Wallets",{});
+   if(value.contains("settings")||value.contains("conf")||value.contains("includeconf"))unresolved=true;
+  }
+ }
+ if(unresolved)notes.append("Some Core settings could not be resolved. The total may omit folders outside Core data.");
+}
+void setDiagnosticStorageRoots(QWidget* view,std::function<DiagnosticStorageRoots()> provider,
+                               std::function<void(DiagnosticStorageRoots&,QStringList&)> resolve){
+ if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->setRoots(std::move(provider),std::move(resolve));
+}
 void setDiagnosticContextProvider(QWidget* view,std::function<QJsonObject()> provider){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->setContextProvider(std::move(provider));}
 void saveDiagnosticCapture(QWidget* view,const QString& filename){if(auto* capture=dynamic_cast<DiagnosticCaptureView*>(view))capture->exportTo(filename);}
 }

@@ -36,6 +36,8 @@
 #include "ui/startup_window.h"
 #include <QSplitter>
 #include <QProcess>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QProgressBar>
 #include <QSignalBlocker>
 #include <QUuid>
@@ -808,17 +810,87 @@ int main(int argc,char** argv) {
      {"core_rpc_history",pgn::ui::walletCoreRpcDiagnosticHistory(inspectWallet)},
      {"observed_core_pid",inspectWallet->property("pgn_wallet_embedded_pid").toLongLong()},{"local_paths",locations}};
   });
+  pgn::ui::setDiagnosticStorageRoots(diagnostics,[inspectWallet]{
+   return pgn::ui::walletStorageDirectories(inspectWallet);
+  },[root,installedGenesis,updateState](pgn::ui::DiagnosticStorageRoots& locations,QStringList& notes){
+   const auto application=QCoreApplication::applicationDirPath();
+   locations.insert("Horizon installation",application);
+   locations.insert("Horizon data",pgn::app::mutableDataRoot(root));
+   locations.insert("Engine programs",QDir(application).filePath("EngineRuntime"));
+   locations.insert("Mining results and checkpoints",pgn::wallet::normalEngineStateDirectory(root,installedGenesis));
+   const QDir settings(QDir(pgn::app::mutableDataRoot(root)).filePath("testnet/ui-runtime"));
+   const auto readSettings=[&settings](const QString& name){
+    QFile file(settings.filePath(name));
+    if(!file.open(QIODevice::ReadOnly)||file.size()>65536)return QJsonObject{};
+    return QJsonDocument::fromJson(file.readAll()).object();
+   };
+   const auto includeWorkspace=[&locations](const QString& label,const QJsonArray& arguments,const QString& flag){
+    for(qsizetype i=0;i+1<arguments.size();++i)if(arguments.at(i).toString()==flag){
+     const auto path=arguments.at(i+1).toString();
+     if(QFileInfo(path).isAbsolute())locations.insert(label,path);
+     return;
+    }
+   };
+   const auto gpu=readSettings("worker-stream.json");
+   includeWorkspace("Configured mining workspace",gpu.value("network_arguments").toArray(),"--state-root");
+   if(locations.value("Core data").isEmpty()){
+    QFile receipt(QDir(locations.value("Wallet runtime")).filePath("wallet-core.json"));
+    if(receipt.open(QIODevice::ReadOnly)&&receipt.size()<=32768){
+     const auto profile=QJsonDocument::fromJson(receipt.readAll()).object();
+     const auto data=profile.value("data_directory").toString();
+     const auto chain=profile.value("chain").toString();
+     if(profile.value("product")=="PGN Core"&&QFileInfo(data).isAbsolute()&&(chain=="test"||chain=="main")){
+      const QDir network(chain=="test"?QDir(data).filePath("testnet"):data);
+      locations.insert("Core data",data);
+      locations.insert("Wallets",network.filePath("wallets"));
+      locations.insert("Blockchain",network.filePath("blocks"));
+      locations.insert("Chain state",network.filePath("chainstate"));
+      locations.insert("Ticket and audit history",network.filePath("chainstate-pgn-request-history"));
+     }
+    }
+   }
+   pgn::ui::resolveDiagnosticCoreStorage(locations,notes);
+   const auto endpoints=readSettings("cpu-controllers.json").value("endpoints").toArray();
+   for(qsizetype i=0;i<qMin(qsizetype{8},endpoints.size());++i){
+    const auto cpu=endpoints.at(i).toObject();
+    const auto program=QFileInfo(cpu.value("program").toString()).baseName();
+    if(program.isEmpty()||program.compare("ssh",Qt::CaseInsensitive)==0)continue;
+    includeWorkspace(QString("Configured CPU workspace %1").arg(i+1),cpu.value("arguments").toArray(),"--workspace");
+   }
+   if(!updateState.isEmpty()){
+    locations.insert("Update storage",updateState);
+    locations.insert("Update cache",QDir(updateState).filePath("cache"));
+    locations.insert("Program copies",QDir(updateState).filePath("installation"));
+   }
+  });
   pgn::ui::setDiagnosticStorageActions(diagnostics,[diagnostics,root,testnetMode](const QString& action,pgn::ui::DiagnosticStorageReply reply){
-   try{
-    const auto context=pgn::ui::walletComponentVersionsContext(root,pgn::wallet::coreRuntimeDirectory(root,testnetMode),testnetMode);
-    const auto codeRoot=QFileInfo(context.manifestPath).absolutePath();auto deployment=pgn::update::componentUpdateDeployment(codeRoot,testnetMode);
-    if(!context.genesisHash.isEmpty()&&context.genesisHash!=deployment.context.value("genesis_hash").toString())throw std::runtime_error("Storage maintenance belongs to a different network configuration");
-    const auto request=pgn::update::componentUpdateRequest(deployment,{},codeRoot,context.mutableDataRoot,action,{"ui"});
-    auto* service=new pgn::update::ComponentUpdateService(std::move(deployment),diagnostics);
+   struct PreparedStorageAction {
+    pgn::update::ComponentUpdateDeployment deployment;
+    QJsonObject request;
+    QString error;
+   };
+   auto* preparation=new QFutureWatcher<PreparedStorageAction>(diagnostics);
+   QObject::connect(preparation,&QFutureWatcher<PreparedStorageAction>::finished,diagnostics,[diagnostics,preparation,reply]{
+    auto prepared=preparation->result();
+    preparation->deleteLater();
+    if(!prepared.error.isEmpty()){reply({},prepared.error);return;}
+    auto* service=new pgn::update::ComponentUpdateService(std::move(prepared.deployment),diagnostics);
     service->onResult=[service,reply](const QJsonObject& value){reply(value,{});service->deleteLater();};
     service->onError=[service,reply](const QString& error){reply({},error);service->deleteLater();};
-    if(!service->start(request)){service->deleteLater();reply({},"Storage maintenance could not start.");}
-   }catch(const std::exception& error){reply({},QString::fromUtf8(error.what()));}
+    if(!service->start(prepared.request)){service->deleteLater();reply({},"Storage maintenance could not start.");}
+   });
+   preparation->setFuture(QtConcurrent::run([root,testnetMode,action]{
+    PreparedStorageAction prepared;
+    try{
+     const auto context=pgn::ui::walletComponentVersionsContext(root,pgn::wallet::coreRuntimeDirectory(root,testnetMode),testnetMode);
+     const auto codeRoot=QFileInfo(context.manifestPath).absolutePath();
+     prepared.deployment=pgn::update::componentUpdateDeployment(codeRoot,testnetMode);
+     if(!context.genesisHash.isEmpty()&&context.genesisHash!=prepared.deployment.context.value("genesis_hash").toString())
+      throw std::runtime_error("Storage maintenance belongs to a different network configuration");
+     prepared.request=pgn::update::componentUpdateRequest(prepared.deployment,{},codeRoot,context.mutableDataRoot,action,{"ui"});
+    }catch(const std::exception& error){prepared.error=QString::fromUtf8(error.what());}
+    return prepared;
+   }));
   });
   tabs->addTab(diagnostics,"Diagnostics");
  }

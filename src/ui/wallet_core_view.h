@@ -2,6 +2,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QMap>
 #include "wallet/chain_observation.h"
 #include <functional>
 class QWidget;
@@ -13,6 +14,7 @@ void bindWalletStartupAttention(QWidget*,std::function<void(QString)>);
 void bindWalletUpdates(QWidget*,std::function<void()>);
 void readWalletLocalConnection(QWidget*,std::function<void(QJsonObject,QString)>);
 QJsonArray walletCoreRpcDiagnosticHistory(QWidget*);
+QMap<QString,QString> walletStorageDirectories(QWidget*);
 void stopWalletCoreForUpdate(QWidget*,std::function<void(QString)>);
 void readWalletTicketPage(QWidget*,int,std::function<void(QJsonObject,QString)>);
 void readWalletTicketDetails(QWidget*,const QString&,std::function<void(QJsonObject,QString)>);

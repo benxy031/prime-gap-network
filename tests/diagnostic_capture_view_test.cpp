@@ -4,9 +4,11 @@
 #include <QApplication>
 #include <QTemporaryDir>
 #include <QPushButton>
+#include <QTreeWidget>
 #include <QFile>
 #include <QElapsedTimer>
 #include <QThread>
+#include <atomic>
 #include <QJsonDocument>
 #include <QStringList>
 #include <iostream>
@@ -32,7 +34,46 @@ int main(int argc,char** argv){
   newest({},"Another update owns the cache");if(!analyze->isEnabled()||clean->isEnabled())return 46;
   delete storage;newest(result,{}); // A completed helper may outlive the page.
  }
- if(argc==2&&QString::fromLocal8Bit(argv[1])=="--storage-controls-only")return 0;
+ if(argc==2&&QString::fromLocal8Bit(argv[1])=="--storage-controls-only"){
+  QTemporaryDir files;
+  if(!files.isValid()||!QDir(files.path()).mkdir(".nested"))return 47;
+  QFile bytes(QDir(files.path()).filePath(".nested/data"));
+  if(!bytes.open(QIODevice::WriteOnly)||bytes.write("payload")!=7)return 48;
+  bytes.close();
+  auto* view=pgn::ui::createDiagnosticCaptureView({},[] {return QJsonObject{};});
+  const QDir fixture(files.path());
+  if(!fixture.mkpath("core/testnet/blocks")||!fixture.mkpath("external/testnet/blocks"))return 52;
+  QFile settings(fixture.filePath("core/testnet/settings.json"));
+  const auto external=fixture.filePath("external");
+  const auto config=QJsonDocument(QJsonObject{{"blocksdir",external}}).toJson(QJsonDocument::Compact);
+  if(!settings.open(QIODevice::WriteOnly)||settings.write(config)!=config.size())return 53;
+  settings.close();
+  QMap<QString,QString> configured{{"Core data",fixture.filePath("core")},
+     {"Chain state",fixture.filePath("core/testnet/chainstate")},{"Blockchain",fixture.filePath("core/testnet/blocks")}};
+  QStringList notes;
+  pgn::ui::resolveDiagnosticCoreStorage(configured,notes);
+  if(configured.value("Blockchain")!=fixture.filePath("external/testnet/blocks")||!notes.isEmpty())return 54;
+  const auto guiThread=QThread::currentThread();
+  std::atomic_bool resolvedOffGui(false);
+  pgn::ui::setDiagnosticStorageRoots(view,[&]{return QMap<QString,QString>{{"Core",files.path()}};},
+   [&](QMap<QString,QString>& roots,QStringList&){
+    resolvedOffGui.store(QThread::currentThread()!=guiThread);
+    roots.insert("Wallet",QDir(roots.value("Core")).filePath(".nested"));
+   });
+  pgn::ui::setDiagnosticStorageActions(view,[](const QString&,pgn::ui::DiagnosticStorageReply reply){reply({},"Update cache busy");});
+  view->findChild<QPushButton*>("pgn-diagnostics-storage-inspect")->click();
+  auto* tree=view->findChild<QTreeWidget*>("pgn-storage-folders");
+  if(!tree)return 49;
+  QElapsedTimer wait;wait.start();
+  while(!tree->topLevelItemCount()&&wait.elapsed()<3000){app.processEvents();QThread::msleep(3);}
+  const auto* core=tree->topLevelItem(0);
+  const auto* wallets=tree->topLevelItem(1);
+  if(!resolvedOffGui.load()||!core||!wallets||core->text(0)!="Core"||wallets->toolTip(1)!="7 bytes")return 50;
+  tree->expandItem(tree->topLevelItem(0));
+  if(core->childCount()!=3||core->child(0)->text(0)!=".nested"||core->child(0)->toolTip(1)!="7 bytes")return 51;
+  delete view;
+  return 0;
+ }
  if(argc==5&&QString::fromLocal8Bit(argv[1])=="--packaged-startup-probe"){
   const QString host=QString::fromLocal8Bit(argv[2]),bundle=QString::fromLocal8Bit(argv[3]),output=QString::fromLocal8Bit(argv[4]);
   QTemporaryDir state;if(!state.isValid())return 20;QWidget canvas;QProcess process;

@@ -479,7 +479,7 @@ target_link_libraries(pgn-wallet-bootstrap-lifecycle-test PRIVATE pgn-wallet-run
 add_executable(pgn-peer-bootstrap-test tests/peer_bootstrap_test.cpp)
 add_executable(pgn-diagnostic-capture-test tests/diagnostic_capture_view_test.cpp src/ui/diagnostic_capture_view.cpp)
 target_include_directories(pgn-diagnostic-capture-test PRIVATE src)
-target_link_libraries(pgn-diagnostic-capture-test PRIVATE Qt6::Core Qt6::Widgets)
+target_link_libraries(pgn-diagnostic-capture-test PRIVATE Qt6::Core Qt6::Widgets Qt6::Concurrent)
 target_include_directories(pgn-peer-bootstrap-test PRIVATE src)
 target_link_libraries(pgn-peer-bootstrap-test PRIVATE Qt6::Core Qt6::Network Qt6::Widgets)
 add_test(NAME peer-bootstrap COMMAND pgn-peer-bootstrap-test)

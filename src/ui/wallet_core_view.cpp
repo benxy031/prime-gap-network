@@ -370,6 +370,19 @@ void readWalletAuditActivity(QWidget* widget,qint64 height,const QString& hash,c
 void readWalletAuditDetails(QWidget* widget,const QString& id,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readAuditDetails(id,std::move(consume));else consume({},"Wallet audit view unavailable");}
 void bindWalletStartupAttention(QWidget* widget,std::function<void(QString)> receive){if(auto* view=dynamic_cast<WalletCoreView*>(widget)){view->startupAttention=std::move(receive);if(view->property("pgn_wallet_setup_required").toBool()&&view->startupAttention)view->startupAttention("Wallet connection requires attention");}}
 void readWalletLocalConnection(QWidget* widget,std::function<void(QJsonObject,QString)> consume){if(auto* view=dynamic_cast<WalletCoreView*>(widget))view->networkRuntime()->readLocalConnection(std::move(consume));else consume({},"Local wallet connection unavailable");}
+QMap<QString,QString> walletStorageDirectories(QWidget* widget){
+ const auto* view=dynamic_cast<WalletCoreView*>(widget);
+ if(!view)return {};
+ const auto* runtime=view->networkRuntime();
+ const auto* manager=runtime->walletManager();
+ const auto data=manager->dataDirectory();
+ const auto wallets=data.isEmpty()?QString{}:manager->walletDirectory();
+ const auto network=wallets.isEmpty()?QString{}:QFileInfo(wallets).absolutePath();
+ return {{"Core data",data},{"Wallets",wallets},{"Wallet runtime",runtime->runtimeDirectory()},
+         {"Blockchain",network.isEmpty()?QString{}:QDir(network).filePath("blocks")},
+         {"Chain state",network.isEmpty()?QString{}:QDir(network).filePath("chainstate")},
+         {"Ticket and audit history",network.isEmpty()?QString{}:QDir(network).filePath("chainstate-pgn-request-history")}};
+}
 QJsonArray walletCoreRpcDiagnosticHistory(QWidget* widget){
  if(auto* view=dynamic_cast<WalletCoreView*>(widget))return view->networkRuntime()->diagnosticRpcHistory();
  return {};
