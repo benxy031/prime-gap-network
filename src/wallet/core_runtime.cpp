@@ -1,4 +1,5 @@
 #include "wallet/chain_bootstrap_import.h"
+#include "wallet/chain_state_snapshot.h"
 #include "wallet/core_console_rpc.h"
 #include "wallet/public_work_snapshot.h"
 #include "wallet/audit_activity_snapshot.h"
@@ -235,7 +236,98 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
    if(!setupError.isEmpty()){failStart(setupError);return;}
   if(preparationAutomatic_&&!QFileInfo(profile_.dataDirectory).isDir()){failStart("Core recovery will not create a missing data directory");return;}
   if(!preparationAutomatic_&&!QDir().mkpath(profile_.dataDirectory)){failStart("Private PGN wallet directory could not be created");return;}
-  QProcess launcher;launcher.setProgram(profile_.executable);
+  if(!prepareFreshChainSnapshot())startPreparedCore();
+ });
+}
+bool CoreRuntime::prepareFreshChainSnapshot(){
+ if(preparationAutomatic_||profile_.chain!="test"||profile_.genesisHash!=ChainBootstrapGenesis
+     ||profile_.executableSha256.compare(QStringLiteral("369ff87bcd99dc80b8a4c5d2fe76b315c01a49124ca8fd67efb281dbd126551a"),Qt::CaseInsensitive)!=0
+     ||!freshBootstrapStateTarget(profile_.dataDirectory)||!defaultBlocksLayout(profile_))return false;
+ const auto directory=profile_.dataDirectory;
+ const auto root=QFileInfo(directory).canonicalFilePath();
+ const auto rootId=nativeFileIdentity(directory,true);
+ const auto program=profile_.executable;
+ const auto programDigest=profile_.executableSha256.toLatin1().toLower();
+ const auto programId=nativeFileIdentity(program,false);
+ if(rootId.isEmpty()||programId.isEmpty())return false;
+ const auto sameRoot=[directory,root,rootId]{
+  return QFileInfo(directory).canonicalFilePath()==root&&nativeFileIdentity(directory,true)==rootId;
+ };
+ const auto profileReceipt=boundedProfileBytes(runtimeDirectory_);
+ if(profileReceipt.isEmpty())return false;
+ const auto generation=preparationGeneration_;
+ const auto cancelled=std::make_shared<std::atomic_bool>(false);
+ snapshotCancelled_=cancelled;
+ const auto current=[this,cancelled,generation,profileReceipt,sameRoot]{
+  if(snapshotCancelled_!=cancelled||!launching_||!recovery_.permits(generation))return false;
+  if(sameRoot()&&boundedProfileBytes(runtimeDirectory_)==profileReceipt)return true;
+  snapshotCancelled_.reset();
+  failStart("Core settings or data folder changed during testnet state preparation. Start again with the current settings.");
+  return false;
+ };
+ auto* transport=new QNetworkAccessManager(this);
+ QNetworkRequest request{QUrl(QString::fromLatin1(BootstrapStateAsset))};
+ request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::NoLessSafeRedirectPolicy);
+ request.setTransferTimeout(20000);
+ auto* reply=transport->get(request);
+ snapshotReply_=reply;
+ QTimer::singleShot(35000,reply,[reply]{if(!reply->isFinished())reply->abort();});
+ readBoundedCoreRpcReply(reply,this,BootstrapStateBytes,[this,transport,reply,root,directory,program,programDigest,programId,cancelled,current](QByteArray payload,bool oversized){
+  const bool failed=reply->error()!=QNetworkReply::NoError;
+  if(snapshotReply_==reply)snapshotReply_.clear();
+  transport->deleteLater();
+  if(!current())return;
+  if(oversized||failed||payload.size()!=BootstrapStateBytes)payload.clear();
+  struct PreparedSnapshot{
+   std::shared_ptr<StagedBootstrapState> stage;
+   QDateTime programModified;
+   qint64 programSize{-1};
+   bool programVerified{};
+  };
+  auto* watcher=new QFutureWatcher<PreparedSnapshot>(this);
+  connect(watcher,&QFutureWatcher<PreparedSnapshot>::finished,this,[this,watcher,directory,program,programId,current]{
+   const auto prepared=watcher->result();
+   watcher->deleteLater();
+   if(!current())return;
+   snapshotCancelled_.reset();
+   const QFileInfo executable(program);
+   if(!prepared.programVerified||executable.lastModified()!=prepared.programModified||
+       executable.size()!=prepared.programSize||nativeFileIdentity(program,false)!=programId){
+    failStart("Core executable changed during testnet state preparation. Check the installed Core component.");
+    return;
+   }
+   if(prepared.stage&&defaultBlocksLayout(profile_)&&prepared.stage->publish(directory))
+    report(QString("Verified testnet chain state ready at block %1").arg(BootstrapStateHeight));
+   startPreparedCore();
+  });
+  watcher->setFuture(QtConcurrent::run([payload=std::move(payload),root,program,programId,programDigest,cancelled]{
+   PreparedSnapshot prepared;
+   if(!payload.isEmpty())prepared.stage=stageVerifiedBootstrapState(payload,root,*cancelled);
+   if(cancelled->load()||nativeFileIdentity(program,false)!=programId)return prepared;
+   const QFileInfo details(program);
+   prepared.programModified=details.lastModified();
+   prepared.programSize=details.size();
+   QFile binary(program);
+   QCryptographicHash hash(QCryptographicHash::Sha256);
+   prepared.programVerified=binary.open(QIODevice::ReadOnly)&&hash.addData(&binary)&&hash.result().toHex()==programDigest;
+   return prepared;
+  }));
+ });
+ report("Downloading the verified testnet chain state");
+ return true;
+}
+void CoreRuntime::startPreparedCore(){
+ if(!launching_)return;
+ if(!recovery_.permits(preparationGeneration_)){
+  launching_=false;
+  allowNew_=false;
+  if(ownershipLock_)ownershipLock_->unlock();
+  setLinkState(CoreLinkState::Stopped,"Core startup was cancelled by an explicit stop or update");
+  return;
+ }
+ QFile intent(runtimeDirectory_+"/wallet-launch-intent.json");
+ if(intent.exists()){failStart("A pending launch intent still exists. Core was not started.");return;}
+ QProcess launcher;launcher.setProgram(profile_.executable);
   QStringList args{"-datadir="+profile_.dataDirectory,profile_.chain=="test"?QString("-testnet=1"):QString("-chain=main"),"-server=1",
    "-rpcbind=127.0.0.1","-rpcallowip=127.0.0.1","-rpcport="+QString::number(profile_.rpcPort),
    "-port="+QString::number(profile_.peerPort),"-dnsseed=0","-fixedseeds=0","-discover=0",
@@ -288,9 +380,9 @@ CoreRuntime::CoreRuntime(QString root,QObject* parent,bool testnet,QString direc
   if(!intent.remove()){failStart("Core owner saved but launch intent could not be settled; reattach exact owner before any new launch");return;}
   launching_=false;
   recoveryClock_.start();clock_.start();report("CORE STARTED · checking exact chain identity");inspect();
- });
 }
 CoreRuntime::~CoreRuntime(){
+ if(snapshotCancelled_)snapshotCancelled_->store(true);
  recovery_.suppress();recoveryClock_.stop();
  verifier_.waitForFinished();
  clock_.stop();
@@ -1355,6 +1447,14 @@ void CoreRuntime::inspect(){
 void CoreRuntime::suspendRecoveryForMaintenance(){
  recovery_.suppress();recoveryClock_.stop();restartAfterManagedUpgrade_=false;managedUpgradePending_=false;
  managedUpgradeRetry_.invalidate();
+ if(snapshotCancelled_){
+  snapshotCancelled_->store(true);
+  snapshotCancelled_.reset();
+  launching_=false;
+  if(ownershipLock_)ownershipLock_->unlock();
+  if(snapshotReply_)snapshotReply_->abort();
+  setLinkState(CoreLinkState::Stopped,"Testnet state download stopped.");
+ }
  if(chainBootstrap_)chainBootstrap_->cancel("Bootstrap interrupted for Core maintenance. Reconnect to resume.");
 }
 void CoreRuntime::stop(){

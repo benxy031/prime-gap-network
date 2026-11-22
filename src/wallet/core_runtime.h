@@ -16,6 +16,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
+#include <atomic>
 #include <QLockFile>
 #include <memory>
 #include <functional>
@@ -136,6 +137,8 @@ private:
  void walletInitialized(const CoreEpoch&);
  bool processAlive();
  void begin(bool allowNew,bool automatic=false);
+ void startPreparedCore();
+ bool prepareFreshChainSnapshot();
  void failStart(const QString&);
  bool recoverOwned();
  bool persistOwned();
@@ -154,6 +157,8 @@ private:
  quint64 identityGeneration_{};
  CoreEpoch epoch() const{return {pid_,processBirth_,identityGeneration_};}
  QTimer clock_;QFutureWatcher<CoreProfilePreparation> verifier_;
+ std::shared_ptr<std::atomic_bool> snapshotCancelled_;
+ QPointer<QNetworkReply> snapshotReply_;
  CoreLinkState linkState_{CoreLinkState::Starting};
  QString linkDetail_;
  bool checking_{},connected_{},launching_{},stopping_{},allowNew_{},orphanedStart_{};
