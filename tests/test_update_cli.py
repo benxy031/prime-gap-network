@@ -130,6 +130,39 @@ class CliTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'outside the owned installation cohorts'):self.call()
   finally:base.tearDown()
 
+
+ def test_retirement_checks_selection_again_after_lock_free_inventory(self):
+  import shutil
+  import horizon_component_install as install
+  base=InstallTests();base.setUp()
+  try:
+   cache=base.root/'cache';cache.mkdir()
+   store=install.CohortStore.initialize(cache.parent/'installation',base.base,base.context,base.context_sha)
+   candidate=store.prepare(base.client,['cpu'])
+   self.assertTrue(store.activate(candidate,lambda:True,lambda _:True,lambda *_:None))
+   selected=Path(candidate['cohort'])
+   retired=selected.parent/('3'*20);shutil.copytree(base.base,retired)
+   context=deepcopy(base.context);context['protected_roots']=[str(selected),str(base.user)]
+   self.request.update(action='retire_installations',base_cohort=str(selected),cache=str(cache),context=context)
+   original_current=install.CohortStore.current
+   before=store.current()
+   after=dict(before,sequence=before['sequence']+1)
+   def change_selection(reading_store):
+    # A concurrent writer can acquire the real writer lock while the large
+    # verification is taking place. Old observations must then be discarded.
+    with cli.stage.owned_lock(reading_store.root):
+     self.assertEqual(original_current(reading_store),before)
+     install._write(reading_store.root/'current.json',after)
+    return before
+   with patch.object(install.CohortStore,'current',change_selection),patch.object(
+     install,'cohort_in_use',side_effect=AssertionError('Retirement used a stale selector')):
+    abandoned=self.call()
+   self.assertNotIn('installation_cleanup',abandoned)
+   self.assertNotIn('writer_busy',abandoned)
+   self.assertEqual(store.current(),after)
+   self.assertTrue(retired.is_dir())
+  finally:base.tearDown()
+
  def test_request_cannot_inject_another_repository_or_trust_key(self):
   for key in ('metadata_url','root','command'):
    self.request[key]='attacker'

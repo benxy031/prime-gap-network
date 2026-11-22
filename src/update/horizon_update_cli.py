@@ -19,7 +19,7 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.22.43'
+VERSION='2026.11.22.44'
 
 
 def maintain_installation(cache,context,context_sha,result,*,running_base=None):
@@ -39,13 +39,29 @@ def maintain_installation(cache,context,context_sha,result,*,running_base=None):
         needed=(retirements.exists()and any(retirements.iterdir()))or(cohorts.exists()and any(
             p.is_dir()and re.fullmatch(r'[0-9a-f]{20}',p.name)and p not in protected for p in cohorts.iterdir()))
         if not needed:return result
+        if running_base is not None:
+            # An active updater gets priority. The full read-only inventory can
+            # be slow on redirected storage, so release the probe lock first.
+            taking_lock=True
+            with stage.owned_lock(root):
+                taking_lock=False
+            store=CohortStore(root,context,context_sha,before_preparation=True)
+            if store.current()!=current:return result
         taking_lock=True
         with stage.owned_lock(root):
             taking_lock=False
-            # Recheck the selected root after taking the writer lock.
-            store=CohortStore(root,context,context_sha,before_preparation=running_base is not None)
-            current=store.current()
-            if running_base is not None and stage._plain_chain(current['cohort'])!=running_base:return result
+            if running_base is None:
+                store=CohortStore(root,context,context_sha)
+                current=store.current()
+            else:
+                # Bind the preverified immutable inventory to the same complete
+                # selector under the writer lock. Recompute retention roots
+                # under this lock before mutating any obsolete cohort.
+                stage.require(stage._read_plain(root/'.owner',128)==INSTALL_MARKER,'Installation store owner changed')
+                selection,selected=store._read_selection()
+                if selection!=current or selected!=running_base:return result
+                stage.require(stage.sha(stage._read_plain(selected/'components.json',stage.MAX_MANIFEST))
+                    ==selection['inventory_sha256'],'Selected cohort manifest changed during maintenance')
             result['installation_cleanup']=store._prune_retired(current,max_entries=1 if running_base is not None else None)
             if store.commit_warning:result['warning']=' '.join(filter(None,[result.get('warning'),store.commit_warning]))
     except Exception as error:
