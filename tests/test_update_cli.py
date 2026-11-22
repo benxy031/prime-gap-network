@@ -69,6 +69,67 @@ class CliTests(unittest.TestCase):
    install._write(path,{'new':True});thread.join(timeout=1);self.assertFalse(thread.is_alive());self.assertEqual(json.loads(path.read_bytes()),{'new':True})
   finally:
    if handle is not None:kernel.CloseHandle(handle)
+
+ def test_automatic_retirement_retries_a_transient_veto_without_fetching(self):
+  import shutil
+  import horizon_component_install as install
+  base=InstallTests();base.setUp()
+  try:
+   cache=base.root/'cache';cache.mkdir()
+   sentinel=cache/'cached-update.zip';sentinel.write_bytes(b'active download')
+   store=install.CohortStore.initialize(cache.parent/'installation',base.base,base.context,base.context_sha)
+   candidate=store.prepare(base.client,['cpu'])
+   self.assertTrue(store.activate(candidate,lambda:True,lambda _:True,lambda *_:None))
+   selected=Path(candidate['cohort'])
+   old=selected.parent/('3'*20);shutil.copytree(base.base,old)
+   context=deepcopy(base.context);context['protected_roots']=[str(selected),str(base.user)]
+   self.request.update(action='retire_installations',base_cohort=str(selected),cache=str(cache),context=context)
+   def no_transfer(*args,**kwargs):raise AssertionError('Retirement opened the download client')
+   with patch.object(cli,'AuthenticatedUpdates',side_effect=no_transfer):
+    with patch.object(install,'cohort_in_use',side_effect=[False,True]) as observation:
+     blocked=self.call()
+    self.assertEqual(observation.call_count,2)
+    self.assertEqual(blocked['installation_cleanup'],dict(removed=0,in_use=1))
+    self.assertTrue(old.is_dir())
+    journal=store.root/'retirements'
+    self.assertFalse(list(journal.iterdir()))
+    scratch=journal/('.'+'1'*32+'.json.'+'2'*32+'.pending')
+    scratch.write_bytes(b'incomplete atomic write')
+    with cli.stage.owned_lock(store.root), patch.object(install,'cohort_in_use',side_effect=AssertionError('Writer lock was bypassed')):
+     busy=self.call()
+    self.assertTrue(busy['writer_busy'])
+    self.assertNotIn('installation_cleanup',busy)
+    self.assertTrue(old.is_dir())
+    newer=selected.parent/('4'*20);shutil.copytree(base.base,newer)
+    with patch.object(install,'cohort_in_use',return_value=False):
+     recovered=self.call()
+    self.assertEqual(recovered['installation_cleanup'],dict(removed=1,in_use=0))
+    self.assertFalse(scratch.exists())
+    self.assertEqual(sum(p.exists() for p in (old,newer)),1)
+    self.assertFalse(recovered['process_control_performed'])
+    self.assertEqual(sentinel.read_bytes(),b'active download')
+    self.assertEqual(store.current()['cohort'],str(selected))
+    self.assertEqual(store.current()['previous']['cohort'],str(base.base))
+  finally:base.tearDown()
+
+ def test_retirement_preserves_a_precommit_candidate_and_foreign_running_root(self):
+  import horizon_component_install as install
+  base=InstallTests();base.setUp()
+  try:
+   cache=base.root/'cache';cache.mkdir()
+   store=install.CohortStore.initialize(cache.parent/'installation',base.base,base.context,base.context_sha)
+   candidate=store.prepare(base.client,['cpu'])
+   selected=Path(candidate['cohort'])
+   context=deepcopy(base.context);context['protected_roots']=[str(selected),str(base.user)]
+   self.request.update(action='retire_installations',base_cohort=str(selected),cache=str(cache),context=context)
+   with patch.object(install,'cohort_in_use',side_effect=AssertionError('Uncommitted candidate was inspected')):
+    skipped=self.call()
+   self.assertNotIn('installation_cleanup',skipped)
+   self.assertTrue(selected.is_dir())
+   self.request['base_cohort']=str(base.base)
+   with self.assertRaisesRegex(ValueError,'outside the owned installation cohorts'):self.call()
+  finally:base.tearDown()
+
  def test_request_cannot_inject_another_repository_or_trust_key(self):
   for key in ('metadata_url','root','command'):
    self.request[key]='attacker'

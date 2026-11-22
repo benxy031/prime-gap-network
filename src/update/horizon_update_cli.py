@@ -5,8 +5,10 @@ selected by a downloaded catalogue or by the JSON request. No shell commands,
 private publisher keys or wallet files are accepted by this interface.
 """
 import argparse
+import errno
 import json
 import os
+import re
 from pathlib import Path
 import sys
 if not getattr(sys,'frozen',False):
@@ -17,40 +19,53 @@ from horizon_update_client import AuthenticatedUpdates
 from horizon_component_install import CohortStore, _write, MARKER as INSTALL_MARKER
 import horizon_update_progress as progress
 
-VERSION='2026.11.22.42'
+VERSION='2026.11.22.43'
 
 
-def maintain_installation(cache,context,context_sha,result):
-    """Retire obsolete program cohorts during explicit storage cleanup."""
+def maintain_installation(cache,context,context_sha,result,*,running_base=None):
+    """Retire obsolete program cohorts, with bounded work for idle maintenance."""
     root=cache.parent/'installation'
     if not root.exists():return result
+    taking_lock=False
     try:
+        root=stage._plain_chain(root)
         if stage._read_plain(root/'.owner',128)!=INSTALL_MARKER:return result
         current=stage._json(stage._read_plain(root/'current.json',stage.MAX_MANIFEST))
-        protected={current['cohort']}
-        if current.get('previous'):protected.add(current['previous']['cohort'])
+        selected=stage._plain_chain(current['cohort'])
+        if running_base is not None and selected!=running_base:return result
+        protected={selected}
+        if current.get('previous'):protected.add(stage._plain_chain(current['previous']['cohort']))
         cohorts=root/'cohorts';retirements=root/'retirements'
-        # Normal checks remain cheap once only current/backup are retained.
         needed=(retirements.exists()and any(retirements.iterdir()))or(cohorts.exists()and any(
-            p.is_dir()and len(p.name)==20 and str(p)not in protected for p in cohorts.iterdir()))
+            p.is_dir()and re.fullmatch(r'[0-9a-f]{20}',p.name)and p not in protected for p in cohorts.iterdir()))
         if not needed:return result
+        taking_lock=True
         with stage.owned_lock(root):
-            store=CohortStore(root,context,context_sha)
-            result['installation_cleanup']=store._prune_retired(store.current())
+            taking_lock=False
+            # Recheck the selected root after taking the writer lock.
+            store=CohortStore(root,context,context_sha,before_preparation=running_base is not None)
+            current=store.current()
+            if running_base is not None and stage._plain_chain(current['cohort'])!=running_base:return result
+            result['installation_cleanup']=store._prune_retired(current,max_entries=1 if running_base is not None else None)
             if store.commit_warning:result['warning']=' '.join(filter(None,[result.get('warning'),store.commit_warning]))
     except Exception as error:
-        result['warning']=' '.join(filter(None,[result.get('warning'),'Old-program cleanup deferred: '+str(error)[:240]]))
+        if (running_base is not None and taking_lock and isinstance(error,OSError)
+            and error.errno in (errno.EACCES,errno.EAGAIN)):
+            result['writer_busy']=True
+        else:
+            result['warning']=' '.join(filter(None,[result.get('warning'),'Old-program cleanup deferred: '+str(error)[:240]]))
     return result
 
 
 def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,recovery_factory=None):
     stage.require(type(request)is dict,'JSON request object required')
     action=request.get('action')
-    stage.require(action in ('check','prepare','prepare_install','install','recover','inspect_storage','clean_storage'),'Unknown update operation')
+    stage.require(action in ('check','prepare','prepare_install','install','recover','inspect_storage','clean_storage','retire_installations'),'Unknown update operation')
     fields='schema action context cache'
     if action!='recover':fields+=' selected'
     if action=='recover':fields+=' installation_store'
     if action in ('prepare_install','install'):fields+=' base_cohort installation_store'
+    if action=='retire_installations':fields+=' base_cohort'
     if action=='install':fields+=' activation'
     stage._keys(request,fields)
     stage.require(request['schema']=='PGN_UPDATE_REQUEST_V1','Wrong update request schema')
@@ -82,6 +97,15 @@ def run(request,*,repositories=REPOSITORIES,fetcher=None,lifecycle_factory=None,
     selected=request['selected']
     stage.require(type(selected)is list and 1<=len(selected)<=4 and all(type(x)is str and x in stage.IDS for x in selected)and len(set(selected))==len(selected),'Choose one to four unique component IDs')
     stage.require(type(request['cache'])is str and Path(request['cache']).is_absolute(),'Absolute owned update-cache path required')
+    if action=='retire_installations':
+        stage.require(type(request['base_cohort'])is str and Path(request['base_cohort']).is_absolute(),'Absolute running code path required')
+        cache=stage._cache_path(Path(request['cache']),context)
+        base=stage._plain_chain(request['base_cohort'])
+        stage.require(base.parent==cache.parent/'installation'/'cohorts'
+            and re.fullmatch(r'[0-9a-f]{20}',base.name)
+            and base==stage._plain_chain(context['protected_roots'][0]),'Running code is outside the owned installation cohorts')
+        return maintain_installation(cache,context,context_sha,
+            dict(schema='PGN_UPDATE_RETIREMENT_RESULT_V1',process_control_performed=False),running_base=base)
     writer_wait=90 if action in ('prepare','prepare_install','install') else 0
     client=AuthenticatedUpdates(Path(request['cache']),repository['root'].encode(),repository['root_sha256'],repository['metadata_url'],repository['targets_url'],context,context_sha,fetcher=fetcher,cache_wait_seconds=writer_wait)
     if action in ('inspect_storage','clean_storage'):

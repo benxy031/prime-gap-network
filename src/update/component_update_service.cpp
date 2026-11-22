@@ -247,6 +247,7 @@ QJsonObject componentUpdateRequest(const ComponentUpdateDeployment& deployment,c
     QJsonObject request{{"schema","PGN_UPDATE_REQUEST_V1"},{"action",action},{"context",context},{"selected",selection},{"cache",state+"/cache"}};
     if(action=="prepare_install"||action=="install"){request.insert("base_cohort",applicationDirectory);request.insert("installation_store",state+"/installation");}
     if(action=="recover"){request.remove("selected");request.insert("installation_store",state+"/installation");}
+    if(action=="retire_installations")request.insert("base_cohort",applicationDirectory);
     return request;
 }
 
@@ -452,7 +453,7 @@ bool ComponentUpdateService::busy()const{return !settled_;}
 bool ComponentUpdateService::start(const QJsonObject& request){
     if(busy())return false;
     const auto action=request.value("action").toString();
-    if(action!="check"&&action!="prepare"&&action!="prepare_install"&&action!="inspect_storage"&&action!="clean_storage")return false;
+    if(action!="check"&&action!="prepare"&&action!="prepare_install"&&action!="inspect_storage"&&action!="clean_storage"&&action!="retire_installations")return false;
     const auto data=QJsonDocument(request).toJson(QJsonDocument::Compact);
     if(data.size()>MessageLimit)return false;
     output_.clear();errors_.clear();progressBuffer_.clear();downloadHighWater_.clear();settled_=false;cancelled_=oversized_=timedOut_=false;action_=action;
@@ -462,7 +463,7 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     disconnect(startedConnection_);
     startedConnection_=connect(process_,&QProcess::started,this,[this,data]{disconnect(startedConnection_);process_->write(data);process_->closeWriteChannel();});
     const QPointer<ComponentUpdateService> guard(this);
-    if(onStatus)onStatus(action=="inspect_storage"?"Inspecting unused update files…":action=="clean_storage"?"Cleaning verified unused files…":action=="check"?"Checking signed component versions…":"Downloading and verifying the selected components…");
+    if(onStatus)onStatus(action=="retire_installations"?"Cleaning obsolete installations…":action=="inspect_storage"?"Inspecting unused update files…":action=="clean_storage"?"Cleaning verified unused files…":action=="check"?"Checking signed component versions…":"Downloading and verifying the selected components…");
     if(!guard)return true;
     if(cancelled_){complete();return true;}
     timer_->start(action=="check"||action=="inspect_storage"?60000:600000);process_->start();return true;
@@ -479,9 +480,11 @@ void ComponentUpdateService::complete(){
     if(error.isEmpty()&&(parseError.error!=QJsonParseError::NoError||!document.isObject()))error="The update helper returned no valid result.";
     if(error.isEmpty()&&(process_->exitStatus()!=QProcess::NormalExit||process_->exitCode()!=0))error=result.value("error").toString("The update operation failed.").left(512);
     const bool storage=action_=="inspect_storage"||action_=="clean_storage";
-    if(error.isEmpty()&&!storage&&!result.value("publisher_authenticated").toBool())error="The update result has no verified publisher identity.";
-    const auto expected=storage?QString("PGN_DIAGNOSTIC_STORAGE_V1"):action_=="check"?QString("PGN_AUTHENTICATED_COMPONENT_VIEW_V1"):action_=="prepare"?QString("PGN_AUTHENTICATED_STAGE_RECEIPT_V1"):QString("PGN_UPDATE_INSTALL_PREPARATION_V1");
+    const bool retirement=action_=="retire_installations";
+    if(error.isEmpty()&&!storage&&!retirement&&!result.value("publisher_authenticated").toBool())error="The update result has no verified publisher identity.";
+    const auto expected=retirement?QString("PGN_UPDATE_RETIREMENT_RESULT_V1"):storage?QString("PGN_DIAGNOSTIC_STORAGE_V1"):action_=="check"?QString("PGN_AUTHENTICATED_COMPONENT_VIEW_V1"):action_=="prepare"?QString("PGN_AUTHENTICATED_STAGE_RECEIPT_V1"):QString("PGN_UPDATE_INSTALL_PREPARATION_V1");
     if(error.isEmpty()&&result.value("schema").toString()!=expected)error="The update helper returned an unexpected result type.";
+    if(error.isEmpty()&&retirement&&result.value("process_control_performed")!=QJsonValue(false))error="The updater returned an invalid retirement result.";
     if(error.isEmpty()&&storage&&(!result.value("process_control_performed").isBool()||result.value("process_control_performed").toBool()
         ||!result.value("cleaned").isBool()||result.value("cleaned").toBool()!=(action_=="clean_storage")||!result.value("cache").isObject()))error="The storage helper returned an invalid maintenance result.";
     if(!error.isEmpty()){

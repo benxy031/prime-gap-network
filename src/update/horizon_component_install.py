@@ -406,18 +406,41 @@ class CohortStore:
                 remaining.append(p)
         return remaining
 
-    def _prune_retired(self,current):
+    def _prune_retired(self,current,*,max_entries=None):
         """Called with the store writer lock. A cleanup failure cannot undo a commit."""
         result=dict(removed=0,in_use=0)
+        def has_budget():
+            return max_entries is None or result['removed']+result['in_use']<max_entries
         try:
             self.require_resolved_transaction(current)
             roots=self._retention_roots(current)
             journal=self.root/'retirements';journal.mkdir(exist_ok=True)
             for receipt in list(journal.iterdir()):
+                # A killed worker can leave only the atomic writer's scratch
+                # file. The published receipt remains authoritative.
+                if re.fullmatch(r'\.[0-9a-f]{32}\.json\.[0-9a-f]{32}\.pending',receipt.name):
+                    stage.require(stage._plain_chain(receipt).is_file(),'Unknown retirement journal retained')
+                    receipt.unlink()
+                    continue
+                if not has_budget():break
                 stage.require(re.fullmatch(r'[0-9a-f]{32}\.json',receipt.name),'Unknown retirement journal retained')
                 result['removed'if self._finish_retirement(receipt,roots)else'in_use']+=1
             cohorts=self.root/'cohorts'
-            for path in list(cohorts.iterdir())if cohorts.exists()else():
+            candidates=list(cohorts.iterdir())if cohorts.exists()else []
+            if max_entries is not None:
+                transaction=self.root/'transaction.json'
+                if transaction.is_file():
+                    frame=stage._json(stage._read_plain(transaction,stage.MAX_MANIFEST))
+                    previous=frame.get('before',{}).get('previous')or {}
+                    candidate=frame.get('candidate')or {}
+                    if frame.get('state')in ('committed','starting_candidate')and type(candidate)is dict and (
+                        candidate.get('cohort'),candidate.get('inventory_sha256')
+                    )==(current['cohort'],current['inventory_sha256']):
+                        # Start with the cohort displaced by this installation.
+                        hint=previous.get('cohort')
+                        candidates.sort(key=lambda path:str(path)!=hint)
+            for path in candidates:
+                if not has_budget():break
                 if not re.fullmatch(r'[0-9a-f]{20}',path.name)or path in roots:continue
                 value,files,digest,_=inventory(path)
                 stage.require(value['network']==self.context['network']and value.get('platform','windows-x86_64')==self.context['platform'],'Retiring code belongs to another network/platform')

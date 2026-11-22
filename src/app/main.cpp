@@ -1706,6 +1706,86 @@ int main(int argc,char** argv) {
  else window.show();
  #endif
  }
+#ifdef Q_OS_WIN
+ // The health-check launch can precede the selector commit. Inspect the
+ // selector asynchronously and leave the installation helper free to exit.
+ const QFileInfo runningCohort(applicationDirectory);
+ if(!updateState.isEmpty()&&QRegularExpression("^[0-9a-f]{20}$").match(runningCohort.fileName()).hasMatch()
+    &&runningCohort.absolutePath().compare(QDir::cleanPath(updateState+"/installation/cohorts"),Qt::CaseInsensitive)==0){
+  struct RetirementRequest {
+   pgn::update::ComponentUpdateDeployment deployment;
+   QJsonObject request;
+   bool waiting{};
+  };
+  struct RetirementBudget {
+   int commitChecks{10};
+   int attempts{3};
+  };
+  auto* retry=new QTimer(&window);
+  retry->setSingleShot(true);
+  const auto budget=std::make_shared<RetirementBudget>();
+  const auto closing=[&window]{
+   return window.property("pgn_closing").toBool()||window.property("pgn_update_shutdown").toBool();
+  };
+  QObject::connect(retry,&QTimer::timeout,&window,[retry,closing,applicationDirectory,updateState,installedGenesis,testnetMode,
+      mutableRoot=pgn::app::mutableDataRoot(root),budget]{
+   if(closing()){retry->deleteLater();return;}
+   const auto again=[retry,closing](int remaining){
+    if(remaining>0&&!closing())retry->start(45000);
+    else retry->deleteLater();
+   };
+   auto* preparation=new QFutureWatcher<RetirementRequest>(retry);
+   QObject::connect(preparation,&QFutureWatcher<RetirementRequest>::finished,retry,[retry,preparation,closing,again,budget]{
+    auto prepared=preparation->result();
+    preparation->deleteLater();
+    if(closing()){retry->deleteLater();return;}
+    if(prepared.waiting){again(--budget->commitChecks);return;}
+    if(prepared.request.isEmpty()){retry->deleteLater();return;}
+    const auto next=[again,budget]{again(--budget->attempts);};
+    auto* service=new pgn::update::ComponentUpdateService(std::move(prepared.deployment),retry);
+    service->onResult=[service,next,again,budget](const QJsonObject& result){
+     service->deleteLater();
+     if(result.value("writer_busy").toBool())again(--budget->commitChecks);
+     else next();
+    };
+    service->onError=[service,retry,next](const QString& error){
+     service->deleteLater();
+     if(error.contains("Unknown update operation"))retry->deleteLater();
+     else next();
+    };
+    if(!service->start(prepared.request)){service->deleteLater();next();}
+   });
+   preparation->setFuture(QtConcurrent::run([applicationDirectory,updateState,installedGenesis,testnetMode,mutableRoot]()->RetirementRequest{
+    const QString store=updateState+"/installation";
+    const QFileInfo selector(store+"/current.json");
+    QFile file(selector.filePath());
+    if(!selector.isFile()||selector.isSymLink()||selector.isJunction())return {};
+    if(!file.open(QIODevice::ReadOnly))return {{},{},true};
+    if(file.size()>128*1024)return {};
+    const auto selected=QJsonDocument::fromJson(file.read(128*1024+1)).object();
+    if(selected.value("schema")!="PGN_ACTIVE_COHORT_V1"||selected.value("genesis_hash")!=installedGenesis)return {};
+    const auto current=QFileInfo(applicationDirectory).canonicalFilePath();
+    if(current.isEmpty()||QFileInfo(selected.value("cohort").toString()).canonicalFilePath()!=current)return {{},{},true};
+    const auto previous=QFileInfo(selected.value("previous").toObject().value("cohort").toString()).canonicalFilePath();
+    const QRegularExpression cohortName("^[0-9a-f]{20}$");
+    bool pending=!QDir(store+"/retirements").entryList({"*.json","*.pending"},QDir::Files|QDir::Hidden).isEmpty();
+    if(!pending)for(const auto& candidate:QDir(store+"/cohorts").entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot)){
+     if(!cohortName.match(candidate.fileName()).hasMatch())continue;
+     const auto path=candidate.canonicalFilePath();
+     if(!path.isEmpty()&&path!=previous&&path!=current){pending=true;break;}
+    }
+    if(!pending)return {};
+    try{
+     auto deployment=pgn::update::componentUpdateDeployment(applicationDirectory,testnetMode);
+     if(deployment.context.value("genesis_hash")!=installedGenesis)return {};
+     auto request=pgn::update::componentUpdateRequest(deployment,{},applicationDirectory,mutableRoot,"retire_installations",{"ui"});
+     return {std::move(deployment),std::move(request)};
+    }catch(const std::exception&){return {};}
+   }));
+  });
+  retry->start(25000);
+ }
+#endif
  // Fit after Qt has resolved every page's minimum and the native title frame.
  // Initial resize alone can be silently enlarged by a hidden tab's layout.
  QTimer::singleShot(0,&window,[&window,miningPage]{if(const auto* screen=window.screen()){
