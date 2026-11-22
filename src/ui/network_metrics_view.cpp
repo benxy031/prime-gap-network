@@ -55,7 +55,7 @@ void NetworkMetricsHub::observeTip(const QString& genesis,const QString& hash,qi
     if(genesis==genesis_&&hash==tipHash_&&height==tipHeight_)return;
     const bool changedBranch=(!genesis_.isEmpty()&&genesis!=genesis_)||height<tipHeight_||
         (height==tipHeight_&&hash!=tipHash_)||
-        (height==snapshot_.value("height").toInteger(-1)&&hash!=snapshot_.value("bestblockhash"));
+        (height==snapshot_.value("height").toInteger(-1)&&QJsonValue(hash)!=snapshot_.value("bestblockhash"));
     genesis_=genesis;tipHash_=hash;tipHeight_=height;
     if(changedBranch){
         ++branchGeneration_;
