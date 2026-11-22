@@ -3,7 +3,9 @@
 This module neither grants service credits nor decides execution. The owning
 Core remains authoritative; absent observations are represented as unknown.
 """
+import hashlib
 import re
+from report_commitment import canonical_bytes
 
 
 def identity(value):
@@ -16,6 +18,21 @@ def audit_key(value):
             or type(value.get('attempt')) is not int or not 0 <= value['attempt'] < 1 << 32):
         raise ValueError('Malformed observed audit reference')
     return value['request_id'], value['slot'], value['attempt']
+
+
+def audit_view_ref(request, slot, attempt, commitment=None, actor=None):
+    if (not isinstance(request, str) or len(request) != 64
+            or any(char not in '0123456789abcdef' for char in request)
+            or type(slot) is not int or slot not in (0, 1)
+            or type(attempt) is not int or not 0 <= attempt < 2**32):
+        return None
+    ref = dict(request=request, slot=slot, attempt=attempt)
+    ident = hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_VIEW_V1', **ref))).hexdigest()
+    if isinstance(commitment, str) and len(commitment) == 64 and all(char in '0123456789abcdef' for char in commitment):
+        ref['commitment'] = commitment
+    if isinstance(actor, str) and 2 <= len(actor) <= 8192 and len(actor) % 2 == 0 and all(char in '0123456789abcdef' for char in actor):
+        ref['actor'] = actor
+    return dict(audit_id=ident, **ref)
 
 
 def preparation_view(context, status):
@@ -53,4 +70,9 @@ def preparation_view(context, status):
         return view  # Do not invent a third pre-ticket slot or a completed audit.
     view['confirmed_service_answers']=len(keys)
     view['active_index']=keys.index(current) if current in keys else len(keys)
+    refs = [audit_view_ref(*key, commitment=credit['commitment'])
+            for key, credit in zip(keys, status['credits'])]
+    if current not in keys:
+        refs.append(audit_view_ref(*current, actor=context.get('audit_actor')))
+    view['audit_refs'] = refs
     return view

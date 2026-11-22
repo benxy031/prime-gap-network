@@ -14,7 +14,7 @@ from horizon_preseal_queue import PresealQueue
 from horizon_ticket_prefetch import TicketPrefetch
 from horizon_work_cycle import WorkCycleJournal
 from horizon_core_rpc import CoreRpcError
-from horizon_service_presentation import preparation_view
+from horizon_service_presentation import audit_view_ref, preparation_view
 from horizon_ticket_archive import SCHEMA as COMPLETED_TICKET_SCHEMA
 from horizon_audit_progress import presentation as audit_presentation
 from pgn_native_contract import fields, encode_target_q16
@@ -85,7 +85,7 @@ class AuditGpuProxy:
         future = self.flow.gpu.submit(ticket, dict(role="audit", presentation=presentation,
                                      work_cycle=audit.get("physical_cycle") or audit.get("work_cycle"), physical_cycle=bool(audit.get("physical_cycle")), audit_position=self.position,
                                      audit_request_id=audit["request_id"], audit_slot=audit["slot"],
-                                     audit_attempt=audit["attempt"]), maximum_piece)
+                                     audit_attempt=audit["attempt"], audit_actor=audit.get("actor")), maximum_piece)
         self.prepared[ticket['ticket_id']] = (deepcopy(ticket), maximum_piece, future)
         return future
 
@@ -117,6 +117,7 @@ class MiningFlow:
         from horizon_cycle_execution import CycleExecution
         self.physical_audits = CycleExecution(worker.root / "work-cycles", worker.args.genesis)
         self.reconcile_physical_extra_bindings()
+        self.extra_audit_view_refs = {}
         self.changed = threading.Event()
         self.prior_active = read(worker.root / "gpu-active.json") if (worker.root / "gpu-active.json").exists() else {}
         current = read(worker.root / "controller.json") if (worker.root / "controller.json").exists() else {}
@@ -424,7 +425,14 @@ class MiningFlow:
                 owner = self.cycles.extra_audit_cycle(ident)
                 if owner:
                     hot = {c['work']['request_id'] for c in self.cycles.value['cycles']}
-                    physical.reconcile_extra_completion(owner, ident, block, hot)
+                    if physical.reconcile_extra_completion(owner, ident, block, hot):
+                        refs = getattr(self, 'extra_audit_view_refs', None)
+                        ref = audit_view_ref(audit['request_id'], audit['slot'], audit['attempt'],
+                                             (audit.get('answer') or {}).get('commitment'), audit.get('actor'))
+                        if refs is not None and ref is not None and ref['audit_id'] == ident:
+                            for retired in refs.keys() - hot:
+                                del refs[retired]
+                            refs.setdefault(owner, {})[ident] = ref
         if audit.get('physical_cycle'):
             self.physical_audits.committed(audit['physical_cycle'], position, audit, block) if self.physical_audits.snapshot(audit['physical_cycle']) is not None else None
             self.gpu.wake()
@@ -845,16 +853,36 @@ class MiningFlow:
             if execution is not None and 'native_service' not in state:
                 state['audits'] = execution
             totals = getattr(self, 'cycle_audit_positions', {})
+            native_refs = {
+                (ref['request_id'], ref['slot'], ref['attempt']): ref['commitment']
+                for ref in state.get('native_service', {}).get('credits', [])
+            }
+            def visible_audit(index, task):
+                task = task or {}
+                identity = (task.get('request'), task.get('slot'), task.get('attempt'))
+                return dict(state=task.get('stage', 'pending'),
+                    positions=str(totals[(cycle, index)]) if (cycle, index) in totals else None,
+                    audit_ref=audit_view_ref(*identity, commitment=native_refs.get(identity)))
+
+            extra_ids = list(getattr(self.cycles, 'extra', {}).get(cycle, []))
+            refs = getattr(self, 'extra_audit_view_refs', None)
+            active_ref = audit_view_ref(context.get('audit_request_id'), context.get('audit_slot'),
+                                        context.get('audit_attempt'), actor=context.get('audit_actor'))
+            extra_refs = {}
+            if refs is not None:
+                with self.cycles.lock:
+                    extra_refs = dict(refs.get(cycle, {}))
+            if catch_up and active_ref and active_ref['audit_id'] == context.get('presentation', {}).get('audit_id'):
+                extra_refs[active_ref['audit_id']] = active_ref
             value['cycle'] = dict(schema='PGN_MINING_CYCLE_VIEW_V1', request_id=cycle,
                 ticket_number=state['work']['ticket_number'], search_positions=state['work']['length'],
                 active_index=2 if context.get('role') == 'search' else context.get('audit_position', 0),
                 catch_up=catch_up,
                 active_audit_id=context.get('presentation', {}).get('audit_id', ''),
-                extra_audit_ids=list(getattr(self.cycles, 'extra', {}).get(cycle, [])),
+                extra_audit_ids=extra_ids,
+                extra_audit_refs=[extra_refs[ident] for ident in extra_ids if ident in extra_refs],
                 completed_extra_audit_ids=physical.completed_extras(cycle) if physical is not None else [],
-                audits=[dict(state=(task or {}).get('stage', 'pending'),
-                    positions=str(totals[(cycle, i)]) if (cycle, i) in totals else None)
-                    for i, task in enumerate(state['audits'])])
+                audits=[visible_audit(i, task) for i, task in enumerate(state['audits'])])
         if not cycle and context.get('role') == 'audit':
             prefetch = getattr(self, 'prefetch', None)
             observe = getattr(prefetch, 'service_observation', None)

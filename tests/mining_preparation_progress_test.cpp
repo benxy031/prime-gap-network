@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QHelpEvent>
 #include <QToolTip>
+#include <QThread>
 #include <iostream>
 #include <stdexcept>
 using namespace pgn::ui;
@@ -88,6 +89,77 @@ int main(int argc,char** argv){
         "Search inherited progress from the three preceding audits");
   check(rail.property("pgn_ticket_cycle_fraction").toDouble()>0.,
         "Starting search erased the completed audit segments");
+  const auto firstId=QString(64,'1'),secondId=QString(64,'2'),catchupId=QString(64,'3');
+  const auto firstRequest=QString(64,'4'),secondRequest=QString(64,'5'),catchupRequest=QString(64,'6');
+  const auto commitment=QString(64,'7');
+  const QJsonObject firstRef{{"audit_id",firstId},{"request",firstRequest},{"slot",1},{"attempt",4},{"commitment",commitment}};
+  const QJsonObject secondRef{{"audit_id",secondId},{"request",secondRequest},{"slot",0},{"attempt",8}};
+  const QJsonObject catchupRef{{"audit_id",catchupId},{"request",catchupRequest},{"slot",1},{"attempt",9}};
+  const auto stateRow=[](const QString& request,int slot,int attempt,const QString& stage,const QString& seal={}){
+   return QJsonObject{{"request_id",request},{"jobs",QJsonArray{QJsonObject{{"slot",slot},{"attempt",attempt},
+      {"state",stage},{"expired",false},{"commitment",seal}}}}};
+  };
+  const QJsonArray states{stateRow(firstRequest,1,4,"passed",commitment),
+                          stateRow(secondRequest,0,7,"passed"),
+                          stateRow(catchupRequest,1,9,"committed")};
+  check(confirmedProgressAuditState(states,firstRef)=="passed","Exact first audit verdict lost");
+  check(confirmedProgressAuditState(states,secondRef).isEmpty(),"Wrong attempt made an audit green");
+  check(confirmedProgressAuditState(states,catchupRef)=="committed","A commit was presented as a verdict");
+  check(confirmedProgressAuditState(QJsonArray{stateRow(firstRequest,1,4,"passed",QString(64,'8'))},firstRef).isEmpty(),
+        "A competing branch commitment made an audit green");
+  auto midcycle=second;
+  midcycle["ticket_id"]=secondId;
+  auto midService=search.value("audit_service").toObject();
+  auto midCycle=midService.value("cycle").toObject();
+  midCycle["active_index"]=1;
+  midCycle["audits"]=QJsonArray{QJsonObject{{"state","committed"},{"audit_ref",firstRef}},
+                               QJsonObject{{"state","assigned"},{"audit_ref",secondRef}}};
+  midService["cycle"]=midCycle;midcycle["audit_service"]=midService;
+  const auto midProgress=miningCycleProgress(midcycle,QJsonArray{QJsonObject{{"identity",secondId},{"fraction",.4}}});
+  check(midProgress.known&&midProgress.slices.size()==3&&midProgress.phase=="Audit 2/2",
+        "Attaching on audit two reported the wrong slot");
+  check(!midProgress.slices[0].active&&midProgress.slices[0].auditRef==firstRef&&midProgress.slices[0].fraction==1.,
+        "First completed audit was overwritten by the next observed frame");
+  check(midProgress.slices[1].active&&midProgress.slices[1].auditRef==secondRef,
+        "Active audit lost its exact attempt");
+  render(midcycle,"captures/assigned-second-audit.png");
+  const auto colors=rail.property("pgn_ticket_audit_colors").toJsonArray();
+  check(colors.size()==2&&colors[0]=="#658a96"&&colors[1]=="#62cfff",
+        "The active slice must be blue and a locally committed slice must stay neutral");
+  int auditReads=0;
+  rail.bindAuditLookup([&](const QJsonArray& requests,auto done){
+   check(requests==QJsonArray{firstRequest,secondRequest},"Audit verdicts must share one bounded snapshot");
+   if(++auditReads==1){
+    done(QJsonObject{{"state",QJsonObject{{"height",8000},{"bestblockhash",QString(64,'8')}}},
+         {"audits",QJsonArray{states.first(),states.at(1)}}},{});
+   }else{
+    done(QJsonObject{{"state",QJsonObject{{"height",8001},{"bestblockhash",QString(64,'9')}}},
+         {"audits",QJsonArray{states.at(1)}}},{});
+   }
+  });
+  rail.show();
+  const auto waitForReads=[&](int expected){
+   QElapsedTimer elapsed;elapsed.start();
+   while(auditReads<expected&&elapsed.elapsed()<7200){
+    app.processEvents();
+    QThread::msleep(15);
+   }
+   check(auditReads==expected,"Verified reader did not run");
+  };
+  waitForReads(1);
+  render(midcycle,"captures/first-audit-passed.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#69efc5",
+        "Exact Core verdict did not reach the actual rail color");
+  auto pausedAudit=midcycle;pausedAudit["phase"]="Paused";
+  render(pausedAudit,"captures/second-audit-paused.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().at(1)=="#658a96",
+        "An audit in pause was displayed as computing");
+  waitForReads(2);
+  render(midcycle,"captures/audit-reorganized.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#658a96",
+        "A growing fork left the previous branch green");
+  rail.bindAuditLookup({});
+  rail.hide();
   render(search,"captures/assigned-search.png");
   const auto ticket=QString(64,'d'),request=QString(64,'e');
   rail.present(QJsonObject{{"ticket_id",ticket},{"request_id",request},{"work_role","search"},

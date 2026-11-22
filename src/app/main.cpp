@@ -648,6 +648,9 @@ int main(int argc,char** argv) {
     });
   if(!startup.diagnostic.isEmpty()){auto* notice=new QLabel(startup.diagnostic,inspectWallet);notice->setObjectName("pgn-startup-network-notice");notice->setTextFormat(Qt::PlainText);notice->setWordWrap(true);if(auto* box=qobject_cast<QBoxLayout*>(inspectWallet->layout()))box->insertWidget(0,notice);}
   major->addWidget(inspectWallet);ticketProgressRail->bindTicketLookup([&inspectWallet](const QString& request,auto consume){pgn::ui::readWalletTicketDetails(inspectWallet,request,std::move(consume));});
+  ticketProgressRail->bindAuditLookup([&inspectWallet](const QJsonArray& watched,auto consume){
+   pgn::ui::readWalletAuditVerdicts(inspectWallet,watched,std::move(consume));
+  });
  auto socialConnection=std::make_shared<QPointer<pgn::social::CoreSocialService>>();
  auto displayConnection=std::make_shared<QPointer<pgn::ui::SocialDisplaySession>>();
  auto accessConnection=std::make_shared<QPointer<pgn::ui::SocialAccessSession>>();

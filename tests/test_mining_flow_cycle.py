@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/protocol'))
 sys.path.insert(0, str(ROOT / 'src/engine/runtime_host'))
-from horizon_mining_flow import MiningFlow, save
+from horizon_mining_flow import MiningFlow, audit_view_ref, save
 from horizon_coordination import native_header_hash
 from horizon_network_lane import NetworkLane
 
@@ -37,14 +37,34 @@ class MiningFlowCycleTests(unittest.TestCase):
 
     def test_readonly_visual_cycle_carries_two_audits_and_search_without_mutating_state(self):
         from collections import deque
-        state=dict(work=dict(ticket_number='42',length='200000000000000'),audits=[dict(stage='committed'),dict(stage='assigned')])
+        regular = [dict(stage='committed', request='c'*64, slot=1, attempt=4),
+                   dict(stage='assigned', request='d'*64, slot=0, attempt=7)]
+        state=dict(work=dict(ticket_number='42',length='200000000000000'),audits=regular)
         original=copy.deepcopy(state)
         flow=object.__new__(MiningFlow);flow.gpu=SimpleNamespace(condition=threading.Condition(),active=SimpleNamespace(context=dict(role='audit',work_cycle='a'*64,audit_position=1)),search=deque(),audit_service_view=lambda:dict(active_role='audit'))
         flow.cycles=SimpleNamespace(snapshot=lambda request:copy.deepcopy(state));flow.cycle_audit_positions={('a'*64,0):10**13,('a'*64,1):10**13};flow.audit_pressure_notice=None
         view=flow.audit_service_snapshot()['cycle'];self.assertEqual(view['active_index'],1);self.assertEqual(view['ticket_number'],'42');self.assertEqual(view['audits'][1]['positions'],'10000000000000');self.assertEqual(state,original)
-        flow.gpu.active.context=dict(role='audit',audit_position=0,presentation={'audit_id':'b'*64});flow.gpu.search.append(SimpleNamespace(context=dict(work_cycle='a'*64)))
-        flow.cycles.extra={'a'*64:['b'*64]}
-        view=flow.audit_service_snapshot()['cycle'];self.assertTrue(view['catch_up']);self.assertEqual(view['active_audit_id'],'b'*64);self.assertEqual(view['extra_audit_ids'],['b'*64]);self.assertEqual(state,original)
+        self.assertEqual(
+            [row['audit_ref'] for row in view['audits']],
+            [audit_view_ref('c'*64, 1, 4), audit_view_ref('d'*64, 0, 7)],
+        )
+        catchup = audit_view_ref('e'*64, 1, 3)
+        ident = catchup['audit_id']
+        flow.gpu.active.context = dict(
+            role='audit', audit_position=0, presentation={'audit_id': ident},
+            audit_request_id='e'*64, audit_slot=1, audit_attempt=3,
+        )
+        flow.gpu.search.append(SimpleNamespace(context=dict(work_cycle='a'*64)))
+        flow.cycles.extra = {'a'*64: [ident]}
+        view = flow.audit_service_snapshot()['cycle']
+        self.assertTrue(view['catch_up'])
+        self.assertEqual(view['active_audit_id'], ident)
+        self.assertEqual(view['extra_audit_refs'], [catchup])
+        self.assertEqual(state, original)
+        # Another generation of the same network slot cannot inherit the
+        # visual identity reserved for this cycle's extra audit.
+        flow.gpu.active.context['audit_attempt'] += 1
+        self.assertEqual(flow.audit_service_snapshot()['cycle']['extra_audit_refs'], [])
         def retired(request):raise ValueError('No retained cycle')
         flow.cycles.snapshot=retired;self.assertNotIn('cycle',flow.audit_service_snapshot())
 

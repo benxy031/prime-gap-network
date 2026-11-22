@@ -1059,6 +1059,59 @@ void CoreRuntime::readWorkView(const QString& kind,int offset,int limit,const QS
   verifyConfirmedSnapshotAnchor(view.value("state").toObject(),[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[view,consume=std::move(consume)](QString error){consume(error.isEmpty()?view:QJsonObject{},error);});
  });
 }
+void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){
+ static const QRegularExpression hash("^[0-9a-f]{64}$");
+ QSet<QString> keys;
+ for(const auto& value:watched){
+  const auto key=value.toString();
+  if(!hash.match(key).hasMatch()||key==QString(64,'0')||keys.contains(key)){
+   consume({},"Invalid audit verdict request");
+   return;
+  }
+  keys.insert(key);
+ }
+ if(!connected_||!processAlive()||keys.isEmpty()||keys.size()>6){
+  consume({},"Verified Core and bounded audit verdict request required");
+  return;
+ }
+ const auto owner=epoch();
+ const auto current=[this,owner]{return connected_&&processAlive()&&owner.matches(epoch());};
+ rpc("getbestblockhash",{},[this,current,watched,keys,consume=std::move(consume)](QJsonValue best,QString error)mutable{
+  const auto tip=best.toString();
+  if(!error.isEmpty()||!current()||!hash.match(tip).hasMatch()){
+   consume({},"Core audit anchor unavailable");
+   return;
+  }
+  // Query only watched requests. The broader activity RPC also computes
+  // global counters and scans jobs that the mining rail does not display.
+  rpc("getpgnauditstate",{0,int(watched.size()),QJsonValue(QJsonValue::Null),watched},
+      [this,current,tip,keys,consume=std::move(consume)](QJsonValue result,QString error)mutable{
+   const auto rows=result.toArray();
+   if(!error.isEmpty()||!current()||!result.isArray()||rows.size()>keys.size()){
+    consume({},"Core audit verdicts unavailable");
+    return;
+   }
+   QSet<QString> seen;
+   for(const auto& entry:rows){
+    const auto row=entry.toObject();const auto request=row.value("request_id").toString();
+    if(!keys.contains(request)||seen.contains(request)||!row.value("jobs").isArray()||
+       row.value("jobs").toArray().size()>2){
+     consume({},"Invalid Core audit verdict response");
+     return;
+    }
+    seen.insert(request);
+   }
+   rpc("getbestblockhash",{},[current,tip,rows,consume=std::move(consume)](QJsonValue now,QString error)mutable{
+    if(!error.isEmpty()||!current()||now.toString()!=tip){
+     consume({},"Core audit anchor changed");
+     return;
+    }
+    consume({{"anchor",tip},{"audits",rows}},{});
+   });
+  });
+ });
+}
+
 void CoreRuntime::readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){
  static const QRegularExpression hash("^[0-9a-f]{64}$");
  if(!connected_||!processAlive()||afterHeight<0||watched.size()>64||(afterHeight>0&&!hash.match(afterHash).hasMatch())){consume({},"Verified Core and bounded audit cursor required");return;}

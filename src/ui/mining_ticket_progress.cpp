@@ -347,7 +347,7 @@ private:
 };
 MiningTicketProgress::MiningTicketProgress(QWidget* parent):QWidget(parent){
  setObjectName("pgn-ticket-progress-rail");setFixedHeight(PrimaryWorkHeight);setMouseTracking(true);clock_.start();timer_.setInterval(33);
- connect(&timer_,&QTimer::timeout,this,[this]{if(!isVisible())return;const bool wasMoving=flow_.moving();flow_.expire(clock_.elapsed());pollLandings();if(results_)flow_.setVisibleBest(results_->property("pgn_visible_best").toJsonObject(),clock_.elapsed());setProperty("pgn_ticket_collection_size",flow_.collected().size());setProperty("pgn_ticket_collection_departing",flow_.departing().size());
+ connect(&timer_,&QTimer::timeout,this,[this]{if(!isVisible())return;const bool wasMoving=flow_.moving();flow_.expire(clock_.elapsed());pollAuditVerdicts();pollLandings();if(results_)flow_.setVisibleBest(results_->property("pgn_visible_best").toJsonObject(),clock_.elapsed());setProperty("pgn_ticket_collection_size",flow_.collected().size());setProperty("pgn_ticket_collection_departing",flow_.departing().size());
   const bool resourceChanged=resourceActivity_.expire(clock_.elapsed());
   if(resourceChanged||resourceActivity_.moving()||wasMoving!=flow_.moving()||flow_.moving()||workMarksActive(clock_.elapsed())||!flow_.events().isEmpty()||!flow_.collected().isEmpty()||!flow_.departing().isEmpty()||frame_.value("phase")=="Starting"||frame_.value("phase")=="Stopping"){
    update();ensureOverlay();if(overlay_){overlay_->synchronize();overlay_->update();}
@@ -514,7 +514,15 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  // above is event presentation and can never advance this measurement.
  const double trackY=84.;const QPointF trackStart(field.left(),trackY),trackEnd(field.right(),trackY);
  painter.setPen(QPen(QColor("#17383e"),1));painter.drawLine(trackStart,trackEnd);
- if(cycle.known){double offset=0;int auditIndex=0;for(const auto& slice:cycle.slices){const auto color=slice.role=="search"?QColor("#69efc5"):slice.role=="catch_up"?QColor("#f0b761"):auditIndex++==0?QColor("#b791ee"):QColor("#7aa9e8");const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.pendingAssignment){painter.fillRect(background,faded(color,20));painter.setPen(QPen(faded(color,100),.8,Qt::DashLine));painter.drawRect(background);}else if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_cycle_fraction",cycle.preparing?QVariant{}:QVariant(cycle.fraction));setProperty("pgn_ticket_cycle_eta_seconds",(active||phase=="Auditing")&&cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else setProperty("pgn_ticket_cycle_fraction",QVariant{});
+ if(cycle.known){double offset=0;QJsonArray auditColors;
+ const auto verdicts=auditObservedAt_>=0&&clock_.elapsed()-auditObservedAt_<=15000?auditVerdicts_:QJsonArray{};
+ const auto workPhase=frame_.value("phase");
+ const bool working=(workPhase=="Searching"||workPhase=="Auditing")&&!frame_.value("source_stale").toBool();
+ for(const auto& slice:cycle.slices){
+  const auto state=confirmedProgressAuditState(verdicts,slice.auditRef);
+  const auto color=slice.role=="search"||state=="passed"?QColor("#69efc5"):
+                   state=="failed"?QColor("#ff6f7d"):slice.active&&working?QColor("#62cfff"):QColor("#658a96");
+  if(slice.role!="search")auditColors.append(color.name());const double left=std::lerp(field.left(),field.right(),offset),right=std::lerp(field.left(),field.right(),offset+slice.weight);const QRectF background(left,trackY-3,std::max(0.,right-left-2),6);if(slice.pendingAssignment){painter.fillRect(background,faded(color,20));painter.setPen(QPen(faded(color,100),.8,Qt::DashLine));painter.drawRect(background);}else if(slice.skipped){painter.fillRect(background,QBrush(faded(color,160),Qt::BDiagPattern));painter.setPen(QPen(faded(color,180),.8));painter.drawRect(background);}else{painter.fillRect(background,faded(color,45));if(slice.fraction>0)painter.fillRect(QRectF(left,trackY-3,background.width()*slice.fraction,6),faded(color,250));}offset+=slice.weight;}setProperty("pgn_ticket_audit_colors",auditColors);setProperty("pgn_ticket_cycle_fraction",cycle.preparing?QVariant{}:QVariant(cycle.fraction));setProperty("pgn_ticket_cycle_eta_seconds",(active||phase=="Auditing")&&cycle.cycleEta?QVariant(*cycle.cycleEta):QVariant{});}else {setProperty("pgn_ticket_cycle_fraction",QVariant{});setProperty("pgn_ticket_audit_colors",QVariant{});}
  if(trackFraction&&!cycle.preparing){const QPointF measured(std::lerp(trackStart.x(),trackEnd.x(),*trackFraction),trackY);
   if(!cycle.known){painter.setPen(QPen(faded(accent,70),4));painter.drawLine(trackStart,measured);painter.setPen(QPen(accent,1.2));painter.drawLine(trackStart,measured);}
   painter.setPen(Qt::NoPen);painter.setBrush(accent);painter.drawEllipse(measured,2.,2.);
@@ -553,6 +561,50 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  setProperty("pgn_ticket_animation_active",flow_.moving());setProperty("pgn_ticket_animation_phase",flow_.moving()?QVariant(std::fmod(clock_.elapsed()/1000.,1.)):QVariant{});
  if(overlay_)overlay_->synchronize();
 }
+void MiningTicketProgress::bindAuditLookup(AuditLookup lookup) {
+ auditLookup_=std::move(lookup);
+ ++auditBinding_;
+ auditLookupBusy_=false;
+ auditRequests_={};auditVerdicts_={};
+ nextAuditLookupAt_=nextAuditRequestScanAt_=0;auditObservedAt_=-1;
+ update();
+}
+
+void MiningTicketProgress::pollAuditVerdicts() {
+ const auto now=clock_.elapsed();
+ if(!auditLookup_||now<nextAuditRequestScanAt_)return;
+ nextAuditRequestScanAt_=now+250;
+ if(auditObservedAt_>=0&&now-auditObservedAt_>15000){
+  auditVerdicts_={};auditObservedAt_=-1;update();
+ }
+ const auto cycle=miningCycleProgress(frame_,cycleHistory_.audits(),cycleHistory_.search());
+ QJsonArray requests;
+ for(const auto& slice:cycle.slices){
+  if(!validProgressAuditRef(slice.auditRef))continue;
+  const auto request=slice.auditRef.value("request");
+  if(!requests.contains(request))requests.append(request);
+ }
+ if(requests!=auditRequests_){
+  auditRequests_=requests;auditVerdicts_={};auditObservedAt_=-1;update();
+ }
+ if(requests.isEmpty()||auditLookupBusy_||now<nextAuditLookupAt_)return;
+ auditLookupBusy_=true;
+ const auto binding=auditBinding_;
+ QPointer<MiningTicketProgress> weak(this);
+ auditLookup_(requests,[weak,binding,requests](QJsonObject value,QString error){
+  if(!weak||weak->auditBinding_!=binding)return;
+  weak->auditLookupBusy_=false;
+  const auto observed=weak->clock_.elapsed();
+  weak->nextAuditLookupAt_=observed+5500;
+  if(requests!=weak->auditRequests_)return;
+  // Replace the whole snapshot. Rows from different active-branch anchors
+  // must never be combined into one set of completed audit indicators.
+  weak->auditVerdicts_=error.isEmpty()?value.value("audits").toArray():QJsonArray{};
+  weak->auditObservedAt_=error.isEmpty()?observed:-1;
+  weak->update();
+ });
+}
+
 void MiningTicketProgress::bindTicketLookup(TicketLookup lookup){
  lookup_=std::move(lookup);++lookupGeneration_;++activeLookup_;lookupBusy_=false;nextLookupAt_=0;
  for(auto& entry:landings_){entry.checking=false;entry.nextCheck=0;entry.confirmed=entry.audited=false;entry.approvedAt=entry.visualAt=-1;entry.animatedBlock.clear();flow_.revokeReport(entry.ticket);}

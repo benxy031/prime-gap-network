@@ -1,6 +1,7 @@
 #pragma once
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QVector>
 #include <algorithm>
 #include <cmath>
@@ -56,7 +57,42 @@ inline QJsonObject currentAssignmentPresentation(const QJsonObject& frame){
  waiting.insert("title","Waiting for current assignment");waiting.insert("source_stale",true);
  return waiting;
 }
-struct CycleSlice { double weight{},fraction{};QString role;bool skipped{},pendingAssignment{}; };
+struct CycleSlice {
+ double weight{},fraction{};
+ QString role;
+ bool skipped{},pendingAssignment{},active{};
+ QJsonObject auditRef;
+};
+
+inline bool validProgressAuditRef(const QJsonObject& ref) {
+ static const QRegularExpression hash("^[0-9a-f]{64}$");
+ const auto request=ref.value("request").toString(),id=ref.value("audit_id").toString();
+ const auto slot=ref.value("slot").toInteger(-1),attempt=ref.value("attempt").toInteger(-1);
+ return hash.match(request).hasMatch()&&request!=QString(64,'0')&&hash.match(id).hasMatch()&&
+        slot>=0&&slot<2&&attempt>=0&&attempt<=4294967295LL;
+}
+
+inline QString confirmedProgressAuditState(const QJsonArray& audits,const QJsonObject& ref) {
+ if(!validProgressAuditRef(ref))return {};
+ for(const auto& entry:audits){
+  const auto row=entry.toObject();
+  if(row.value("request_id")!=ref.value("request"))continue;
+  for(const auto& value:row.value("jobs").toArray()){
+   const auto job=value.toObject();
+   if(job.value("slot")==ref.value("slot")&&job.value("attempt")==ref.value("attempt")&&
+      !job.value("expired").toBool()&&
+      (!ref.contains("commitment")||job.value("commitment")==ref.value("commitment"))&&
+      (!ref.contains("actor")||job.value("actor")==ref.value("actor")))
+   {
+    const auto state=job.value("state").toString();
+    if((state=="passed"||state=="failed")&&!ref.contains("commitment"))return {};
+    return state;
+   }
+  }
+ }
+ return {};
+}
+
 struct CycleProgress {
  bool known{},preparing{};double fraction{};QString title,phase;QVector<CycleSlice> slices;
  std::optional<double> taskEta,cycleEta;
@@ -123,7 +159,8 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
   for(int i=0;i<2;++i){
    const bool committed=countKnown&&i<confirmed;
    const double fraction=committed?1.:i==active?local:0.;
-   out.slices.append({.05,fraction,"audit",false,!countKnown});
+   const auto ref=view.value("audit_refs").toArray().at(i).toObject();
+   out.slices.append({.05,fraction,"audit",false,!countKnown,i==active,ref});
    out.fraction+=.05*fraction;
   }
   // There is no assigned search range yet. A dashed placeholder is a phase,
@@ -144,10 +181,39 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
    QJsonObject match{{"identity",id.toString()},{"fraction",0.}};
    for(const auto& item:observed)if(item.toObject().value("identity")==id){match=item.toObject();break;}
    if(cycle.value("completed_extra_audit_ids").toArray().contains(id)){match.insert("fraction",1.);match.insert("remaining",0.);}
+   for(const auto& raw:cycle.value("extra_audit_refs").toArray()){
+    const auto ref=raw.toObject();
+    if(ref.value("audit_id")==id&&validProgressAuditRef(ref)){
+     match.insert("audit_ref",ref);
+     break;
+    }
+   }
    match.insert("catch_up",true);catchups.append(match);
   }
  }else for(const auto& item:observed)if(item.toObject().value("catch_up").toBool())catchups.append(item);
- if(regularCommitted&&(!catchups.isEmpty()||(auditing&&cycle.value("catch_up").toBool()))){
+ const bool referenced=validProgressAuditRef(audits[0].toObject().value("audit_ref").toObject())||
+                       validProgressAuditRef(audits[1].toObject().value("audit_ref").toObject());
+ if(referenced){
+  // Observations can start on the second audit. The cycle has the ordered
+  // slot identities; use sampled progress only for the same exact attempt.
+  QJsonArray ordered;
+  for(const auto& raw:audits){
+   const auto task=raw.toObject(),ref=task.value("audit_ref").toObject();
+   const auto id=ref.value("audit_id").toString();
+   QJsonObject item;
+   if(validProgressAuditRef(ref)){
+    for(const auto& sample:observed)
+     if(sample.toObject().value("identity")==id){item=sample.toObject();break;}
+    item.insert("identity",id);item.insert("audit_ref",ref);
+   }
+   if(task.value("state")=="committed"){
+    item.insert("fraction",1.);item.insert("remaining",0.);
+   }
+   ordered.append(item);
+  }
+  for(const auto& item:catchups)ordered.append(item);
+  observed=ordered;
+ }else if(regularCommitted&&(!catchups.isEmpty()||(auditing&&cycle.value("catch_up").toBool()))){
   observed=QJsonArray{QJsonObject{{"fraction",1.},{"remaining",0.}},QJsonObject{{"fraction",1.},{"remaining",0.}}};
   for(const auto& item:catchups)observed.append(item);
  }
@@ -157,16 +223,20 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
  }
  if(auditing){
   for(int i=0;i<observed.size();++i)if(observed[i].toObject().value("identity")==identity){active=i;break;}
-  if(active<0){active=observed.size();observed.append(QJsonObject{{"identity",identity},{"fraction",local},{"remaining",total-done}});}
+  if(active<0&&referenced&&!cycle.value("catch_up").toBool()&&index<2&&
+     observed[index].toObject().value("identity").toString().isEmpty())active=index;
+  if(active<0&&!referenced){active=observed.size();observed.append(QJsonObject{{"identity",identity},{"fraction",local},{"remaining",total-done}});}
  }
  const int count=auditing?std::max(2,int(observed.size())):int(observed.size());
  const double scale=.9+.05*count;double remaining=0;bool etaKnown=true;
  out.known=true;out.title="Ticket "+cycle.value("ticket_number").toString();
- out.phase=auditing?(active<2?QString("Audit %1/2").arg(active+1):QString("Catch-up audit %1").arg(active-1)):QString("Searching");
+ out.phase=auditing?(active<0?QString("Auditing"):active<2?QString("Audit %1/2").arg(active+1):
+                         QString("Catch-up audit %1").arg(active-1)):QString("Searching");
  for(int i=0;i<count;++i){
   const auto item=i<observed.size()?observed[i].toObject():QJsonObject{};
   const double fraction=i==active?local:std::clamp(item.value("fraction").toDouble(),0.,1.);
-  out.slices.append({.05/scale,fraction,i<2?"audit":"catch_up",false});
+  out.slices.append({.05/scale,fraction,i<2?"audit":"catch_up",false,false,i==active,
+                     item.value("audit_ref").toObject()});
   if(i==active)remaining+=total-done;else if(item.value("remaining").isDouble())remaining+=item.value("remaining").toDouble();
   else if(i<audits.size()&&audits[i].toObject().value("positions").isString())remaining+=audits[i].toObject().value("positions").toString().toDouble();else etaKnown=false;
  }

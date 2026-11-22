@@ -25,6 +25,8 @@ public:
  void bindResultsView(QWidget*);
  using TicketLookup=std::function<void(const QString&,std::function<void(QJsonObject,QString)>)>;
  void bindTicketLookup(TicketLookup);
+ using AuditLookup=std::function<void(const QJsonArray&,std::function<void(QJsonObject,QString)>)>;
+ void bindAuditLookup(AuditLookup);
  void setRecordEligibility(const QJsonArray&);
 protected:
  bool event(QEvent*)override;
@@ -51,6 +53,12 @@ private:
  quint64 lookupGeneration_{},activeLookup_{};qint64 nextLookupAt_{};bool lookupBusy_{};
  bool workMarksActive(qint64)const;
  void pollLandings();
+ void pollAuditVerdicts();
+ AuditLookup auditLookup_;
+ QJsonArray auditRequests_,auditVerdicts_;
+ qint64 nextAuditLookupAt_{},nextAuditRequestScanAt_{},auditObservedAt_{-1};
+ quint64 auditBinding_{};
+ bool auditLookupBusy_{};
  QString reportTooltipAt(const QPointF& point)const;
  QRectF bar()const;
  void ensureOverlay();
