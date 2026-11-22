@@ -159,7 +159,33 @@ static void recoverIncompleteInspection(){
  need(ticks>=10&&dripped>=4,"The fixture did not exercise an active event loop and trickling response");
  std::cout<<"PASS incomplete RPC deadline and successful next inspection, heartbeat ticks "<<ticks<<"\n";
 }
+static void distinguishAuditIdleFromCancellation(){
+ QTcpServer server;
+ need(server.listen(QHostAddress::LocalHost,0),"Own audit HTTP fixture unavailable");
+ CoreRpcChannels channels;
+ QEventLoop loop;
+ auto url=QUrl("http://127.0.0.1:"+QString::number(server.serverPort())+"/");
+ int expected=0,callbacks=0;
+ const auto post=[&](bool cancel){
+  auto* reply=channels.post(QNetworkRequest(url),"{}",1000,CoreRpcChannel::Audit);
+  readBoundedCoreRpcReply(reply,&loop,4096,[&,reply,cancel](QByteArray bytes,bool oversized){
+   if(!oversized&&bytes.isEmpty()&&reply->error()!=QNetworkReply::NoError&&
+      reply->property("pgn_core_rpc_audit_timeout").toBool()!=cancel)++expected;
+   ++callbacks;
+   reply->deleteLater();
+   if(callbacks==2)loop.quit();
+  });
+  if(cancel)QTimer::singleShot(120,reply,[reply]{reply->abort();});
+ };
+ post(false);
+ post(true);
+ QTimer::singleShot(4000,&loop,&QEventLoop::quit);
+ loop.exec();
+ need(expected==2&&callbacks==2,"Audit read timeout was lost or confused with deliberate cancellation");
+ std::cout<<"PASS audit HTTP idle timeout and explicit cancellation distinguished\n";
+}
 int main(int argc,char** argv){QCoreApplication app(argc,argv);try{
+ distinguishAuditIdleFromCancellation();
  recoverIncompleteInspection();
  exchange(400000,coreRpcResponseLimit("getpgnauditactivity"),false,false);
  exchange(400000,coreRpcResponseLimit("getbalances"),true,true);

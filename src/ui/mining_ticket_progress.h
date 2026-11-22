@@ -61,7 +61,7 @@ private:
  QJsonObject legacyAuditScope_,legacyAuditSnapshot_;
  QJsonArray legacyAuditWatch_;
  QJsonArray auditRequests_,auditVerdicts_;
- qint64 nextAuditLookupAt_{},nextAuditRequestScanAt_{},auditObservedAt_{-1};
+ qint64 nextAuditLookupAt_{},nextAuditRequestScanAt_{};
  quint64 auditBinding_{},legacyAuditGeneration_{};
  bool auditLookupBusy_{};
  QString reportTooltipAt(const QPointF& point)const;

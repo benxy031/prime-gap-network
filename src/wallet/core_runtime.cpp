@@ -747,6 +747,9 @@ void CoreRuntime::begin(bool allowNew,bool automatic){
 void CoreRuntime::rpc(const QString& method,const QJsonArray& params,std::function<void(QJsonValue,QString)> consume,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel){
  rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),[consume=std::move(consume)](CoreRpcResult result,QByteArray){consume(result.value,result.error);},wallet,timeoutMs,walletName,channel);
 }
+void CoreRuntime::auditRpc(const QString& method,const QJsonArray& params,std::function<void(QJsonValue,QString)> consume){
+ rpc(method,params,std::move(consume),false,3000,{},CoreRpcChannel::Audit);
+}
 void CoreRuntime::inspectRpc(const QString& method,const QJsonArray& params,
                              std::function<void(CoreRpcResult)> consume,int timeoutMs){
  rpcWire(method,QJsonDocument(params).toJson(QJsonDocument::Compact),
@@ -816,6 +819,10 @@ void CoreRuntime::rpcWire(const QString& method,const QByteArray& params,std::fu
  readBoundedCoreRpcReply(reply,this,coreRpcResponseLimit(method),[reply,requestId,method,trace,consume=std::move(consume)](QByteArray bytes,bool oversized){
   const auto error=reply->error();const auto http=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const auto detail=reply->errorString().left(160);reply->deleteLater();
   if(oversized){trace("response_limit",int(error),http,{});consume({{},QString("Core RPC response exceeds %1 byte bound").arg(coreRpcResponseLimit(method))},{});return;}
+  if(reply->property("pgn_core_rpc_audit_timeout").toBool()){
+   trace("transport_error",int(QNetworkReply::TimeoutError),http,{});
+   consume({{},QString::fromLatin1(CoreAuditTimeoutMessage)},{});return;
+  }
   if(reply->property("pgn_core_rpc_total_timeout").toBool()){
    trace("total_timeout",int(error),http,{});
    consume({{},"Core RPC inspection exceeded its total response time"},{});return;
@@ -1060,6 +1067,11 @@ void CoreRuntime::readWorkView(const QString& kind,int offset,int limit,const QS
   verifyConfirmedSnapshotAnchor(view.value("state").toObject(),[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[view,consume=std::move(consume)](QString error){consume(error.isEmpty()?view:QJsonObject{},error);});
  });
 }
+static QJsonObject auditReadFailure(bool sameEpoch,const QString& error){
+ if(sameEpoch&&error==QLatin1String(CoreAuditTimeoutMessage))
+  return {{"audit_read_timeout",true}};
+ return {};
+}
 void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void(QJsonObject,QString)> consume){
  static const QRegularExpression hash("^[0-9a-f]{64}$");
  QSet<QString> keys;
@@ -1077,19 +1089,19 @@ void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void
  }
  const auto owner=epoch();
  const auto current=[this,owner]{return connected_&&processAlive()&&owner.matches(epoch());};
- rpc("getbestblockhash",{},[this,current,watched,keys,consume=std::move(consume)](QJsonValue best,QString error)mutable{
+ auditRpc("getbestblockhash",{},[this,current,watched,keys,consume=std::move(consume)](QJsonValue best,QString error)mutable{
   const auto tip=best.toString();
   if(!error.isEmpty()||!current()||!hash.match(tip).hasMatch()){
-   consume({},"Core audit anchor unavailable");
+   consume(auditReadFailure(current(),error),"Core audit anchor unavailable");
    return;
   }
   // Query only watched requests. The broader activity RPC also computes
   // global counters and scans jobs that the mining rail does not display.
-  rpc("getpgnauditstate",{0,int(watched.size()),QJsonValue(QJsonValue::Null),watched},
+  auditRpc("getpgnauditstate",{0,int(watched.size()),QJsonValue(QJsonValue::Null),watched},
       [this,current,tip,keys,consume=std::move(consume)](QJsonValue result,QString error)mutable{
    const auto rows=result.toArray();
    if(!error.isEmpty()||!current()||!result.isArray()||rows.size()>keys.size()){
-    consume({},"Core audit verdicts unavailable");
+    consume(auditReadFailure(current(),error),"Core audit verdicts unavailable");
     return;
    }
    QSet<QString> seen;
@@ -1102,9 +1114,9 @@ void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void
     }
     seen.insert(request);
    }
-   rpc("getbestblockhash",{},[current,tip,rows,consume=std::move(consume)](QJsonValue now,QString error)mutable{
+   auditRpc("getbestblockhash",{},[current,tip,rows,consume=std::move(consume)](QJsonValue now,QString error)mutable{
     if(!error.isEmpty()||!current()||now.toString()!=tip){
-     consume({},"Core audit anchor changed");
+     consume(auditReadFailure(current(),error),"Core audit anchor changed");
      return;
     }
     consume({{"anchor",tip},{"audits",rows}},{});
@@ -1114,19 +1126,19 @@ void CoreRuntime::readAuditVerdicts(const QJsonArray& watched,std::function<void
 }
 
 void CoreRuntime::checkLegacyCycleAncestor(const QString& anchor,const QString& ancestor,int remaining,
- std::function<bool()> current,std::function<void(bool)> done){
+ std::function<bool()> current,std::function<void(bool,QString)> done){
  static const QRegularExpression hash("^[0-9a-f]{64}$");
  if(!current()||!hash.match(anchor).hasMatch()||!hash.match(ancestor).hasMatch()){
-  done(false);
+  done(false,{});
   return;
  }
- if(anchor==ancestor){done(true);return;}
- if(remaining<=0){done(false);return;}
- rpc("getblockheader",{anchor,true},[this,anchor,ancestor,remaining,current=std::move(current),done=std::move(done)]
+ if(anchor==ancestor){done(true,{});return;}
+ if(remaining<=0){done(false,{});return;}
+ auditRpc("getblockheader",{anchor,true},[this,anchor,ancestor,remaining,current=std::move(current),done=std::move(done)]
      (QJsonValue value,QString error)mutable{
   const auto header=value.toObject();
-  if(!error.isEmpty()||!current()||header.value("hash")!=anchor||header.value("confirmations").toInteger(-1)<=0){
-   done(false);
+  if(!current()||header.value("hash")!=anchor||header.value("confirmations").toInteger(-1)<=0||!error.isEmpty()){
+   done(false,current()?error:QString{});
    return;
   }
   checkLegacyCycleAncestor(header.value("previousblockhash").toString(),ancestor,remaining-1,std::move(current),std::move(done));
@@ -1146,11 +1158,11 @@ void CoreRuntime::readLegacyCycleAudits(const QJsonObject& scope,std::function<v
  }
  const auto owner=epoch();
  const auto current=[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();};
- rpc("getpgnscientificwork",{request,QString(64,'0')},
+ auditRpc("getpgnscientificwork",{request,QString(64,'0')},
      [this,current,request,ticket,extras,remembered,consume=std::move(consume)](QJsonValue value,QString error)mutable{
   const auto work=value.toObject();
   if(!error.isEmpty()||!current()||!legacyCycleWorkMatches(work,request,ticket,profile_.genesisHash)){
-   consume({},"Core legacy audit assignment unavailable");
+   consume(auditReadFailure(current(),error),"Core legacy audit assignment unavailable");
    return;
   }
   const auto service=work.value("native_audit_service").toObject();
@@ -1180,18 +1192,24 @@ void CoreRuntime::readLegacyCycleAudits(const QJsonObject& scope,std::function<v
   const auto genesis=profile_.genesisHash;
   auto read=[this,current,request,extras,genesis,service,consume=std::move(consume)]
       (QJsonObject snapshot,QString activityError)mutable{
-   if(!activityError.isEmpty()||!current()){consume({},activityError.isEmpty()?QString("Core epoch changed"):activityError);return;}
+   if(!activityError.isEmpty()||!current()){
+    consume(auditReadFailure(current(),activityError),activityError.isEmpty()?QString("Core epoch changed"):activityError);
+    return;
+   }
    const auto anchor=snapshot.value("state").toObject().value("bestblockhash").toString();
    const auto parent=service.value("view_parent").toString();
-   checkLegacyCycleAncestor(anchor,parent,8,current,[request,extras,genesis,service,snapshot,parent,consume=std::move(consume)](bool linked)mutable{
-    if(!linked){consume({},"Core branches differ, or the audit snapshots drifted");return;}
+   checkLegacyCycleAncestor(anchor,parent,8,current,[current,request,extras,genesis,service,snapshot,parent,consume=std::move(consume)](bool linked,QString error)mutable{
+    if(!linked){
+     consume(auditReadFailure(current(),error),error.isEmpty()?QString("Core branches differ, or the audit snapshots drifted"):error);
+     return;
+    }
     const auto result=resolveLegacyCycleAudits(request,extras,genesis,service,snapshot,parent);
     if(!result){consume({},"Core snapshots do not identify the same audit cycle");return;}
     consume(*result,{});
    });
   };
   if(known.size()!=extras.size()||watched.isEmpty()){
-   readAuditActivity(0,{},watched,std::move(read));
+   readAuditActivity(0,{},watched,std::move(read),64,CoreRpcChannel::Audit);
    return;
   }
   // Use one anchored projection. If a watched report is absent, discard
@@ -1202,12 +1220,12 @@ void CoreRuntime::readLegacyCycleAudits(const QJsonObject& scope,std::function<v
     if(watched.contains(item.toObject().value("request_id")))rows.append(item);
    activity.insert("audits",rows);
    read(activity,error);
-  },int(watched.size()));
+  },int(watched.size()),CoreRpcChannel::Audit);
  });
 }
 
 void CoreRuntime::readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,
-                                    std::function<void(QJsonObject,QString)> consume,int limit){
+                                    std::function<void(QJsonObject,QString)> consume,int limit,CoreRpcChannel channel){
  static const QRegularExpression hash("^[0-9a-f]{64}$");
  if(!connected_||!processAlive()||afterHeight<0||limit<1||limit>64||watched.size()>limit||
     (afterHeight>0&&!hash.match(afterHash).hasMatch())){
@@ -1216,19 +1234,19 @@ void CoreRuntime::readAuditActivity(qint64 afterHeight,const QString& afterHash,
  }
  const auto owner=epoch();
  rpc("getpgnauditactivity",{afterHeight,limit,watched},
-     [this,owner,afterHeight,afterHash,watched,limit,consume=std::move(consume)](QJsonValue result,QString error){
+     [this,owner,afterHeight,afterHash,watched,limit,channel,consume=std::move(consume)](QJsonValue result,QString error){
   if(!error.isEmpty()||!owner.matches(epoch())||!connected_||!processAlive()){consume({},error.isEmpty()?QString("Core audit activity connection changed"):error);return;}
   const auto view=result.toObject();const auto invalid=validateAuditActivity(view,profile_.genesisHash,afterHeight,limit,watched);if(!invalid.isEmpty()){consume({},invalid);return;}
-  auto verify=[this,owner,consume=std::move(consume)](QJsonObject value)mutable{
-   verifyConfirmedSnapshotAnchor(value.value("state").toObject(),[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this](qint64 height,auto done){rpc("getblockhash",{height},std::move(done));},[value,consume=std::move(consume)](QString reason){consume(reason.isEmpty()?value:QJsonObject{},reason);});
+  auto verify=[this,owner,channel,consume=std::move(consume)](QJsonObject value)mutable{
+   verifyConfirmedSnapshotAnchor(value.value("state").toObject(),[this,owner]{return owner.matches(epoch())&&connected_&&processAlive();},[this,channel](qint64 height,auto done){rpc("getblockhash",{height},std::move(done),false,3000,{},channel);},[value,consume=std::move(consume)](QString reason){consume(reason.isEmpty()?value:QJsonObject{},reason);});
   };
   if(!afterHeight||view.value("rebase").toBool()){verify(view);return;}
   // A fork can grow beyond the previous height. Compare its old ancestor;
   // comparing only the new height would incorrectly animate that fork's past.
   rpc("getblockhash",{afterHeight},[this,owner,view,afterHash,verify=std::move(verify)](QJsonValue previous,QString reason)mutable{
    auto value=view;if(!reason.isEmpty()||previous.toString()!=afterHash||!owner.matches(epoch())||!connected_||!processAlive())value.insert("rebase",true);verify(value);
-  });
- });
+  },false,3000,{},channel);
+ },false,3000,{},channel);
 }
 void CoreRuntime::readTicketAtlas(const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)> consume){
  if(!connected_||!processAlive()||bins<1||bins>512||start.isEmpty()!=end.isEmpty()){consume({},"Verified Core connection and bounded atlas required");return;}

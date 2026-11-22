@@ -21,7 +21,7 @@ from horizon_update_client import locked_cache
 
 MARKER = b'PGN_COMPONENT_INSTALL_STORE_V1\n'
 
-def cohort_in_use(root, files):
+def cohort_in_use(root, files, *, original=None):
     """Native file users; an unavailable observation defers reclamation."""
     if sys.platform == 'win32':
         import ctypes
@@ -37,7 +37,7 @@ def cohort_in_use(root, files):
         api.RmGetList.argtypes = [w.DWORD,ctypes.POINTER(w.UINT),ctypes.POINTER(w.UINT),ctypes.c_void_p,ctypes.POINTER(w.DWORD)]
         api.RmEndSession.argtypes = [w.DWORD]
         def affected(paths):
-            if not paths:return [],False
+            if not paths:return [],0
             handle=w.DWORD();key=ctypes.create_unicode_buffer(33)
             stage.require(api.RmStartSession(ctypes.byref(handle),0,key)==0,'File-use observation unavailable')
             try:
@@ -48,20 +48,24 @@ def cohort_in_use(root, files):
                 result=api.RmGetList(handle,ctypes.byref(needed),ctypes.byref(count),None,ctypes.byref(reboot))
                 for attempt in range(4):
                     stage.require(result in (0,234),'File-use observation unavailable (Windows error '+str(result)+')')
-                    if not needed.value:return [],bool(reboot.value)
+                    if not needed.value:return [],reboot.value
                     count=w.UINT(needed.value);rows=(Info*count.value)()
                     result=api.RmGetList(handle,ctypes.byref(needed),ctypes.byref(count),rows,ctypes.byref(reboot))
-                    if result==0:return list(rows[:count.value]),bool(reboot.value)
+                    if result==0:return list(rows[:count.value]),reboot.value
                 raise stage.StageError('File-use observation changed during cleanup')
             finally:api.RmEndSession(handle)
-        exclusive=[p for p in files if p.stat().st_nlink<=1]
+        exclusive,shared=[],[]
+        for path in files:
+            (shared if path.stat().st_nlink>1 else exclusive).append(path)
         rows,reboot=affected(exclusive)
         if rows or reboot:return True
         # Shared backing files remain intact when an old hardlink is removed.
         # Restart Manager reports users by file identity, so distinguish a
         # process using the retained alias from an image loaded in this cohort.
-        rows,reboot=affected([p for p in files if p.stat().st_nlink>1])
-        if reboot:return True
+        rows,reboot=affected(shared)
+        detected_self=0x10  # RmRebootReasonDetectedSelf
+        if reboot and (reboot!=detected_self or not any(row.process.pid==os.getpid() for row in rows)):
+            return True
         kernel=ctypes.WinDLL('kernel32.dll',winmode=0x800)
         kernel.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];kernel.OpenProcess.restype=w.HANDLE
         kernel.CloseHandle.argtypes=[w.HANDLE]
@@ -73,8 +77,8 @@ def cohort_in_use(root, files):
             if path.startswith('\\\\?\\UNC\\'):path='\\\\'+path[8:]
             elif path.startswith('\\\\?\\'):path=path[4:]
             return os.path.normcase(os.path.abspath(path))
-        prefix=normalized(str(root))+os.sep
-        def inside(path):return normalized(path).startswith(prefix)
+        prefixes=tuple(normalized(str(path))+os.sep for path in (root,original) if path is not None)
+        def inside(path):return normalized(path).startswith(prefixes)
         for row in rows:
             handle=kernel.OpenProcess(0x410,False,row.process.pid)
             stage.require(bool(handle),'Shared-code process could not be inspected')
@@ -97,6 +101,21 @@ def cohort_in_use(root, files):
                     stage.require(0<length<len(name),'Shared-code module path unavailable')
                     if inside(name.value):return True
             finally:kernel.CloseHandle(handle)
+        if reboot==detected_self:
+            # Open with DELETE access but do not request removal. This catches
+            # an open handle denying delete sharing even if it has no image
+            # or loaded-module path to inspect.
+            kernel.CreateFileW.argtypes=[w.LPCWSTR,w.DWORD,w.DWORD,ctypes.c_void_p,
+                                         w.DWORD,w.DWORD,w.HANDLE]
+            kernel.CreateFileW.restype=w.HANDLE
+            delete_access=0x10000
+            share_read_write_delete=7
+            open_existing,open_reparse_point=3,0x00200000
+            for path in shared:
+                handle=kernel.CreateFileW(str(path),delete_access,share_read_write_delete,None,
+                                          open_existing,open_reparse_point,None)
+                if handle==ctypes.c_void_p(-1).value:return True
+                kernel.CloseHandle(handle)
         return False
     if sys.platform.startswith('linux'):
         prefix=str(root)+'/'
@@ -352,7 +371,7 @@ class CohortStore:
             remaining=self._retirement_files(trash,value)
             # Quarantine closes the old launch path. Observe again so a
             # process starting just before the rename is retained too.
-            busy=cohort_in_use(trash,remaining)
+            busy=cohort_in_use(trash,remaining,original=original)
         except Exception:
             # No deletion has begun. Restore the path on an unknown result,
             # including a permission change or a process-observation failure.

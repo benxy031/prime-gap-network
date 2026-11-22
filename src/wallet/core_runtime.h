@@ -68,10 +68,10 @@ public:
                        std::function<void(QJsonObject)> summary={});
  void readTicketAtlas(const QString& start,const QString& end,int bins,std::function<void(QJsonObject,QString)>);
  void readAuditActivity(qint64 afterHeight,const QString& afterHash,const QJsonArray& watched,
-                        std::function<void(QJsonObject,QString)>,int limit=64);
+                        std::function<void(QJsonObject,QString)>,int limit=64,CoreRpcChannel channel=CoreRpcChannel::General);
  void readAuditVerdicts(const QJsonArray&,std::function<void(QJsonObject,QString)>);
  void readLegacyCycleAudits(const QJsonObject&,std::function<void(QJsonObject,QString)>);
- void checkLegacyCycleAncestor(const QString&,const QString&,int,std::function<bool()>,std::function<void(bool)>);
+ void checkLegacyCycleAncestor(const QString&,const QString&,int,std::function<bool()>,std::function<void(bool,QString)>);
  void readBlockAtHeight(int,std::function<void(QJsonObject,QString)>);
  void readBlockPage(int height,std::function<void(QJsonObject,QString)>);
  void readAuditDetails(const QString&,std::function<void(QJsonObject,QString)>);
@@ -150,6 +150,7 @@ private:
  void continueNativeBlockStorage(const std::shared_ptr<NativeStorageRead>&);
  void rpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>,bool wallet=false,int timeoutMs=3000,const QString& walletName={},CoreRpcChannel channel=CoreRpcChannel::General);
  void rpcWire(const QString&,const QByteArray&,std::function<void(CoreRpcResult,QByteArray)>,bool wallet,int timeoutMs,const QString& walletName,CoreRpcChannel channel=CoreRpcChannel::General);
+ void auditRpc(const QString&,const QJsonArray&,std::function<void(QJsonValue,QString)>);
  void inspectRpc(const QString&,const QJsonArray&,std::function<void(CoreRpcResult)>,int timeoutMs=CoreInspectionTimeoutMs);
  void inspectFailed(const QString& operation,const CoreRpcResult&);
  WalletManager* walletManager_{};

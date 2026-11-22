@@ -124,7 +124,7 @@ int main(int argc,char** argv){
         "Active audit lost its exact attempt");
   render(midcycle,"captures/assigned-second-audit.png");
   const auto colors=rail.property("pgn_ticket_audit_colors").toJsonArray();
-  check(colors.size()==2&&colors[0]=="#658a96"&&colors[1]=="#62cfff",
+  check(colors.size()==2&&colors[0]=="#658a96"&&colors[1]=="#70badb",
         "The active slice must be blue and a locally committed slice must stay neutral");
   int auditReads=0;
   rail.bindAuditLookup([&](const QJsonArray& requests,auto done){
@@ -132,6 +132,10 @@ int main(int argc,char** argv){
    if(++auditReads==1){
     done(QJsonObject{{"state",QJsonObject{{"height",8000},{"bestblockhash",QString(64,'8')}}},
          {"audits",QJsonArray{states.first(),states.at(1)}}},{});
+   }else if(auditReads==2){
+    done(QJsonObject{{"audit_read_timeout",true}},QStringLiteral("Core RPC read timed out"));
+   }else if(auditReads==3){
+    done({},QStringLiteral("Core branches differ, or the audit snapshots drifted"));
    }else{
     done(QJsonObject{{"state",QJsonObject{{"height",8001},{"bestblockhash",QString(64,'9')}}},
          {"audits",QJsonArray{states.at(1)}}},{});
@@ -148,16 +152,64 @@ int main(int argc,char** argv){
   };
   waitForReads(1);
   render(midcycle,"captures/first-audit-passed.png");
-  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#69efc5",
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#63dfb3",
         "Exact Core verdict did not reach the actual rail color");
   auto pausedAudit=midcycle;pausedAudit["phase"]="Paused";
   render(pausedAudit,"captures/second-audit-paused.png");
   check(rail.property("pgn_ticket_audit_colors").toJsonArray().at(1)=="#658a96",
         "An audit in pause was displayed as computing");
   waitForReads(2);
+  render(midcycle,"captures/audit-core-timeout.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#63dfb3",
+        "A failed read removed the last confirmed color on the same audit");
+  waitForReads(3);
+  render(midcycle,"captures/audit-core-fork-conflict.png");
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#658a96",
+        "An explicit Core branch conflict kept the previous color");
+  waitForReads(4);
   render(midcycle,"captures/audit-reorganized.png");
   check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#658a96",
         "A growing fork left the previous branch green");
+  std::function<void(QJsonObject,QString)> pendingVerdicts;
+  rail.bindAuditLookup([&](const QJsonArray&,auto done){pendingVerdicts=std::move(done);});
+  rail.present(midcycle);
+  QElapsedTimer pendingClock;
+  pendingClock.start();
+  while(!pendingVerdicts&&pendingClock.elapsed()<2000){app.processEvents();QThread::msleep(15);}
+  check(bool(pendingVerdicts),"No verdict request to delay across the source change");
+  auto changedStream=midcycle;
+  changedStream["stream_id"]="replacement-source";
+  rail.present(changedStream);
+  rail.present(midcycle);
+  pendingVerdicts(QJsonObject{{"audits",QJsonArray{states.first(),states.at(1)}}},{});
+  rail.repaint();
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#658a96",
+        "An old callback restored a verdict after an A-to-B-to-A source switch");
+
+  auto preTicket=frame(preparation(1,1));
+  auto preTicketService=preTicket.value("audit_service").toObject();
+  auto preTicketView=preTicketService.value("preparation").toObject();
+  preTicketView["audit_refs"]=QJsonArray{firstRef,secondRef};
+  preTicketService["preparation"]=preTicketView;
+  preTicket["audit_service"]=preTicketService;
+  pendingVerdicts={};
+  rail.bindAuditLookup([&](const QJsonArray&,auto done){pendingVerdicts=std::move(done);});
+  rail.present(preTicket);
+  pendingClock.restart();
+  while(!pendingVerdicts&&pendingClock.elapsed()<2000){app.processEvents();QThread::msleep(15);}
+  check(bool(pendingVerdicts),"No verdict request from pre-ticket audit references");
+  auto changedPreparation=preTicket;
+  auto changedReference=firstRef;
+  changedReference["attempt"]=5;
+  preTicketView["audit_refs"]=QJsonArray{changedReference,secondRef};
+  preTicketService["preparation"]=preTicketView;
+  changedPreparation["audit_service"]=preTicketService;
+  rail.present(changedPreparation);
+  rail.present(preTicket);
+  pendingVerdicts(QJsonObject{{"audits",QJsonArray{states.first(),states.at(1)}}},{});
+  rail.repaint();
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().first()=="#658a96",
+        "The earlier pre-ticket verdict returned after the audit reference changed and returned");
   rail.bindAuditLookup({});
   rail.hide();
   render(search,"captures/assigned-search.png");
@@ -248,7 +300,7 @@ int main(int argc,char** argv){
   while(!legacyReads&&legacyTimeout.elapsed()<2000){app.processEvents();QThread::msleep(15);}
   check(legacyReads==1,"The old relay did not request its authenticated Core verdicts");
   render(relayed,"captures/legacy-relay-resolved.png");
-  check(rail.property("pgn_ticket_audit_colors").toJsonArray()==QJsonArray{"#69efc5","#ffbd69","#ffbd69"},
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray()==QJsonArray{"#63dfb3","#ba9aee","#ba9aee"},
         "The relay lost the green confirmation or treated engaged and pending audits as passed");
   check(rail.property("pgn_ticket_progress_fraction").toDouble()==0.,"Legacy audit progress moved the start of search");
   const QString nextExtra(64,'d');
@@ -263,21 +315,21 @@ int main(int argc,char** argv){
   while(legacyReads<2&&legacyTimeout.elapsed()<2000){app.processEvents();QThread::msleep(15);}
   check(legacyReads==2,"A newly added catch-up audit did not trigger its own lookup");
   render(extraFrame,"captures/legacy-relay-extra-terminal.png");
-  check(rail.property("pgn_ticket_audit_colors").toJsonArray().at(2)=="#69efc5",
+  check(rail.property("pgn_ticket_audit_colors").toJsonArray().at(2)=="#63dfb3",
         "Resolved terminal verdicts were lost on a growing catch-up list");
 
   auto another=extraFrame;
   another["ticket_id"]=QString(64,'9');
   rail.present(another);
   rail.repaint();
-  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#69efc5"),
+  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#63dfb3"),
         "The previous search verdict colored a different ticket with the same request");
 
   // Present both frames synchronously. The old verdict must already have
   // disappeared when paint occurs, before the next verdict poll.
   rail.present(extraFrame);
   rail.repaint();
-  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#69efc5"),
+  check(!rail.property("pgn_ticket_audit_colors").toJsonArray().contains("#63dfb3"),
         "An A-to-B-to-A switch revived an old legacy verdict before polling");
   rail.bindLegacyAuditLookup({});
   std::cout<<"PASS "<<checks<<" checks; real MiningTicketProgress rendered; no network or GPU job\n";
