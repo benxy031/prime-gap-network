@@ -487,7 +487,7 @@ int main(int argc,char** argv) {
    const auto coordinationSize=pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"coordination_bytes");
    const auto gold=testnetMode?pgn::ui::walletGoldBlockReading(inspectWallet,*anchor,now):std::nullopt;
    if(testnetMode){
-    const auto goldCount=gold?QString::number(gold->count)+(gold->atTip?QString{}:QStringLiteral("…")):QStringLiteral("—");
+    const auto goldCount=gold?QString::number(gold->count):QStringLiteral("—");
     networkSummary->setText(QString("TESTNET · GOLD BLOCKS %1 · COORDINATION BLOCKS %2 · %3 · %4")
        .arg(goldCount+(gold&&gold->atTip?pgn::ui::nativeBlockStorageSuffix(storage,*anchor,"gold_bytes"):QString{}),
             coordinationHeight+coordinationSize,peersLabel,state));
