@@ -481,15 +481,30 @@ bool ComponentUpdateService::start(const QJsonObject& request){
     startedConnection_=connect(process_,&QProcess::started,this,[this,data]{disconnect(startedConnection_);process_->write(data);process_->closeWriteChannel();});
     const QPointer<ComponentUpdateService> guard(this);
     if(retirement)idleRetirement.insert(scope,this);
-    if(action=="prepare"||action=="prepare_install"){
-        foregroundPreparations[scope].insert(this);
-        if(const auto cleanup=idleRetirement.value(scope))cleanup->cancel();
-    }
-    if(!guard)return true;
+    const bool preparation=action=="prepare"||action=="prepare_install";
+    if(preparation)foregroundPreparations[scope].insert(this);
     if(onStatus)onStatus(action=="retire_installations"?"Cleaning obsolete installations…":action=="inspect_storage"?"Inspecting unused update files…":action=="clean_storage"?"Cleaning verified unused files…":action=="check"?"Checking signed component versions…":"Downloading and verifying the selected components…");
     if(!guard)return true;
-    if(cancelled_){complete();return true;}
-    timer_->start(action=="check"||action=="inspect_storage"?60000:600000);process_->start();return true;
+    const auto launch=[guard,operation=diagnosticOperation_,action]{
+        if(!guard||guard->settled_||guard->diagnosticOperation_!=operation||
+            guard->process_->state()!=QProcess::NotRunning)return;
+        if(guard->cancelled_){guard->complete();return;}
+        guard->timer_->start(action=="check"||action=="inspect_storage"?60000:600000);
+        guard->process_->start();
+    };
+    const auto cleanup=preparation&&!cancelled_?idleRetirement.value(scope):QPointer<ComponentUpdateService>{};
+    if(cleanup&&cleanup->process_->state()!=QProcess::NotRunning){
+        // Wait for the OS to drain the interrupted cleanup before enumerating
+        // its store. No waiting or disk work is done on the UI thread.
+        connect(cleanup->process_,&QProcess::stateChanged,this,[this,launch](QProcess::ProcessState state){
+            if(state==QProcess::NotRunning)QTimer::singleShot(0,this,launch);
+        });
+        cleanup->cancel();
+    }else{
+        if(cleanup)cleanup->cancel();
+        launch();
+    }
+    return true;
 }
 void ComponentUpdateService::cancel(){if(busy()){cancelled_=true;process_->kill();}}
 void ComponentUpdateService::complete(){
