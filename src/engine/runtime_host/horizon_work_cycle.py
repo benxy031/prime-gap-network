@@ -499,6 +499,18 @@ class WorkCycleJournal:
             self.save_extra_budget(candidate)
             self.extra = candidate
 
+    def retire_extra_audit(self, request, audit_id):
+        with self.lock:
+            admitted = self.extra.get(request, [])
+            if audit_id not in admitted:
+                return
+            candidate = {key: list(value) for key, value in self.extra.items()}
+            candidate[request].remove(audit_id)
+            if not candidate[request]:
+                del candidate[request]
+            self.save_extra_budget(candidate)
+            self.extra = candidate
+
     def advance(self, request, stage):
         def apply(cycles):
             cycle = self.find(cycles, request)

@@ -44,6 +44,12 @@ class TicketPrefetch:
             if self.native_service_status is None:
                 self.service_observation_requested = True
 
+    def refresh_ready_service_observation(self, observed):
+        with self.condition:
+            if self.native_service_status is observed:
+                self.invalidate_native_service_status()
+            self.request_missing_service_observation()
+
     def refresh_requested_service_observation(self, read_status):
         # Reused by both audit producers. Never do RPC under the GPU queue
         # lock or depend on the ticket allocator reaching its own gate.

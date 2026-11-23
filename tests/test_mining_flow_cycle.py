@@ -24,7 +24,8 @@ class MiningFlowCycleTests(unittest.TestCase):
         flow.gpu=SimpleNamespace(search_waiting_for_audits=False)
         flow.prefetch=SimpleNamespace(error='Required audit service before next range')
         flow.outbox=SimpleNamespace(capacity_available=lambda:True)
-        flow.audit_lanes=[SimpleNamespace(current_audit={'ranges':[{'index':12},{'index':30}], 'counts':[]}),
+        verifying = SimpleNamespace(source=SimpleNamespace(verifying=True))
+        flow.audit_lanes=[SimpleNamespace(worker=verifying, current_audit={'ranges':[{'index':12},{'index':30}], 'counts':[]}),
                           SimpleNamespace(current_audit={'ranges':[{'index':24},{'index':31}], 'counts':[7,8]})]
         flow.waiting();text,phase=messages[-1]
         self.assertEqual(phase,'Completing audits')
@@ -114,7 +115,102 @@ class MiningFlowCycleTests(unittest.TestCase):
 
     def test_native_consumed_receipts_do_not_create_two_more_physical_audits(self):
         self.exercise('no_eligible_independent_work', should_search=True, have_audits=True,
+                      full_run=True, native=True, fresh=True, inherited=True)
+
+    def test_new_native_cycle_runs_two_fresh_audits_and_one_catchup(self):
+        self.exercise('no_eligible_independent_work', should_search=True, have_audits=True,
                       full_run=True, native=True, fresh=True)
+
+    def test_ready_recovery_and_fresh_audits_share_one_controller(self):
+        self.exercise('no_eligible_independent_work', should_search=True, have_audits=True,
+                      full_run=True, native=True, fresh=True, retained_ready=True)
+
+    def test_old_partition_archive_cannot_bind_as_fresh(self):
+        from horizon_audit_progress import partition_identity
+        from horizon_audit_partition_archive import NAME
+        from horizon_cycle_execution import CycleExecution
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            flow = object.__new__(MiningFlow)
+            flow.worker = SimpleNamespace(root=root)
+            flow.physical_audits = CycleExecution(root, 'a' * 64)
+            cycle = 'b' * 64
+            flow.physical_audits.mark_native(cycle, {cycle})
+            flow.physical_audits.prepare(cycle, {cycle})
+            flow.fresh_boundary = lambda: cycle
+            audit = dict(request_id='c' * 64, slot=0, attempt=0, ranges=[{'index': 0}], counts=[])
+            self.assertTrue(flow.can_bind_physical(cycle, 0, audit))
+            part = root / 'tickets' / partition_identity(audit, audit['ranges'][0])
+            part.mkdir(parents=True)
+            (part / NAME).touch()
+            self.assertFalse(flow.can_bind_physical(cycle, 0, audit))
+            flow.physical_audits.bind(cycle, 0, audit)
+            self.assertTrue(flow.can_bind_physical(cycle, 0, audit))
+
+    def test_unstarted_cycle_rechecks_empty_pool_after_restart(self):
+        from horizon_cycle_execution import CycleExecution
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            genesis, cycle, fork = 'a' * 64, 'b' * 64, 'c' * 64
+            execution = CycleExecution(root, genesis)
+            execution.mark_native(cycle, {cycle})
+            execution.prepare(cycle, {cycle})
+            execution.unavailable(cycle, 0, fork)
+            execution.unavailable(cycle, 1, fork)
+            execution.skip_catchup(cycle, fork)
+            execution = CycleExecution(root, genesis)
+            self.assertTrue(execution.catchup_ready(cycle))
+            flow = object.__new__(MiningFlow)
+            flow.physical_audits = execution
+            flow.cycles = SimpleNamespace(snapshot=lambda key: dict(stage='prepared'))
+            flow.worker = SimpleNamespace(rpc=SimpleNamespace(call=lambda method, args=None:
+                'd' * 64 if method == 'getbestblockhash' else dict(hash=fork, height=2, confirmations=-1)))
+            flow.gpu = SimpleNamespace(wake=lambda: None)
+            job = SimpleNamespace(context=dict(role='search', work_cycle=cycle))
+            stable = flow.worker.rpc.call
+            tip_reads = iter(('d' * 64, 'e' * 64))
+            flow.worker.rpc.call = lambda method, args=None: {
+                'getbestblockhash': lambda: next(tip_reads),
+                'getblockheader': lambda: dict(hash=fork, height=2, confirmations=3),
+                'getblockhash': lambda: fork,
+            }[method]()
+            self.assertFalse(flow.confirm_gpu_start(job))
+            self.assertEqual(execution.waiver_anchors(cycle), {fork})
+            flow.worker.rpc.call = stable
+            self.assertFalse(flow.confirm_gpu_start(job))
+            self.assertEqual(execution.snapshot(cycle), [None, None])
+            self.assertFalse(execution.catchup_ready(cycle))
+
+    def test_retired_catchup_frees_the_exact_reservation(self):
+        from horizon_cycle_execution import CycleExecution
+        from horizon_work_cycle import WorkCycleJournal
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            work = json.loads((ROOT / 'tests/fixtures/network/issued-work.json').read_bytes())
+            work['ticket_number'] = str((int(work['start']) - 150000000000000000000) // 200000000000000 + 1)
+            cycle = work['request_id']
+            retired = dict(request_id='e' * 64, slot=0, attempt=1)
+            retired_id = audit_view_ref('e' * 64, 0, 1)['audit_id']
+            next_id = audit_view_ref('f' * 64, 0, 1)['audit_id']
+            flow = object.__new__(MiningFlow)
+            flow.cycles = WorkCycleJournal(root, work['genesis'])
+            try:
+                flow.cycles.prepare(work)
+                flow.cycles.reserve_extra_audit(cycle, retired_id)
+                flow.physical_audits = CycleExecution(root, work['genesis'])
+                flow.physical_audits.mark_native(cycle, {cycle})
+                flow.gpu = SimpleNamespace(retire_audit=lambda *args: None, wake=lambda: None)
+                flow.unbound_service_lock = threading.RLock()
+                flow.unbound_service_audits = set()
+                flow.unbound_service_completed = set()
+                flow.prefetch = SimpleNamespace(invalidate_native_service_status=lambda: None)
+                flow.worker = SimpleNamespace()
+                flow.retire_audit_cycle(0, retired, 'b' * 64)
+                self.assertEqual(flow.cycles.extra_audits(cycle), [])
+                flow.cycles.reserve_extra_audit(cycle, next_id)
+                self.assertEqual(flow.cycles.extra_audits(cycle), [next_id])
+            finally:
+                flow.cycles.close()
 
     def test_native_no_eligible_work_bootstraps_without_fabricating_two_audits(self):
         self.exercise('no_eligible_independent_work', should_search=True, full_run=True, native=True)
@@ -126,14 +222,23 @@ class MiningFlowCycleTests(unittest.TestCase):
         self.exercise('no_eligible_independent_work', should_search=False, full_run=True, native=True, held=True)
 
     def exercise(self, reason, should_search, have_audits=False, permission_recovers=False, preseal=False,
-                 full_run=False, native=False, held=False, lab=False, fresh=False):
+                 full_run=False, native=False, held=False, lab=False, fresh=False, inherited=False,
+                 retained_ready=False):
         computed = json.loads((ROOT / 'tests/fixtures/network/computed-report.json').read_bytes())
         work = json.loads((ROOT / 'tests/fixtures/network/issued-work.json').read_bytes())
         work['ticket_number'] = str((int(work['start']) - 150000000000000000000) // 200000000000000 + 1)
         with tempfile.TemporaryDirectory() as temporary:
+            actor = '0014' + '1' * 40
+            ranges = [dict(index=i, start=str(160000000000000000000 + i * 2_000_000_000_000),
+                           end=str(160000000000000000000 + (i + 1) * 2_000_000_000_000)) for i in range(5)]
+            retained = {f'{i:064x}': dict(state='assigned', expired=False, actor_policy_accepted=True,
+                                         actor=actor, ranges=ranges) for i in (102, 103)} if retained_ready else {}
             class Rpc:
                 def __init__(self):
                     self.assigned = 2 if fresh else 0; self.jobs = {f'{i:064x}':dict(state='committed',commitment='e'*64)for i in (100,101)} if fresh else {}; self.serial = 0; self.denials = 0; self.audit_actors=set()
+                    self.assigned += len(retained)
+                    self.jobs.update(copy.deepcopy(retained))
+                    self.issued = False
                 def cancel_all(self): pass
                 def native_receipt(self):
                     return dict(schema='PGN_NATIVE_ASSIGNED_AUDIT_SERVICE_V1',enforced=True,
@@ -146,13 +251,19 @@ class MiningFlowCycleTests(unittest.TestCase):
                     if method == 'getaddressinfo': return dict(ismine=args[0] in lab_actors)
                     if method == 'validateaddress':return dict(isvalid=True,scriptPubKey='0014'+'1'*40)
                     if method == 'getpgnworkview':
+                        if retained_ready and len(args) == 4 and args[3] in self.jobs:
+                            requested = args[3]
+                            return dict(schema='PGN_WORK_VIEW_V1', kind='audits', request_id=requested,
+                                        state=dict(genesis=work['genesis'], bestblockhash='a' * 64, height=100),
+                                        reports=[dict(request_id=requested, ticket='3' * 64, report_root='4' * 64)],
+                                        audits=[dict(request_id=requested, jobs=[dict(slot=0, attempt=0, **self.jobs[requested])])])
                         return dict(schema='PGN_WORK_VIEW_V1',kind='audits',offset=args[1],limit=args[2],
                                     state=dict(genesis=work['genesis'],bestblockhash='a'*64,height=100),reports=[],audits=[])
                     if method == 'getpgnworkdutystatus':
                         return dict(schema='PGN_NATIVE_WORK_DUTY_STATUS_V1',genesis=work['genesis'],
                             bestblockhash='a'*64,enforced=native,may_request=not held and
                             (not have_audits or sum(v['state']=='committed'for v in self.jobs.values())>=2),
-                            status='audit_work_required',credits=[dict(request_id=k,slot=0,attempt=0,commitment=v['commitment'])for k,v in sorted(self.jobs.items())if v['state']=='committed'][:2])
+                            status='ready' if retained_ready else 'audit_work_required',credits=[dict(request_id=k,slot=0,attempt=0,commitment=v['commitment'])for k,v in sorted(self.jobs.items())if v['state']=='committed'][:2])
                     if method == 'getblockheader':return dict(hash=args[0],height=16,confirmations=5)
                     if method == 'getblockhash':
                         # Issuance block at 16 and current parent at 20 must
@@ -166,15 +277,17 @@ class MiningFlowCycleTests(unittest.TestCase):
                             raise CoreRpcError(-1, LEGACY_AUDIT_USAGE)
                         self.audit_actors.add(args[1])
                         action = args[0]
-                        if not have_audits or action == 'assign' and self.assigned >= (5 if fresh else 2):
+                        if not have_audits or action == 'assign' and (
+                            self.assigned >= (7 if retained_ready else 5 if fresh else 2)
+                            or retained_ready and not self.issued
+                        ):
                             unavailable = reason
                             if permission_recovers:
                                 self.denials += 1
                                 if self.denials > 2: unavailable = 'no_eligible_independent_work'
-                            return dict(available=False, unavailable_reason=unavailable, reason=unavailable, genesis=work['genesis'], parent='a' * 64)
+                            return dict(available=False, unavailable_reason=unavailable, reason=unavailable,
+                                        genesis=work['genesis'], parent='a' * 64, actor=actor)
                         request = f'{100 + self.assigned:064x}' if action == 'assign' else args[2]
-                        ranges = [dict(index=i, start=str(160000000000000000000 + i * 2_000_000_000_000),
-                                       end=str(160000000000000000000 + (i + 1) * 2_000_000_000_000)) for i in range(5)]
                         envelope = json.dumps(dict(action=action, request=request, body=args[5])).encode().hex()
                         return dict(available=True, challenge='fixture', envelope=envelope,
                                     request_id=request, slot=0, attempt=0, ranges=ranges)
@@ -217,14 +330,17 @@ class MiningFlowCycleTests(unittest.TestCase):
                 def assign(self,recover_only=False):
                     if recover_only:return None
                     if fresh and getattr(self,'fixture_issued',False):raise RuntimeError('Fixture has exactly one issued search cycle')
+                    if retained_ready and any(self.rpc.jobs[request]['state'] != 'committed' for request in retained):
+                        raise RuntimeError('Fixture reserves search after the retained audits are published')
                     self.fixture_issued=True
                     if native:
                         from horizon_native_work_duty import gate
                         gate(self.rpc,self.address(),work['genesis'])
+                    self.rpc.issued = True
                     issued=dict(work,native_audit_service=self.rpc.native_receipt())if native else work
                     save(self.root/'controller.json',dict(stage='ASSIGNED',work=issued,sequence=1))
                     return issued
-                def address(self): return 'fixture-auditor'
+                def address(self, create=False): return 'fixture-auditor'
                 def ledger(self, envelopes, *, on_intent=None):
                     if not have_audits: raise AssertionError('No available audit should be published')
                     event = json.loads(bytes.fromhex(envelopes[0]))
@@ -258,6 +374,13 @@ class MiningFlowCycleTests(unittest.TestCase):
             worker.state_lock = threading.RLock(); worker.network_lock = NetworkLane()
             worker.sequence = 0; worker.current = None; worker.device_lease = None; worker.audits = SimpleNamespace(presentation=None, reveal_owner_reports=lambda: None, reveal_committed=lambda: None)
             flow = MiningFlow(worker, finalize=(lambda work, report: report) if preseal else None)
+            for index, request in enumerate(retained):
+                save(flow.audit_lanes[index].folder / 'current.json',
+                     dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request, ticket='3' * 64,
+                          report_root='4' * 64, actor=actor, slot=0, attempt=0, ranges=ranges,
+                          counts=[1, 1, 1] if index == 0 else [], target_merit_q16=2097152))
+            if inherited:
+                flow.prepare_cycle(dict(work, native_audit_service=worker.rpc.native_receipt()))
             self.assertEqual([lane.worker.address()for lane in flow.audit_lanes],lab_actors if lab and not native else ['fixture-auditor']*2)
             if preseal:self.assertTrue(worker.source.retention_required)
             if not full_run:
@@ -288,7 +411,8 @@ class MiningFlowCycleTests(unittest.TestCase):
                         service=flow.audit_service_snapshot();self.assertEqual(service['controlled_lab_identities'],not native)
                         if not native:self.assertFalse(service['independent_economic_auditors'])
                     if permission_recovers: self.assertGreater(worker.rpc.denials, 2)
-                    self.assertIn(len(worker.source.calls), (1,) if fresh else (11 if have_audits else 1,),
+                    expected_calls = 1 if inherited or not have_audits else 23 if retained_ready else 16 if fresh else 11
+                    self.assertEqual(len(worker.source.calls), expected_calls,
                                      (getattr(worker,'network_notice',None),flow.prefetch.error,worker.messages[-3:]))
                     self.assertEqual(cycle['stage'], 'completed')
                     self.assertEqual([task['stage'] for task in cycle['audits']], ['committed', 'committed'] if have_audits else ['unavailable', 'unavailable'])
@@ -301,9 +425,16 @@ class MiningFlowCycleTests(unittest.TestCase):
                         if native:
                             self.assertEqual(worker.source.roles[-1],('search',None))
                             self.assertIn('native_service',cycle)
-                            if fresh:
+                            if inherited:
                                 self.assertEqual(worker.source.roles,[('search',None)])
                                 self.assertIsNone(flow.physical_audits.snapshot(work['request_id']))
+                            elif fresh:
+                                physical = flow.physical_audits.snapshot(work['request_id'])
+                                self.assertEqual([task['stage'] for task in physical], ['committed', 'committed'])
+                                self.assertEqual(len(flow.physical_audits.completed_extras(work['request_id'])), 1)
+                                self.assertEqual(len({row['ticket_id'] for row in worker.source.calls}), expected_calls)
+                                reused = {f'{i:064x}' for i in (100, 101)} | retained.keys()
+                                self.assertTrue(all(task['request'] not in reused for task in physical))
                             else:
                                 self.assertEqual(worker.source.roles[:10].count(('audit',0)),5)
                                 self.assertEqual(worker.source.roles[:10].count(('audit',1)),5)

@@ -35,6 +35,79 @@ class Rpc:
 
 
 class NativeDutyTests(unittest.TestCase):
+    def test_ready_duty_resumes_only_exact_live_lanes_beside_two_old_credits(self):
+        from horizon_mining_flow import MiningFlow
+        from horizon_audit_progress import partition_identity
+        from horizon_ticket_prefetch import TicketPrefetch
+        actor = '0014' + '1' * 40
+        current = [('1' * 64, 0, 0), ('2' * 64, 1, 1), ('3' * 64, 0, 0)]
+        audits = {key[0]: dict(request_id=key[0], slot=key[1], attempt=key[2], actor=actor,
+                  ticket='9' * 64, report_root='8' * 64, ranges=[dict(index=0, start='100', end='200')])
+                  for key in current}
+        status_anchor = 'b' * 64
+        tip = status_anchor
+        status = dict(schema='PGN_NATIVE_WORK_DUTY_STATUS_V1', genesis='a' * 64,
+                      bestblockhash=status_anchor, enforced=True, status='ready', may_request=True,
+                      credits=[dict(request_id=k * 64, slot=1, attempt=0) for k in ('d', 'e')])
+
+        def rpc(method, args=None):
+            if method == 'validateaddress':
+                return dict(isvalid=True, scriptPubKey=actor)
+            if method == 'getbestblockhash':
+                return tip
+            if method == 'getpgnworkview':
+                audit = audits[args[3]]
+                return dict(schema='PGN_WORK_VIEW_V1', kind='audits', request_id=args[3],
+                            state=dict(bestblockhash=tip, genesis=status['genesis']),
+                            reports=[dict(request_id=args[3], ticket=audit['ticket'], report_root=audit['report_root'])],
+                            audits=[dict(request_id=args[3], jobs=[dict(state='assigned', expired=False,
+                                    actor_policy_accepted=True, **audit)])])
+            self.assertEqual(method, 'getpgnworkdutystatus')
+            return status
+
+        flow = MiningFlow.__new__(MiningFlow)
+        flow.worker = SimpleNamespace(args=SimpleNamespace(genesis=status['genesis']),
+                                      address=lambda create=False: 'signer', rpc=SimpleNamespace(call=rpc))
+        flow.unbound_service_lock = threading.RLock()
+        flow.unbound_service_audits = set()
+        flow.unbound_service_completed = set()
+        flow.unbound_service_seeded = False
+        flow.audit_lanes = [SimpleNamespace(current_audit=copy.deepcopy(audits[key[0]]), worker=flow.worker)
+                            for key in current[:2]]
+        flow.prefetch = TicketPrefetch(None, threading.Event(), threading.Event(), threading.RLock())
+        observation = flow.read_unbound_service()
+        flow.prefetch.publish_service_observation(0, observation)
+
+        def job(position, key, signer=actor):
+            audit = audits[key[0]]
+            part = audit['ranges'][0]
+            return SimpleNamespace(ticket=dict(ticket_id=partition_identity(audit, part), start=part['start'], end=part['end']),
+                                   context=dict(audit_position=position, audit_request_id=key[0],
+                                                audit_slot=key[1], audit_attempt=key[2], audit_actor=signer))
+
+        self.assertEqual([flow.may_unbound_audit(job(i, key)) for i, key in enumerate(current)],
+                         [True, True, False])
+        self.assertFalse(flow.may_unbound_audit(job(0, current[2])))
+        self.assertFalse(flow.may_unbound_audit(job(0, current[0], '0014' + '2' * 40)))
+        wrong_partition = job(0, current[0])
+        wrong_partition.ticket['end'] = '201'
+        self.assertFalse(flow.may_unbound_audit(wrong_partition))
+        candidate = job(0, current[0])
+        self.assertTrue(flow.may_unbound_audit(candidate))
+        self.assertTrue(flow.confirm_ready_audit(candidate))
+        self.assertTrue(flow.may_unbound_audit(candidate))
+        tip = 'c' * 64
+        self.assertFalse(flow.confirm_ready_audit(candidate))
+        self.assertIsNone(flow.prefetch.service_observation())
+        status['bestblockhash'] = tip
+        generation = flow.prefetch.native_service_generation
+        flow.prefetch.publish_service_observation(generation, flow.read_unbound_service())
+        self.assertTrue(flow.may_unbound_audit(candidate))
+        flow.audit_lanes[0].current_audit = None
+        self.assertFalse(flow.confirm_ready_audit(candidate))
+        self.assertFalse(flow.may_unbound_audit(job(0, current[0])))
+        self.assertEqual(flow.unbound_service_audits, set())
+
     def test_zero_one_and_two_consumed_credits_fill_exactly_two_terminal_stages(self):
         for n in range(3):
             w=work();rpc=Rpc(w,n);value=duty.observe(rpc,w,w['genesis']);stages=duty.tasks(value,w)

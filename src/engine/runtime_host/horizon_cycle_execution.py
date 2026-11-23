@@ -25,6 +25,26 @@ class CycleExecution:
         self.cycles = {}
         self.extra_path = Path(folder) / 'physical-extra-audits.json'
         self.extras = {}
+        self.native_path = Path(folder) / 'physical-native-cycles.json'
+        self.native = {}
+        if self.native_path.exists():
+            if self.native_path.stat().st_size > 4096:
+                raise ValueError('Invalid native physical cycle journal')
+            value = json.loads(self.native_path.read_bytes())
+            if (set(value) != {'schema', 'genesis', 'cycles'}
+                    or value['schema'] != 'PGN_NATIVE_PHYSICAL_CYCLES_V1'
+                    or value['genesis'] != genesis or type(value['cycles']) is not dict
+                    or len(value['cycles']) > 5
+                    or any(not identity(key) or type(record) is not dict
+                           or set(record) - {'empty', 'commitments'}
+                           or ('empty' in record and not identity(record['empty']))
+                           or type(record.get('commitments', {})) is not dict
+                           or len(record.get('commitments', {})) > 3
+                           or any(not identity(audit) or not identity(commitment)
+                                  for audit, commitment in record.get('commitments', {}).items())
+                           for key, record in value['cycles'].items())):
+                raise ValueError('Invalid native physical cycle journal')
+            self.native = value['cycles']
         if self.extra_path.exists():
             if self.extra_path.stat().st_size > 32768:raise ValueError('Invalid physical-extra journal; retained unchanged')
             extra = json.loads(self.extra_path.read_bytes())
@@ -128,6 +148,73 @@ class CycleExecution:
                     del records[key]  # Old cycle is already archived by WorkCycleJournal.
         self.update(change)
         with self.lock:self.save_extras({key:value for key,value in self.extras.items() if key in hot})
+
+    def mark_native(self, cycle, hot):
+        with self.lock:
+            candidate = {key: record for key, record in self.native.items() if key in hot}
+            candidate.setdefault(cycle, {})
+            self.save_native(candidate)
+
+    def save_native(self, candidate):
+        if candidate != self.native:
+            raw = canonical_bytes(dict(schema='PGN_NATIVE_PHYSICAL_CYCLES_V1',
+                                       genesis=self.genesis, cycles=candidate)) + b'\n'
+            atomic_bytes(self.native_path, raw)
+            self.native = candidate
+
+    def is_native(self, cycle):
+        with self.lock:
+            return cycle in self.native
+
+    def skip_catchup(self, cycle, anchor):
+        if not identity(anchor):
+            raise ValueError('Catch-up availability requires an exact Core anchor')
+        with self.lock:
+            if cycle in self.native and 'empty' not in self.native[cycle]:
+                candidate = copy.deepcopy(self.native)
+                candidate[cycle]['empty'] = anchor
+                self.save_native(candidate)
+
+    def catchup_ready(self, cycle):
+        with self.lock:
+            return bool(self.native.get(cycle, {}).get('empty') or self.extras.get(cycle))
+
+    def waiver_anchors(self, cycle):
+        with self.lock:
+            anchors = {item['anchor'] for item in self.cycles.get(cycle, [])
+                       if item and item['stage'] == 'unavailable'}
+            empty = self.native.get(cycle, {}).get('empty')
+            if empty:
+                anchors.add(empty)
+            return anchors
+
+    def clear_waivers(self, cycle):
+        def change(records):
+            if cycle in records:
+                records[cycle] = [None if item and item['stage'] == 'unavailable' else item
+                                  for item in records[cycle]]
+        with self.lock:
+            self.update(change)
+            if 'empty' in self.native.get(cycle, {}):
+                candidate = copy.deepcopy(self.native)
+                del candidate[cycle]['empty']
+                self.save_native(candidate)
+
+    def native_commitment(self, cycle, audit):
+        with self.lock:
+            return self.native.get(cycle, {}).get('commitments', {}).get(audit)
+
+    def remember_native_commitment(self, cycle, audit, digest, live):
+        if not identity(audit) or not identity(digest):
+            return
+        with self.lock:
+            if cycle not in self.native:
+                return
+            candidate = copy.deepcopy(self.native)
+            known = candidate[cycle].get('commitments', {})
+            candidate[cycle]['commitments'] = {key: value for key, value in known.items() if key in live}
+            candidate[cycle]['commitments'][audit] = digest
+            self.save_native(candidate)
 
     def snapshot(self, cycle):
         with self.lock:

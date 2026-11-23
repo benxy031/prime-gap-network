@@ -17,8 +17,10 @@ from horizon_core_rpc import CoreRpcError
 from horizon_native_work_duty import identity as work_duty_identity, read_status as read_work_duty_status
 from horizon_testnet_admission import script_for
 from horizon_service_presentation import audit_view_ref, preparation_view
-from horizon_ticket_archive import SCHEMA as COMPLETED_TICKET_SCHEMA
+from horizon_ticket_archive import ARCHIVE_NAME, SCHEMA as COMPLETED_TICKET_SCHEMA
+from horizon_audit_partition_archive import NAME as AUDIT_PARTITION_ARCHIVE
 from horizon_audit_progress import presentation as audit_presentation
+from horizon_audit_progress import partition_identity
 from pgn_native_contract import fields, encode_target_q16
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
@@ -139,7 +141,7 @@ class MiningFlow:
         self.view_sequence = max(int(current.get("sequence", 0)), int(self.prior_active.get("sequence", 0)))
         self.gpu = ResidentGpuQueue(worker.source, worker.running, worker.quitting,
                                     self.activate, self.completed, self.paused, self.failed, self.waiting,
-                                    may_start=self.may_start_work)
+                                    may_start=self.may_start_work, check_start=self.confirm_gpu_start)
         worker.request_pause_ack = self.gpu.request_pause_ack
         allocator = object.__new__(type(worker))
         allocator.args, allocator.rpc = worker.args, worker.rpc
@@ -221,6 +223,7 @@ class MiningFlow:
                               for i, audit in enumerate(self.audit_lanes)]
 
     def may_start_work(self, job):
+        job.context.pop('ready_audit_observation', None)
         if job.context['role'] == 'search' and getattr(self, 'recovered_report', None) is not None:
             return False
         if job.context['role'] == 'search' and self.finalizer is None and not self.outbox.capacity_available():
@@ -241,7 +244,7 @@ class MiningFlow:
                     target = (audit.get('physical_cycle') or physical.bound_audit(audit, index)
                               or physical.pending(index, self.local_audit_cycles()))
                     counted_extra = self.cycles.extra_audit_cycle(job.context.get('presentation', {}).get('audit_id'))
-                    if target and not counted_extra:
+                    if target and not counted_extra and self.can_bind_physical(target, index, audit):
                         physical.bind(target, index, audit)
                         audit['physical_cycle'] = target
                         job.context.update(work_cycle=target, physical_cycle=True)
@@ -250,9 +253,21 @@ class MiningFlow:
         if job.context["role"] == "audit":
             if cycle is not None:
                 if job.context.get("physical_cycle"):
-                    return not self.cycles.snapshot(cycle)["hold"] and self.physical_audits.may_audit(cycle, job.context["audit_position"])
+                    return (not self.cycles.snapshot(cycle)["hold"]
+                            and (not self.physical_audits.is_native(cycle) or self.fresh_boundary() == cycle)
+                            and self.physical_audits.may_audit(cycle, job.context["audit_position"]))
                 return self.cycles.may_audit(cycle, job.context["audit_position"])
             owner = self.extra_audit_owner(job)
+            journal = getattr(self, 'physical_audits', None)
+            if journal is not None and journal.is_native(owner):
+                audit = self.audit_lanes[job.context['audit_position']].current_audit
+                retained = self.cycles.extra_audit_cycle(job.context['presentation']['audit_id'])
+                if not retained and audit is not None and not self.audit_has_no_progress(audit):
+                    job.context['finish_retained_audit'] = True
+                    return self.fresh_boundary() == owner
+                return (self.fresh_boundary() == owner and journal.ready(owner)
+                        and (retained == owner or (not journal.catchup_ready(owner)
+                                                    and not self.cycles.extra_audits(owner))))
             return self.may_unbound_audit(job) if owner is None else self.cycles.may_extra_audit(owner, job.context['presentation']['audit_id'])
         if job.context.get("legacy_assignment"):
             return True
@@ -283,9 +298,27 @@ class MiningFlow:
             return False
         observed_actor = status.get('observed_actor')
         audit_actor = job.context.get('audit_actor')
+        identity=(job.context.get('audit_request_id'),job.context.get('audit_slot'),job.context.get('audit_attempt'))
+        if status.get('status') == 'ready' and status.get('may_request') is True:
+            # Issuance credits are completed work. They do not occupy either
+            # physical lane while an exact confirmed assignment is resumed.
+            position = job.context.get('audit_position')
+            if type(position) is not int or not 0 <= position < len(self.audit_lanes):
+                return False
+            audit = self.audit_lanes[position].current_audit
+            if audit is None or self.service_identity(audit) != identity or audit.get('actor') != audit_actor:
+                return False
+            observed = status.get('ready_audits', {}).get(position)
+            if observed_actor != audit_actor or observed is None or observed[0] != self.ready_audit_scope(audit):
+                self.prefetch.refresh_ready_service_observation(status)
+                return False
+            scope, _ = observed
+            if not any((job.ticket['ticket_id'], job.ticket['start'], job.ticket['end']) == part for part in scope[-1]):
+                return False
+            job.context['ready_audit_observation'] = status
+            return True
         if observed_actor is not None and audit_actor is not None and observed_actor != audit_actor:
             return False
-        identity=(job.context.get('audit_request_id'),job.context.get('audit_slot'),job.context.get('audit_attempt'))
         known={self.service_identity(ref)for ref in status.get('credits',[])}
         # Only a fresh post-confirmation Core observation can retire a completed
         # reservation. RAM current_audit briefly disappears during journal reload;
@@ -317,8 +350,9 @@ class MiningFlow:
             return None
         actor = script_for(worker.rpc, signer)
         status = read_work_duty_status(worker.rpc, signer, worker.args.genesis)
-        if (status is None or not status['enforced'] or status['may_request'] is not False
-                or status.get('status') != 'audit_work_required'):
+        if (status is None or not status['enforced']
+                or (status.get('status'), status['may_request']) not in
+                (('audit_work_required', False), ('ready', True))):
             return None
         credits = status.get('credits')
         if (not isinstance(credits, list) or len(credits) > 2
@@ -330,7 +364,74 @@ class MiningFlow:
             raise ValueError('Invalid confirmed audit service credits')
         if worker.address(create=False) != signer:
             return None
+        if status.get('status') == 'ready':
+            from horizon_audit_batch import _ready_decline, ready_audit_view
+            scopes = {}
+            for position, lane in enumerate(self.audit_lanes):
+                audit = lane.current_audit
+                if audit is None or audit.get('actor') != actor:
+                    continue
+                _, _, active = ready_audit_view(lane, audit, status['bestblockhash'])
+                scopes[position] = (self.ready_audit_scope(audit), _ready_decline(audit, active) is None)
+            if not scopes or worker.address(create=False) != signer:
+                return None
+            return dict(status, observed_actor=actor, ready_signer=signer, ready_audits=scopes)
         return dict(status, observed_actor=actor)
+
+    @classmethod
+    def ready_audit_scope(cls, audit):
+        regions = tuple((partition_identity(audit, part), part['start'], part['end']) for part in audit['ranges'])
+        return (*cls.service_identity(audit), audit['actor'], audit['ticket'], audit['report_root'], regions)
+
+    def confirm_ready_audit(self, job):
+        status = job.context.pop('ready_audit_observation', None)
+        if status is None:
+            return True
+        position = job.context['audit_position']
+        audit = self.audit_lanes[position].current_audit
+        scope, allowed = status['ready_audits'][position]
+        if audit is None or self.ready_audit_scope(audit) != scope:
+            self.prefetch.refresh_ready_service_observation(status)
+            return False
+        try:
+            if (self.worker.address(create=False) == status['ready_signer']
+                    and self.worker.rpc.call('getbestblockhash') == status['bestblockhash']
+                    and self.worker.address(create=False) == status['ready_signer']):
+                if allowed:
+                    return True
+                # Unblock the lane's pending Future. process_one will then
+                # recheck Core and archive a retired assignment normally.
+                self.gpu.retire_audit(position, *self.service_identity(audit))
+                return False
+        except (OSError, RuntimeError, ValueError) as error:
+            self.worker.network_notice = 'Audit service status unavailable: ' + str(error)[:300]
+        self.prefetch.refresh_ready_service_observation(status)
+        return False
+
+    def confirm_gpu_start(self, job):
+        if job.context['role'] == 'audit':
+            return self.confirm_ready_audit(job)
+        cycle = job.context.get('work_cycle')
+        journal = self.physical_audits
+        if not journal.is_native(cycle) or self.cycles.snapshot(cycle)['stage'] != 'prepared':
+            return True
+        anchors = journal.waiver_anchors(cycle)
+        if not anchors:
+            return True
+        try:
+            tip = self.worker.rpc.call('getbestblockhash')
+            canonical = all(anchor == tip or self.audit_reference_current(dict(stage='unavailable', anchor=anchor))
+                            for anchor in anchors)
+            if anchors != {tip} and self.worker.rpc.call('getbestblockhash') != tip:
+                return False
+            if canonical:
+                return True
+        except (OSError, RuntimeError, ValueError) as error:
+            self.worker.network_notice = 'Audit availability could not be confirmed: ' + str(error)[:300]
+            return False
+        journal.clear_waivers(cycle)
+        self.gpu.wake()
+        return False
 
     def refresh_unbound_service(self):
         worker = self.worker
@@ -347,17 +448,45 @@ class MiningFlow:
 
     def physical_ready(self, cycle):
         state = self.cycles.snapshot(cycle)
-        if 'native_service' in state:
-            # Core already consumed the exact required service at issuance.
-            # Local presentation/history must not impose a second audit debt.
-            return self.cycles.ready(state)
         journal = getattr(self, 'physical_audits', None)
+        if 'native_service' in state:
+            return self.cycles.ready(state) and (
+                journal is None or not journal.is_native(cycle) or state['stage'] != 'prepared'
+                or (journal.snapshot(cycle) is not None and journal.ready(cycle)
+                    and journal.catchup_ready(cycle)))
         return journal is None or journal.ready(cycle)
 
     def local_audit_cycles(self):
-        # Confirmed native receipts already account for their service. Keep
-        # old physical records, but do not allocate another pair against them.
-        return [state for state in self.cycles.value['cycles'] if 'native_service' not in state]
+        journal = getattr(self, 'physical_audits', None)
+        return [state for state in self.cycles.value['cycles']
+                if 'native_service' not in state or (journal is not None and journal.is_native(state['work']['request_id']))]
+
+    def fresh_boundary(self):
+        with self.gpu.condition:
+            active = self.gpu.active
+            if active is not None and active.context.get('role') == 'search':
+                return None
+            resumed = getattr(self.gpu, 'resume_job', None)
+            pending = (resumed if resumed is not None and resumed.context.get('role') == 'search'
+                       else self.gpu.search[0] if self.gpu.search else None)
+            if pending is None or pending.context.get('role') != 'search':
+                return None
+            cycle = pending.context.get('work_cycle')
+            return cycle if self.physical_audits.is_native(cycle) else None
+
+    def audit_has_no_progress(self, audit):
+        if any(audit.get(key) for key in ('counts', 'answer', 'commit_ready', 'publication_intent')):
+            return False
+        tickets = self.worker.root / 'tickets'
+        checkpoints = ('session.json', ARCHIVE_NAME, AUDIT_PARTITION_ARCHIVE,
+                       AUDIT_PARTITION_ARCHIVE + '.sha256', 'native-checkpoint.bin')
+        return not any((tickets / partition_identity(audit, part) / name).exists()
+                       for part in audit['ranges'] for name in checkpoints)
+
+    def can_bind_physical(self, cycle, position, audit):
+        journal = self.physical_audits
+        return (not journal.is_native(cycle) or journal.bound_audit(audit, position) == cycle
+                or (self.fresh_boundary() == cycle and self.audit_has_no_progress(audit)))
 
     def reconcile_physical_extra_bindings(self):
         # Earlier recovery could forget the saved physical binding, then
@@ -417,7 +546,7 @@ class MiningFlow:
                 if self.cycles.extra_audit_cycle(ident):
                     return  # This whole audit already belongs to a prior extra section.
                 cycle = physical.pending(position, self.local_audit_cycles())
-            if cycle and physical.snapshot(cycle) is not None:
+            if cycle and physical.snapshot(cycle) is not None and self.can_bind_physical(cycle, position, audit):
                 physical.bind(cycle, position, audit)
                 audit.update(physical_cycle=cycle)
                 self.cycle_audit_positions[(cycle, position)] = sum(int(r['end'])-int(r['start']) for r in audit['ranges'])
@@ -496,7 +625,16 @@ class MiningFlow:
                                 del refs[retired]
                             refs.setdefault(owner, {})[ident] = ref
         if audit.get('physical_cycle'):
-            self.physical_audits.committed(audit['physical_cycle'], position, audit, block) if self.physical_audits.snapshot(audit['physical_cycle']) is not None else None
+            owner = audit['physical_cycle']
+            tasks = physical.snapshot(owner)
+            if tasks is not None:
+                ref = audit_view_ref(audit['request_id'], audit['slot'], audit['attempt'],
+                                     (audit.get('answer') or {}).get('commitment'))
+                if physical.is_native(owner) and ref is not None:
+                    live = {audit_view_ref(task['request'], task['slot'], task['attempt'])['audit_id']
+                            for task in tasks if task and task['stage'] != 'unavailable'}
+                    physical.remember_native_commitment(owner, ref['audit_id'], ref.get('commitment'), live)
+                physical.committed(owner, position, audit, block)
             self.gpu.wake()
             return
         cycle = audit.get("work_cycle") or self.cycles.bound_audit(audit["request_id"], audit["slot"], audit["attempt"], position)
@@ -543,6 +681,14 @@ class MiningFlow:
             audit.pop('physical_cycle', None)
             self.gpu.wake()
             return
+        ref = audit_view_ref(audit['request_id'], audit['slot'], audit['attempt'])
+        physical = getattr(self, 'physical_audits', None)
+        if ref is not None and physical is not None:
+            ident = ref['audit_id']
+            with self.cycles.lock:
+                owner = self.cycles.extra_audit_cycle(ident)
+                if physical.is_native(owner) and ident not in physical.completed_extras(owner):
+                    self.cycles.retire_extra_audit(owner, ident)
         cycle = audit.get('work_cycle') or self.cycles.bound_audit(audit['request_id'], audit['slot'], audit['attempt'], position)
         if cycle:
             self.cycles.retire_assignment(cycle, position, audit['request_id'], audit['slot'], audit['attempt'])
@@ -615,10 +761,10 @@ class MiningFlow:
                     target_merit_q16=encode_target_q16(work))
 
     def prepared(self, work):
-        self.prepare_cycle(work)
+        self.prepare_cycle(work, new_gpu_work=True)
         self.gpu.submit(self.job(work), dict(role="search", work=work, prepared=True, work_cycle=work["request_id"]), self.worker.args.piece_limit)
 
-    def prepare_cycle(self, work):
+    def prepare_cycle(self, work, *, new_gpu_work=False):
         previous = (self.cycles.snapshot(work['request_id']).get('native_service')
                     if self.cycles.contains(work['request_id']) else None)
         native = None
@@ -629,7 +775,19 @@ class MiningFlow:
         if getattr(self.worker, 'cpu_only', False):
             from horizon_cycle_retirement import reconcile_cpu_capacity
             reconcile_cpu_capacity(self, work)
+        request = work['request_id']
+        physical = getattr(self, 'physical_audits', None)
+        if (new_gpu_work and physical is not None and native is not None and not getattr(self.worker, 'cpu_only', False)
+                and not self.cycles.contains(request)):
+            hot = {state['work']['request_id'] for state in self.cycles.value['cycles']}
+            physical.mark_native(request, hot)
         changed = self.cycles.prepare(work, native_service=native)
+        if native is not None and physical is not None and physical.is_native(request):
+            hot = {state['work']['request_id'] for state in self.cycles.value['cycles']}
+            if request in hot:
+                physical.prepare(request, hot)
+                if not new_gpu_work and self.cycles.snapshot(request)['stage'] == 'prepared':
+                    physical.clear_waivers(request)
         if native is not None:
             with self.unbound_service_lock:
                 consumed={self.service_identity(ref)for ref in native['credits']}
@@ -667,7 +825,7 @@ class MiningFlow:
                 self.cycles.advance(work["request_id"], "running")
             worker.audits.presentation = None
         else:
-            if not job.context.get('work_cycle'):
+            if not job.context.get('work_cycle') and not job.context.get('finish_retained_audit'):
                 owner = self.extra_audit_owner(job)
                 if owner:
                     self.cycles.reserve_extra_audit(owner, job.context['presentation']['audit_id'])
@@ -906,7 +1064,7 @@ class MiningFlow:
             active = self.gpu.active
             context = dict(active.context) if active else {}
             cycle = context.get('work_cycle')
-            catch_up = context.get('role') == 'audit' and not cycle
+            catch_up = context.get('role') == 'audit' and not cycle and not context.get('finish_retained_audit')
             if catch_up:
                 cycle = context.get('audit_budget_cycle') or next((job.context.get('work_cycle') for job in self.gpu.search
                               if job.context.get('work_cycle')), None)
@@ -918,7 +1076,8 @@ class MiningFlow:
         if cycle:
             physical = getattr(self, 'physical_audits', None)
             execution = physical.snapshot(cycle) if physical is not None else None
-            if execution is not None and 'native_service' not in state:
+            fresh = physical is not None and physical.is_native(cycle)
+            if execution is not None and ('native_service' not in state or fresh):
                 state['audits'] = execution
             totals = getattr(self, 'cycle_audit_positions', {})
             native_refs = {
@@ -928,9 +1087,14 @@ class MiningFlow:
             def visible_audit(index, task):
                 task = task or {}
                 identity = (task.get('request'), task.get('slot'), task.get('attempt'))
+                ref = audit_view_ref(*identity, commitment=native_refs.get(identity))
+                if fresh and ref is not None and task.get('stage') == 'committed':
+                    digest = physical.native_commitment(cycle, ref['audit_id'])
+                    if digest:
+                        ref['commitment'] = digest
                 return dict(state=task.get('stage', 'pending'),
                     positions=str(totals[(cycle, index)]) if (cycle, index) in totals else None,
-                    audit_ref=audit_view_ref(*identity, commitment=native_refs.get(identity)))
+                    audit_ref=ref)
 
             extra_ids = list(getattr(self.cycles, 'extra', {}).get(cycle, []))
             refs = getattr(self, 'extra_audit_view_refs', None)
@@ -944,6 +1108,7 @@ class MiningFlow:
                 extra_refs[active_ref['audit_id']] = active_ref
             value['cycle'] = dict(schema='PGN_MINING_CYCLE_VIEW_V1', request_id=cycle,
                 ticket_number=state['work']['ticket_number'], search_positions=state['work']['length'],
+                physical_audits=fresh,
                 active_index=2 if context.get('role') == 'search' else context.get('audit_position', 0),
                 catch_up=catch_up,
                 active_audit_id=context.get('presentation', {}).get('audit_id', ''),
@@ -972,6 +1137,7 @@ class MiningFlow:
                 continue
             try:
                 pending = self.pending_audit(position)
+                fresh = self.fresh_boundary()
                 outcome = audit.process_one()
                 audit.last_error = None
                 audit.recovery_pending = None
@@ -982,7 +1148,9 @@ class MiningFlow:
                     with self.gpu.condition:
                         active = self.gpu.active
                         at_boundary = active is None or active.context.get("work_cycle") == pending
-                    if pending and at_boundary and self.pending_audit(position) == pending:
+                    if fresh is not None:
+                        self.resolve_fresh_availability(fresh, pending, position, proposal)
+                    elif pending and at_boundary and self.pending_audit(position) == pending:
                         reason = proposal.get("unavailable_reason")
                         if proposal.get("genesis") != self.worker.args.genesis:
                             raise ValueError("Audit availability belongs to another or unknown chain")
@@ -1034,6 +1202,35 @@ class MiningFlow:
                 else:
                     audit.last_error = str(error)[:300]
                     self.worker.quitting.wait(2)
+
+    def resolve_fresh_availability(self, cycle, pending, position, proposal):
+        if (proposal.get('unavailable_reason') != 'no_eligible_independent_work'
+                or proposal.get('genesis') != self.worker.args.genesis
+                or proposal.get('preceding_event_count', 0) != 0):
+            return
+        physical = self.physical_audits
+        anchor = proposal.get('parent')
+        with self.worker.network_lock:
+            signer = self.worker.address(create=False)
+            if not signer or proposal.get('actor') != script_for(self.worker.rpc, signer):
+                return
+            if not work_duty_identity(anchor) or self.worker.rpc.call('getbestblockhash') != anchor:
+                return
+            with self.gpu.condition:
+                if self.fresh_boundary() != cycle:
+                    return
+                tasks = physical.snapshot(cycle)
+                if tasks is None:
+                    return
+                if pending == cycle and tasks[position] is None:
+                    physical.unavailable(cycle, position, anchor)
+                elif pending is None and physical.ready(cycle) and not physical.catchup_ready(cycle):
+                    # A sibling can hold a confirmed assignment when this lane
+                    # sees an empty pool. Its existing work can fill catch-up.
+                    if any((lane.folder / 'current.json').exists() for lane in self.audit_lanes):
+                        return
+                    physical.skip_catchup(cycle, anchor)
+                self.gpu.condition.notify_all()
 
     def recover_prepared_assignment(self, error):
         if str(error)!='Saved ticket no longer matches its live computation lease':raise error

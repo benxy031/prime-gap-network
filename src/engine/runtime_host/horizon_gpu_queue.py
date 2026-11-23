@@ -46,7 +46,7 @@ class ResidentGpuQueue:
     minimum_service_ns = 1_000_000_000
     maximum_scheduled_search_piece = 4 * 10**12
 
-    def __init__(self, engine, enabled, stopping, on_start, on_result, on_paused, on_error, on_waiting=None, *, clock_ns=time.monotonic_ns, policy_clock=time.monotonic, may_start=None):
+    def __init__(self, engine, enabled, stopping, on_start, on_result, on_paused, on_error, on_waiting=None, *, clock_ns=time.monotonic_ns, policy_clock=time.monotonic, may_start=None, check_start=None):
         self.engine = engine
         self.enabled, self.stopping = enabled, stopping
         self.on_start, self.on_result = on_start, on_result
@@ -55,6 +55,7 @@ class ResidentGpuQueue:
         # Local workflow state only: admission must never perform network I/O
         # in the execution lane. None preserves an ungated standalone queue.
         self.may_start = may_start
+        self.check_start = check_start
         self.search_waiting_for_audits = False
         self.condition = threading.Condition()
         self.search, self.audits = deque(), deque()
@@ -213,6 +214,19 @@ class ResidentGpuQueue:
                 continue
             waiting_since = None
             try:
+                if job.retired:
+                    continue
+                if job.completed_result is None and self.check_start is not None:
+                    confirmed = self.check_start(job)
+                    with self.condition:
+                        if job.retired or self.stopping.is_set():
+                            continue
+                        if not confirmed or not self.enabled.is_set():
+                            if not confirmed:
+                                job.storage_retry_after = max(job.storage_retry_after, time.monotonic() + .1)
+                            (self.search if job.context['role'] == 'search' else self.audits).appendleft(job)
+                            self.condition.notify_all()
+                            continue
                 if job.retired:
                     continue
                 if job.completed_result is not None:
