@@ -114,7 +114,9 @@ class TicketPrefetch:
                     self.ready = None
                     self.error = str(error)[:400]
                     status=getattr(error,"native_service_status",None)
-                    if status is not None:
+                    if isinstance(status, dict) and status.get('status') == 'audit_work_required':
+                        self.request_missing_service_observation()
+                    elif status is not None:
                         self.publish_service_observation(observation_generation, status)
                     self.condition.notify_all()
                     if isinstance(status,dict) and status.get("enforced") is True and status.get("may_request") is False:

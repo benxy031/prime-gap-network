@@ -748,6 +748,8 @@ class NetworkAudits:
                         raise ValueError("Assigned audit has no immutable report")
                     report = reports[0]
                     audit = dict(schema="PGN_HORIZON_ASSIGNED_AUDIT_V1", request_id=proposal["request_id"], ticket=report["ticket"], report_root=report["report_root"], slot=proposal["slot"], attempt=proposal["attempt"], ranges=proposal["ranges"], counts=[])
+                    if proposal.get('actor'):
+                        audit['actor'] = proposal['actor']
                 # The Core attribution is already confirmed. Retain its identity
                 # before the catalogue can return BUSY/ENOSPC: a retry must resume
                 # this assignment, not ask for another and waive its service slot.

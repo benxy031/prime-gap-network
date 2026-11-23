@@ -1,10 +1,11 @@
 """Exercise READY authorization at the GPU queue boundary without a device."""
 
-from concurrent.futures import CancelledError
+from concurrent.futures import CancelledError, Future
 from pathlib import Path
 from threading import Event, RLock, Thread
 from types import SimpleNamespace
 import sys
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,7 @@ from horizon_ticket_prefetch import TicketPrefetch
 
 
 class ReadyFixture:
-    def __init__(self):
+    def __init__(self, required=False):
         self.enabled = Event()
         self.enabled.set()
         self.stopping = Event()
@@ -28,14 +29,20 @@ class ReadyFixture:
         self.signer = 'signer-a'
         self.actor = '0014' + '1' * 40
         self.rejected_requests = set()
+        self.incomplete_requests = set()
+        self.required = required
         self.lane = SimpleNamespace(current_audit=self.audit('1', self.actor))
         flow = MiningFlow.__new__(MiningFlow)
         flow.worker = SimpleNamespace(args=SimpleNamespace(genesis=self.genesis),
                                       address=self.address, rpc=SimpleNamespace(call=self.rpc))
         flow.unbound_service_lock = RLock()
+        flow.unbound_service_audits = set()
+        flow.unbound_service_completed = set()
+        flow.unbound_service_seeded = False
         flow.audit_lanes = [self.lane]
         self.lane.worker = flow.worker
         flow.prefetch = TicketPrefetch(None, self.enabled, self.stopping, RLock())
+        flow.gpu = SimpleNamespace(jobs={})
         self.flow = flow
         observation = flow.read_unbound_service()
         if not observation or not flow.prefetch.publish_service_observation(0, observation):
@@ -63,17 +70,20 @@ class ReadyFixture:
             return self.anchor
         if method == 'getpgnworkdutystatus':
             return dict(schema='PGN_NATIVE_WORK_DUTY_STATUS_V1', genesis=self.genesis,
-                        bestblockhash=self.anchor, enforced=True, status='ready', may_request=True,
-                        credits=[dict(request_id=key * 64, slot=1, attempt=0) for key in ('d', 'e')])
+                        bestblockhash=self.anchor, enforced=True,
+                        status='audit_work_required' if self.required else 'ready',
+                        may_request=not self.required,
+                        credits=[dict(request_id=key * 64, slot=1, attempt=0)
+                                 for key in ('d' if self.required else 'de')])
         if method == 'getpgnworkview':
             request = args[3]
             audit = next(lane.current_audit for lane in self.flow.audit_lanes
-                         if lane.current_audit['request_id'] == request)
+                         if lane.current_audit is not None and lane.current_audit['request_id'] == request)
             return dict(schema='PGN_WORK_VIEW_V1', kind='audits', request_id=request,
                         state=dict(bestblockhash=self.anchor, genesis=self.genesis),
                         reports=[dict(request_id=request, ticket=audit['ticket'],
                                       report_root=audit['report_root'])],
-                        audits=[dict(request_id=request, jobs=[dict(state='assigned',
+                        audits=[] if request in self.incomplete_requests else [dict(request_id=request, jobs=[dict(state='assigned',
                                      expired=request in self.rejected_requests,
                                      actor_policy_accepted=True, **audit)])])
         raise AssertionError(method)
@@ -83,12 +93,106 @@ class ReadyFixture:
         part = audit['ranges'][0]
         return SimpleNamespace(ticket=dict(ticket_id=partition_identity(audit, part),
                                            start=part['start'], end=part['end']),
+                               future=Future(), retired=False, storage_retry_after=0,
                                context=dict(role='audit', audit_position=position, audit_actor=audit['actor'],
                                             audit_request_id=audit['request_id'], audit_slot=audit['slot'],
                                             audit_attempt=audit['attempt']))
 
 
 class ReadyAdmissionRaceTests(unittest.TestCase):
+    def test_one_core_credit_does_not_allow_expired_lane_to_block_live_assignment(self):
+        fixture = ReadyFixture(required=True)
+        flow = fixture.flow
+        old = fixture.lane.current_audit
+        old['counts'] = ['0', '0', '0']
+        flow.unbound_service_audits.add(flow.service_identity(old))
+        fixture.rejected_requests.add(old['request_id'])
+        next_audit = fixture.audit('2', fixture.actor)
+        flow.audit_lanes.append(SimpleNamespace(current_audit=next_audit, worker=flow.worker))
+        flow.prefetch.invalidate_native_service_status()
+        generation = flow.prefetch.native_service_generation
+        self.assertTrue(flow.prefetch.publish_service_observation(generation, flow.read_unbound_service()))
+        expired, live = fixture.job(old), fixture.job(next_audit, 1)
+        retired = []
+        flow.gpu.retire_audit = lambda *args: retired.append(args)
+
+        self.assertTrue(flow.may_unbound_audit(live))
+        self.assertTrue(flow.confirm_ready_audit(live))
+        self.assertEqual(flow.unbound_service_audits, {flow.service_identity(next_audit)})
+        self.assertTrue(flow.may_unbound_audit(expired))
+        self.assertFalse(flow.confirm_ready_audit(expired))
+        self.assertEqual(retired, [(0, *flow.service_identity(old))])
+        self.assertEqual(old['counts'], ['0', '0', '0'])
+
+    def test_partial_view_does_not_reset_sibling_observation_or_spend_slot(self):
+        fixture = ReadyFixture(required=True)
+        flow = fixture.flow
+        waiting = fixture.lane.current_audit
+        sibling = fixture.audit('2', fixture.actor)
+        flow.audit_lanes.append(SimpleNamespace(current_audit=sibling, worker=flow.worker))
+        fixture.incomplete_requests.add(waiting['request_id'])
+        flow.prefetch.invalidate_native_service_status()
+        status = flow.read_unbound_service()
+        self.assertTrue(flow.prefetch.publish_service_observation(flow.prefetch.native_service_generation, status))
+        current = fixture.job(sibling, 1)
+        flow.gpu.jobs[current.ticket['ticket_id']] = current
+        self.assertFalse(flow.may_unbound_audit(fixture.job(waiting)))
+        self.assertIs(flow.prefetch.service_observation(), status)
+        self.assertTrue(flow.may_unbound_audit(current))
+        self.assertTrue(flow.confirm_ready_audit(current))
+
+    def test_backoff_retirement_and_wrong_range_do_not_reserve_last_slot(self):
+        for reason in ('storage_retry_after', 'retired', 'wrong_range', 'bound_cycle'):
+            with self.subTest(reason=reason):
+                fixture = ReadyFixture(required=True)
+                flow = fixture.flow
+                prior = fixture.lane.current_audit
+                prior['counts'] = ['0', '0', '0']
+                sibling = fixture.audit('2', fixture.actor)
+                flow.audit_lanes.append(SimpleNamespace(current_audit=sibling, worker=flow.worker))
+                flow.prefetch.invalidate_native_service_status()
+                status = flow.read_unbound_service()
+                self.assertTrue(flow.prefetch.publish_service_observation(flow.prefetch.native_service_generation, status))
+                old = fixture.job(prior)
+                if reason == 'wrong_range':
+                    old.ticket['end'] = '201'
+                elif reason == 'bound_cycle':
+                    old.context['work_cycle'] = 'c' * 64
+                else:
+                    setattr(old, reason, True if reason == 'retired' else time.monotonic() + 20)
+                flow.gpu.jobs[old.ticket['ticket_id']] = old
+                self.assertTrue(flow.may_unbound_audit(fixture.job(sibling, 1)))
+
+    def test_unknown_lane_refreshes_when_the_observed_sibling_has_disappeared(self):
+        fixture = ReadyFixture(required=True)
+        flow = fixture.flow
+        sibling = fixture.audit('2', fixture.actor)
+        flow.audit_lanes.append(SimpleNamespace(current_audit=sibling, worker=flow.worker))
+        fixture.incomplete_requests.add(sibling['request_id'])
+        flow.prefetch.invalidate_native_service_status()
+        status = flow.read_unbound_service()
+        self.assertTrue(flow.prefetch.publish_service_observation(flow.prefetch.native_service_generation, status))
+        fixture.lane.current_audit = None
+        fixture.incomplete_requests.clear()
+        job = fixture.job(sibling, 1)
+        self.assertFalse(flow.may_unbound_audit(job))
+        self.assertTrue(flow.prefetch.refresh_requested_service_observation(flow.read_unbound_service))
+        self.assertTrue(flow.may_unbound_audit(job))
+
+    def test_confirmed_journal_without_future_does_not_reserve_last_slot(self):
+        fixture = ReadyFixture(required=True)
+        flow = fixture.flow
+        waiting = fixture.lane.current_audit
+        waiting['counts'] = ['0', '0', '0']
+        sibling = fixture.audit('2', fixture.actor)
+        flow.audit_lanes.append(SimpleNamespace(current_audit=sibling, worker=flow.worker))
+        flow.prefetch.invalidate_native_service_status()
+        status = flow.read_unbound_service()
+        self.assertTrue(flow.prefetch.publish_service_observation(flow.prefetch.native_service_generation, status))
+        current = fixture.job(sibling, 1)
+        self.assertTrue(flow.may_unbound_audit(current))
+        self.assertTrue(flow.confirm_ready_audit(current))
+
     def check_control_during_anchor(self, *, stop):
         fixture = ReadyFixture()
         fixture.entered_anchor = Event()

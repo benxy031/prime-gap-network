@@ -299,7 +299,8 @@ class MiningFlow:
         observed_actor = status.get('observed_actor')
         audit_actor = job.context.get('audit_actor')
         identity=(job.context.get('audit_request_id'),job.context.get('audit_slot'),job.context.get('audit_attempt'))
-        if status.get('status') == 'ready' and status.get('may_request') is True:
+        required = status.get('status') == 'audit_work_required' and status.get('may_request') is False
+        if required or (status.get('status') == 'ready' and status.get('may_request') is True):
             # Issuance credits are completed work. They do not occupy either
             # physical lane while an exact confirmed assignment is resumed.
             position = job.context.get('audit_position')
@@ -309,14 +310,23 @@ class MiningFlow:
             if audit is None or self.service_identity(audit) != identity or audit.get('actor') != audit_actor:
                 return False
             observed = status.get('ready_audits', {}).get(position)
-            if observed_actor != audit_actor or observed is None or observed[0] != self.ready_audit_scope(audit):
+            if ((audit_actor is not None and observed_actor != audit_actor)
+                    or observed is None or observed[0] != self.ready_audit_scope(audit)):
                 self.prefetch.refresh_ready_service_observation(status)
                 return False
-            scope, _ = observed
+            scope, allowed = observed
+            if allowed is None:
+                if not self.runnable_observed_audits(status):
+                    self.prefetch.refresh_ready_service_observation(status)
+                return False
             if not any((job.ticket['ticket_id'], job.ticket['start'], job.ticket['end']) == part for part in scope[-1]):
+                return False
+            if required and allowed and not self.reserve_required_audit(status, identity):
                 return False
             job.context['ready_audit_observation'] = status
             return True
+        if status.get('schema') == 'PGN_NATIVE_WORK_DUTY_STATUS_V1':
+            return False
         if observed_actor is not None and audit_actor is not None and observed_actor != audit_actor:
             return False
         known={self.service_identity(ref)for ref in status.get('credits',[])}
@@ -343,6 +353,48 @@ class MiningFlow:
         self.unbound_service_audits.add(identity)
         return True
 
+    def reserve_required_audit(self, status, identity):
+        credits = {self.service_identity(ref) for ref in status['credits']}
+        runnable = {candidate for candidate, allowed in self.runnable_observed_audits(status).items() if allowed}
+        runnable.add(identity)
+        live = []
+        for position, (scope, allowed) in status['ready_audits'].items():
+            audit = self.audit_lanes[position].current_audit
+            if not allowed or audit is None or self.ready_audit_scope(audit) != scope:
+                continue
+            candidate = self.service_identity(audit)
+            if candidate in runnable and candidate not in credits:
+                live.append((-len(audit.get('counts', [])), position, candidate))
+        admitted = {candidate for _, _, candidate in sorted(live)[:2 - len(credits)]}
+        self.unbound_service_audits.intersection_update(credits | admitted)
+        self.unbound_service_audits.update(admitted)
+        self.unbound_service_completed.update(credits)
+        self.unbound_service_completed.intersection_update(credits | admitted)
+        return identity in admitted
+
+    def runnable_observed_audits(self, status):
+        runnable = {}
+        now = time.monotonic()
+        for queued in self.gpu.jobs.values():
+            context = queued.context
+            if (context.get('role') != 'audit' or queued.retired or queued.future.done()
+                    or now < queued.storage_retry_after or context.get('work_cycle') is not None
+                    or self.extra_audit_owner(queued) is not None):
+                continue
+            position = context.get('audit_position')
+            observed = status['ready_audits'].get(position)
+            if observed is None or observed[1] is None:
+                continue
+            audit = self.audit_lanes[position].current_audit
+            if audit is None or observed[0] != self.ready_audit_scope(audit):
+                continue
+            identity = (context.get('audit_request_id'), context.get('audit_slot'), context.get('audit_attempt'))
+            part = (queued.ticket['ticket_id'], queued.ticket['start'], queued.ticket['end'])
+            if (identity == self.service_identity(audit) and context.get('audit_actor') == audit.get('actor')
+                    and part in observed[0][-1]):
+                runnable[identity] = observed[1]
+        return runnable
+
     def read_unbound_service(self):
         worker = self.worker
         signer = worker.address(create=False)
@@ -364,24 +416,36 @@ class MiningFlow:
             raise ValueError('Invalid confirmed audit service credits')
         if worker.address(create=False) != signer:
             return None
-        if status.get('status') == 'ready':
-            from horizon_audit_batch import _ready_decline, ready_audit_view
-            scopes = {}
-            for position, lane in enumerate(self.audit_lanes):
-                audit = lane.current_audit
-                if audit is None or audit.get('actor') != actor:
-                    continue
-                _, _, active = ready_audit_view(lane, audit, status['bestblockhash'])
-                scopes[position] = (self.ready_audit_scope(audit), _ready_decline(audit, active) is None)
-            if not scopes or worker.address(create=False) != signer:
-                return None
-            return dict(status, observed_actor=actor, ready_signer=signer, ready_audits=scopes)
-        return dict(status, observed_actor=actor)
+        from horizon_audit_batch import _ready_decline, ready_audit_view, signable_actor
+        from horizon_audit_recovery import assignment_absence_confirmed
+        scopes = {}
+        legacy_signable = None
+        for position, lane in enumerate(self.audit_lanes):
+            audit = lane.current_audit
+            if audit is None or audit.get('actor') not in (None, actor):
+                continue
+            _, row, active = ready_audit_view(lane, audit, status['bestblockhash'])
+            if active is not None:
+                allowed = _ready_decline(dict(audit, actor=actor), active) is None
+                if allowed and audit.get('actor') is None:
+                    if legacy_signable is None:
+                        legacy_signable = signable_actor(worker, actor)
+                    # Older seals bind to an actorless record. Authorize GPU
+                    # admission from this view without rewriting that binding.
+                    allowed = True if legacy_signable else None
+            elif assignment_absence_confirmed(audit, row, status['bestblockhash'], worker.rpc):
+                allowed = False
+            else:
+                allowed = None
+            scopes[position] = (self.ready_audit_scope(audit), allowed)
+        if not scopes or worker.address(create=False) != signer:
+            return None
+        return dict(status, observed_actor=actor, ready_signer=signer, ready_audits=scopes)
 
     @classmethod
     def ready_audit_scope(cls, audit):
         regions = tuple((partition_identity(audit, part), part['start'], part['end']) for part in audit['ranges'])
-        return (*cls.service_identity(audit), audit['actor'], audit['ticket'], audit['report_root'], regions)
+        return (*cls.service_identity(audit), audit.get('actor'), audit['ticket'], audit['report_root'], regions)
 
     def confirm_ready_audit(self, job):
         status = job.context.pop('ready_audit_observation', None)

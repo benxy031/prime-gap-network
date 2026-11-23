@@ -125,6 +125,11 @@ class MiningFlowCycleTests(unittest.TestCase):
         self.exercise('no_eligible_independent_work', should_search=True, have_audits=True,
                       full_run=True, native=True, fresh=True, retained_ready=True)
 
+    def test_ready_recovery_recovers_missing_signer_before_resuming(self):
+        self.exercise('no_eligible_independent_work', should_search=True, have_audits=True,
+                      full_run=True, native=True, fresh=True, retained_ready=True,
+                      older_audit_journal=True)
+
     def test_old_partition_archive_cannot_bind_as_fresh(self):
         from horizon_audit_progress import partition_identity
         from horizon_audit_partition_archive import NAME
@@ -223,7 +228,7 @@ class MiningFlowCycleTests(unittest.TestCase):
 
     def exercise(self, reason, should_search, have_audits=False, permission_recovers=False, preseal=False,
                  full_run=False, native=False, held=False, lab=False, fresh=False, inherited=False,
-                 retained_ready=False):
+                 retained_ready=False, older_audit_journal=False):
         computed = json.loads((ROOT / 'tests/fixtures/network/computed-report.json').read_bytes())
         work = json.loads((ROOT / 'tests/fixtures/network/issued-work.json').read_bytes())
         work['ticket_number'] = str((int(work['start']) - 150000000000000000000) // 200000000000000 + 1)
@@ -248,10 +253,14 @@ class MiningFlowCycleTests(unittest.TestCase):
                 def call(self, method, args=None, wallet=False):
                     args = args or []
                     if method == 'getblockchaininfo': return dict(chain='test')
-                    if method == 'getaddressinfo': return dict(ismine=args[0] in lab_actors)
+                    if method == 'getaddressinfo':
+                        return dict(ismine=args[0] in lab_actors or args[0]=='fixture-auditor',
+                                    iswatchonly=False, scriptPubKey=actor)
+                    if method == 'getwalletinfo': return dict(private_keys_enabled=True)
+                    if method == 'decodescript': return dict(address='fixture-auditor')
                     if method == 'validateaddress':return dict(isvalid=True,scriptPubKey='0014'+'1'*40)
                     if method == 'getpgnworkview':
-                        if retained_ready and len(args) == 4 and args[3] in self.jobs:
+                        if len(args) == 4 and args[3] in self.jobs:
                             requested = args[3]
                             return dict(schema='PGN_WORK_VIEW_V1', kind='audits', request_id=requested,
                                         state=dict(genesis=work['genesis'], bestblockhash='a' * 64, height=100),
@@ -260,10 +269,11 @@ class MiningFlowCycleTests(unittest.TestCase):
                         return dict(schema='PGN_WORK_VIEW_V1',kind='audits',offset=args[1],limit=args[2],
                                     state=dict(genesis=work['genesis'],bestblockhash='a'*64,height=100),reports=[],audits=[])
                     if method == 'getpgnworkdutystatus':
+                        may_request = not held and (not have_audits or sum(
+                            job['state']=='committed' for job in self.jobs.values())>=2)
                         return dict(schema='PGN_NATIVE_WORK_DUTY_STATUS_V1',genesis=work['genesis'],
-                            bestblockhash='a'*64,enforced=native,may_request=not held and
-                            (not have_audits or sum(v['state']=='committed'for v in self.jobs.values())>=2),
-                            status='ready' if retained_ready else 'audit_work_required',credits=[dict(request_id=k,slot=0,attempt=0,commitment=v['commitment'])for k,v in sorted(self.jobs.items())if v['state']=='committed'][:2])
+                            bestblockhash='a'*64,enforced=native,may_request=may_request,
+                            status='ready' if may_request else 'audit_work_required',credits=[dict(request_id=k,slot=0,attempt=0,commitment=v['commitment'])for k,v in sorted(self.jobs.items())if v['state']=='committed'][:2])
                     if method == 'getblockheader':return dict(hash=args[0],height=16,confirmations=5)
                     if method == 'getblockhash':
                         # Issuance block at 16 and current parent at 20 must
@@ -290,7 +300,7 @@ class MiningFlowCycleTests(unittest.TestCase):
                         request = f'{100 + self.assigned:064x}' if action == 'assign' else args[2]
                         envelope = json.dumps(dict(action=action, request=request, body=args[5])).encode().hex()
                         return dict(available=True, challenge='fixture', envelope=envelope,
-                                    request_id=request, slot=0, attempt=0, ranges=ranges)
+                                    request_id=request, slot=0, attempt=0, ranges=ranges, actor=actor)
                     if method == 'getbestblockhash': return 'a' * 64
                     if method == 'getpgnreports': return [dict(ticket='3' * 64, report_root='4' * 64)]
                     if method == 'getpgnscientificwork':
@@ -352,7 +362,8 @@ class MiningFlowCycleTests(unittest.TestCase):
                                   operation_sha256=hashlib.sha256(json.dumps(envelopes, separators=(',', ':')).encode()).hexdigest())
                     if on_intent: on_intent(intent)
                     if event['action'] == 'assign':
-                        self.rpc.jobs[event['request']] = dict(state='assigned')
+                        self.rpc.jobs[event['request']] = dict(state='assigned', expired=False,
+                            actor_policy_accepted=True, actor=actor, ranges=ranges)
                         self.rpc.assigned += 1
                     elif event['action'] == 'commit':
                         self.rpc.jobs[event['request']] = dict(state='committed', commitment=event['body'])
@@ -375,10 +386,12 @@ class MiningFlowCycleTests(unittest.TestCase):
             worker.sequence = 0; worker.current = None; worker.device_lease = None; worker.audits = SimpleNamespace(presentation=None, reveal_owner_reports=lambda: None, reveal_committed=lambda: None)
             flow = MiningFlow(worker, finalize=(lambda work, report: report) if preseal else None)
             for index, request in enumerate(retained):
-                save(flow.audit_lanes[index].folder / 'current.json',
-                     dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request, ticket='3' * 64,
+                audit = dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request, ticket='3' * 64,
                           report_root='4' * 64, actor=actor, slot=0, attempt=0, ranges=ranges,
-                          counts=[1, 1, 1] if index == 0 else [], target_merit_q16=2097152))
+                          counts=[1, 1, 1] if index == 0 else [], target_merit_q16=2097152)
+                if older_audit_journal:
+                    audit.pop('actor')
+                save(flow.audit_lanes[index].folder / 'current.json', audit)
             if inherited:
                 flow.prepare_cycle(dict(work, native_audit_service=worker.rpc.native_receipt()))
             self.assertEqual([lane.worker.address()for lane in flow.audit_lanes],lab_actors if lab and not native else ['fixture-auditor']*2)
