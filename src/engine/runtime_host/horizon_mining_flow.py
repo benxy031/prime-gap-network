@@ -537,6 +537,7 @@ class MiningFlow:
         with self.unbound_service_lock:
             self.unbound_service_audits.discard(self.service_identity(audit))
             self.unbound_service_completed.discard(self.service_identity(audit))
+            self.prefetch.invalidate_native_service_status()
         if audit.get('physical_cycle'):
             self.physical_audits.retire(audit['physical_cycle'], position, audit)
             audit.pop('physical_cycle', None)

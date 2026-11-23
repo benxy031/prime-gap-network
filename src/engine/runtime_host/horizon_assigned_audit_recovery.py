@@ -8,7 +8,7 @@ from pathlib import Path
 import hashlib
 import json
 from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch, AuditSealRecoveryRequired
-from horizon_audit_recovery import recover_retired_progress
+from horizon_audit_recovery import RetiredAuditSealConflict, progress_path, recover_retired_progress
 from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes, audit_commitment
@@ -150,6 +150,7 @@ class AssignedAuditRecovery:
                 reserved.add((value.get('request_id'), value.get('slot'), value.get('attempt')))
             candidate = None
             waiting_for_seal_lane = False
+            progress = worker.root / 'work-cycles' / 'retained-audit-progress'
             seen = set()
             for row in rows:
                 request = row.get('request_id')
@@ -176,13 +177,6 @@ class AssignedAuditRecovery:
                     if (request, slot, attempt) in reserved:
                         continue
                     name = f'{request}-{slot}-{attempt}'
-                    seal_lanes = [AuditAnswers(path.parent) for path in journals]
-                    holders = [lane.folder for lane in seal_lanes if lane.records_seal(name)]
-                    if len(holders) > 1:
-                        raise AuditSealRecoveryRequired('Audit seal recorded in both active lanes')
-                    if holders and holders[0] != AuditAnswers(folder).folder:
-                        waiting_for_seal_lane = True
-                        continue
                     ranges = job.get('ranges')
                     if not isinstance(ranges, list) or len(ranges) != 5:
                         raise ValueError('Recovered audit requires five exact partitions')
@@ -199,13 +193,24 @@ class AssignedAuditRecovery:
                                 raise ValueError('Noncanonical recovered audit range')
                         if int(part['start']) >= int(part['end']):
                             raise ValueError('Empty recovered audit partition')
-                    candidate = dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request,
-                                     ticket=report['ticket'], report_root=report['report_root'],
-                                     slot=slot, attempt=attempt, actor=actor, ranges=ranges, counts=[],
-                                     recovered_assignment_anchor=state['bestblockhash'])
+                    selected = dict(schema='PGN_HORIZON_ASSIGNED_AUDIT_V1', request_id=request,
+                                    ticket=report['ticket'], report_root=report['report_root'],
+                                    slot=slot, attempt=attempt, actor=actor, ranges=ranges, counts=[],
+                                    recovered_assignment_anchor=state['bestblockhash'])
+                    retained, _ = progress_path(progress, worker.args.genesis, selected)
+                    if retained is not None and retained.with_suffix('.conflict').is_file():
+                        continue
+                    seal_lanes = [AuditAnswers(path.parent) for path in journals]
+                    holders = [lane.folder for lane in seal_lanes if lane.records_seal(name)]
+                    if len(holders) > 1:
+                        raise AuditSealRecoveryRequired('Audit seal recorded in both active lanes')
+                    if holders and holders[0] != AuditAnswers(folder).folder:
+                        waiting_for_seal_lane = True
+                        continue
                     try:
-                        candidate = self.retain_legacy_answer(candidate)
-                    except LegacyAuditSignerUnresolved:
+                        candidate = self.retain_legacy_answer(selected)
+                        candidate = recover_retired_progress(progress, worker.args.genesis, candidate)
+                    except (LegacyAuditSignerUnresolved, RetiredAuditSealConflict):
                         candidate = None
                         continue
                     break
@@ -216,9 +221,6 @@ class AssignedAuditRecovery:
                     from horizon_audit_batch import signable_actor
                     if not read(signable_actor, worker, actor):
                         return None, False
-                candidate = recover_retired_progress(
-                    worker.root / 'work-cycles' / 'retained-audit-progress', worker.args.genesis, candidate
-                )
             if read(worker.rpc.call, 'getbestblockhash') != state['bestblockhash']:
                 return None, False  # No cursor/journal mutation from a stale page.
             complete = len(reports) < 100 and not waiting_for_seal_lane

@@ -4,11 +4,15 @@ import hashlib,json,re
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
 from horizon_audit_answers import AuditAnswers
-from horizon_coordination import validate_intent
+from horizon_coordination import PublicationPending, validate_intent
 from horizon_core_rpc import CoreRpcError
 
 
 PROGRESS_IDENTITY = ('request_id', 'ticket', 'report_root', 'slot', 'attempt', 'actor', 'ranges')
+
+
+class RetiredAuditSealConflict(PublicationPending):
+    """A local checkpoint cannot identify the answer Core accepted."""
 
 
 def progress_path(root, genesis, audit):
@@ -37,6 +41,8 @@ def read_progress(path, binding):
 
 def recover_retired_progress(root, genesis, audit):
     path, binding = progress_path(root, genesis, audit)
+    if path is not None and path.with_suffix('.conflict').is_file():
+        raise RetiredAuditSealConflict('Conflicting retired audit awaits its canonical commitment')
     value = read_progress(path, binding)
     if value is None:
         return audit
@@ -58,7 +64,7 @@ def recover_retired_progress(root, genesis, audit):
     return dict(audit, counts=counts, target_merit_q16=value['target_merit_q16'])
 
 
-def retain_progress(root, genesis, audit):
+def retain_progress(root, genesis, audit, *, retired_archive=None):
     counts = audit.get('counts')
     if not counts:
         return
@@ -80,7 +86,14 @@ def retain_progress(root, genesis, audit):
         if counts[:common] != earlier[:common] or target != retained['target_merit_q16']:
             raise ValueError('Conflicting progress for the same audit assignment')
         if answer is not None and 'answer' in retained and retained['answer'] != answer:
-            raise ValueError('Conflicting seals for the same audit assignment')
+            if retired_archive is None:
+                raise ValueError('Conflicting seals for the same audit assignment')
+            # The obsolete cursor is already saved byte-for-byte. Keep the
+            # first checkpoint and prevent the ambiguous pair from being
+            # restored as an active answer. Committed answers remain in their
+            # lane catalogues for the normal commitment-bound reveal path.
+            mark_progress_conflict(path, retired_archive)
+            return
         if len(counts) <= len(earlier) and (answer is None or 'answer' in retained):
             return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +103,28 @@ def retain_progress(root, genesis, audit):
     atomic_bytes(path, canonical_bytes(progress) + b'\n')
 
 
-def retain_changed_assignment(folder, audit, state, anchor, rpc, callback, *, checkpoint_root=None, genesis=None):
+def mark_progress_conflict(path, archive):
+    if path is not None:
+        marker = path.with_suffix('.conflict')
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        if not marker.exists():
+            atomic_bytes(marker, canonical_bytes({'archive': str(archive)}) + b'\n')
+
+
+def archive_assignment_cursor(folder, raw):
+    digest = hashlib.sha256(raw).hexdigest()
+    destination = Path(folder) / 'retained-assignments' / f'{digest}.json'
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if destination.read_bytes() != raw:
+            raise ValueError('Retained audit identity changed')
+    else:
+        atomic_bytes(destination, raw)
+    return destination
+
+
+def retain_changed_assignment(folder, audit, state, anchor, rpc, callback, *, checkpoint_root=None, genesis=None,
+                              archive_conflict=False, catalogue_conflict=False):
     if not isinstance(anchor,str) or not re.fullmatch('[0-9a-f]{64}',anchor):
         raise ValueError('Explicit reconciliation anchor required')
     source=Path(folder)/'current.json'
@@ -99,13 +133,14 @@ def retain_changed_assignment(folder, audit, state, anchor, rpc, callback, *, ch
         raise ValueError('Current audit changed before retention')
     if rpc.call('getbestblockhash')!=anchor:
         raise RuntimeError('Chain changed during audit retirement; current work retained')
-    digest=hashlib.sha256(raw).hexdigest()
-    destination=Path(folder)/'retained-assignments'/f'{digest}.json'
-    destination.parent.mkdir(parents=True,exist_ok=True)
-    if destination.exists():
-        if destination.read_bytes()!=raw:raise ValueError('Retained audit identity changed')
-    else:atomic_bytes(destination,raw)
-    retain_progress(checkpoint_root, genesis, audit)
+    destination = archive_assignment_cursor(folder, raw)
+    if catalogue_conflict:
+        path, _ = progress_path(checkpoint_root, genesis, audit)
+        mark_progress_conflict(path, destination)
+    else:
+        retain_progress(checkpoint_root, genesis, audit, retired_archive=destination if archive_conflict else None)
+    if archive_conflict and rpc.call('getbestblockhash') != anchor:
+        raise PublicationPending('Chain changed during audit retirement; current work retained')
     # The callback can release only the exact pending local scheduling slot.
     # It does not grant a commitment, service credit, verdict or reward.
     callback(audit,anchor)

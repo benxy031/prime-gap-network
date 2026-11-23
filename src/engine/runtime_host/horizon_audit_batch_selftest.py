@@ -480,6 +480,80 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(sealed.read_bytes(), sealed_bytes)
         self.assertEqual(self.f.sent, [])
 
+    def test_stale_cursor_with_distinct_nonce_releases_the_slot_and_keeps_both_copies(self):
+        from horizon_assigned_audit_recovery import AssignedAuditRecovery
+        from horizon_audit_recovery import RetiredAuditSealConflict, progress_path, retain_progress
+        from report_commitment import audit_commitment
+
+        root = self.f.root / 'retirement-conflict'
+        genesis = '7' * 64
+        progress = root / 'work-cycles' / 'retained-audit-progress'
+        retired = []
+        source = SimpleNamespace(run_ticket=lambda *args: self.fail('A stale job must not recompute'))
+        worker = SimpleNamespace(root=root / 'audit-lanes' / '1', args=SimpleNamespace(genesis=genesis),
+                                 rpc=self.f, network_lock=self.f.lock, retained_audit_progress=progress,
+                                 source=source, running=threading.Event())
+        worker.root.mkdir(parents=True)
+        worker.running.set()
+        lane = NetworkAudits(worker, on_retired=lambda current, anchor: retired.append((current, anchor)))
+        ranges = [dict(index=i, start=str(i * 10 + 10), end=str(i * 10 + 20)) for i in range(5)]
+        counts = [4, 9, 1, 7, 2]
+        job = dict(request_id=REQUEST, ticket='d' * 64, report_root='e' * 64, slot=0, attempt=0,
+                   actor='0014' + '1' * 40, counts=counts, target_merit_q16=27 * 65536, ranges=ranges)
+
+        def seal(nonce):
+            return dict(job, answer=audit_commitment(job['ticket'], job['attempt'], list(range(5)),
+                                                    list(map(str, counts)), nonce * 64))
+
+        older, current = seal('8'), seal('9')
+        retain_progress(progress, genesis, older)
+        checkpoint = progress_path(progress, genesis, older)[0]
+        before = checkpoint.read_bytes()
+        path = lane.folder / 'current.json'
+        save(path, current)
+        active = path.read_bytes()
+        self.f.jobs = {0: dict(state='assigned', attempt=1)}
+        self.f.omit_audit_projection = True
+        with self.assertRaises(PublicationPending):
+            lane.process_one()
+        self.assertEqual(path.read_bytes(), active)
+        self.assertEqual(retired, [])
+        self.f.omit_audit_projection = False
+        self.assertEqual(lane.process_one(), 'retired')
+        self.assertEqual(retired, [(current, PARENT)])
+        self.assertFalse(path.exists())
+        self.assertEqual(checkpoint.read_bytes(), before)
+        self.assertEqual(next((lane.folder / 'retained-assignments').glob('*.json')).read_bytes(), active)
+        with self.assertRaises(RetiredAuditSealConflict):
+            lane.restore_retired_progress(current)
+
+        following = 'f' * 64
+        assigned = dict(attempt=0, state='assigned', actor=job['actor'], expired=False,
+                        actor_policy_accepted=True, ranges=ranges)
+        self.f.jobs = {0: assigned}
+        self.f.additional_jobs = {0: assigned}
+        fallback = self.f.call
+        def recovery_rpc(method, params=None, **kwargs):
+            if method == 'validateaddress':
+                return dict(isvalid=True, scriptPubKey=job['actor'])
+            if method == 'getpgnworkview' and len(params) == 3:
+                return dict(schema='PGN_WORK_VIEW_V1', kind='audits', offset=0, limit=100,
+                            state=dict(bestblockhash=PARENT, height=5, genesis=genesis),
+                            reports=[dict(request_id=request, ticket=job['ticket'], report_root=job['report_root'])
+                                     for request in (REQUEST, following)],
+                            audits=[dict(request_id=request, **self.f.state(request))
+                                    for request in (REQUEST, following)])
+            return fallback(method, params, **kwargs)
+
+        self.f.call = recovery_rpc
+        recovery = AssignedAuditRecovery(SimpleNamespace(root=root, args=worker.args, rpc=self.f,
+                                                          network_lock=self.f.lock, address=lambda: 'owner'))
+        adopted, complete = recovery.claim(lane.folder)
+        self.assertTrue(complete)
+        self.assertEqual(adopted['request_id'], following)
+        self.assertEqual(adopted['counts'], [])
+        self.assertEqual(self.f.sent, [])
+
     def test_complete_absence_at_a_later_tip_can_release_but_repeated_same_tip_cannot(self):
         from horizon_audit_recovery import assignment_absence_confirmed
         prior, current = '3'*64, '4'*64
@@ -556,6 +630,69 @@ class BatchTests(unittest.TestCase):
                 self.assertEqual(len(self.f.sent),1)
                 self.assertEqual([json.loads(bytes.fromhex(envelope))['action']
                                   for envelope in self.f.sent[0]],['assign'])
+
+    def test_already_committed_audit_retires_during_the_same_handoff(self):
+        from horizon_mining_flow import MiningFlow
+        from horizon_ticket_prefetch import TicketPrefetch
+        from report_commitment import audit_commitment
+
+        actor = '0014' + '1' * 40
+        ranges = [dict(index=i, start=str(i*10+10), end=str(i*10+20)) for i in range(5)]
+        local = audit_commitment('d'*64, 0, list(range(5)), ['7']*5, '3'*64)
+        other = audit_commitment('d'*64, 0, list(range(5)), ['7']*5, '5'*64)
+        self.f.jobs[0] = dict(state='assigned', actor=actor, expired=False,
+                              ranges=ranges, actor_policy_accepted=True)
+        worker = self.f.peers[0].worker
+        worker.root = self.f.peers[0].folder.parent
+        worker.args = SimpleNamespace(genesis='7'*64)
+        worker.audit_prefix_supported = True
+        worker.source = SimpleNamespace(run_ticket=lambda *args: self.fail('A sealed audit must not recalculate'))
+        worker.running = threading.Event()
+        worker.running.set()
+        retired, acknowledged = [], []
+        released, wakeups = [], []
+        flow = object.__new__(MiningFlow)
+        flow.worker = worker
+        flow.gpu = SimpleNamespace(retire_audit=lambda *binding: released.append(binding),
+                                   wake=lambda: wakeups.append(True))
+        flow.cycles = SimpleNamespace(bound_audit=lambda *binding: None)
+        flow.unbound_service_lock = threading.RLock()
+        flow.unbound_service_audits = {(REQUEST, 0, 0)}
+        flow.unbound_service_completed = set()
+        flow.prefetch = TicketPrefetch(None, worker.running, worker.quitting, worker.network_lock)
+        flow.prefetch.publish_service_observation(0, dict(enforced=True, may_request=False))
+
+        def interleaved_commit(_):
+            self.f.jobs[0].update(state='committed', commitment=other['commitment'])
+            self.f.tip = 'b'*64
+            return True
+
+        def retire(current, tip):
+            flow.retire_audit_cycle(0, current, tip)
+            retired.append((current['answer'], tip))
+
+        publisher = NetworkAudits(
+            worker, before_commit=interleaved_commit, on_retired=retire,
+            on_committed=lambda audit, tip: acknowledged.append(tip),
+        )
+        worker.audit_publishers = (publisher,)
+        audit = dict(request_id=REQUEST, ticket='d'*64, report_root='e'*64, slot=0,
+                     attempt=0, actor=actor, ranges=ranges, counts=[7]*5,
+                     target_merit_q16=27*65536, answer=local)
+        cursor = publisher.folder / 'current.json'
+        save(cursor, audit)
+        self.assertEqual(publisher.process_one(), 'retired')
+        self.assertFalse(cursor.exists())
+        self.assertEqual(retired, [(local, 'b'*64)])
+        self.assertEqual(released, [(0, REQUEST, 0, 0)])
+        self.assertEqual(wakeups, [True])
+        self.assertIsNone(flow.prefetch.service_observation())
+        self.assertEqual(flow.prefetch.native_service_generation, 1)
+        self.assertEqual(acknowledged, [])
+        self.assertEqual(self.f.sent, [])
+        original = next((publisher.folder/'retained-assignments').glob('*.json'))
+        self.assertEqual(json.loads(original.read_bytes())['answer'], local)
+        self.assertEqual(self.f.jobs[0]['commitment'], other['commitment'])
 
     def test_legacy_seal_with_unrecorded_actor_cannot_enter_the_active_cursor(self):
         from horizon_assigned_audit_recovery import AssignedAuditRecovery

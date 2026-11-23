@@ -10,8 +10,9 @@ from time import monotonic
 
 from horizon_assigned_audit_recovery import AssignmentRecoveryRpcUnavailable
 from horizon_audit_answers import AuditAnswers
-from horizon_coordination import CoordinationParentChanged, active_candidate, confirm_candidate, validate_intent
+from horizon_coordination import CoordinationParentChanged, PublicationPending, active_candidate, confirm_candidate, validate_intent
 from horizon_core_rpc import CoreRpcError
+from horizon_network_audits import RetainedAuditPublicationError
 from horizon_audit_snapshot import identity as hash_identity
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes
@@ -141,7 +142,7 @@ def retain_group_history(journal, raw, observation):
         atomic_bytes(receipt, observed)
 
 
-def apply_group(operations, *, on_intent=None, on_prepared=None, required_parent=None):
+def apply_group(operations, *, on_intent=None, on_prepared=None, required_parent=None, required_publisher=None):
     """Ordered (publisher, action, request, slot, attempt, body) ready rows.
 
     Re-sign the entire group after a parent conflict. Never re-use signatures
@@ -170,8 +171,15 @@ def apply_group(operations, *, on_intent=None, on_prepared=None, required_parent
                 for publisher, action, request, slot, attempt, body in operations:
                     if getattr(publisher.worker, 'quitting', None) is not None and publisher.worker.quitting.is_set():
                         raise RuntimeError('Audit publication stopped; durable work retained')
-                    proposal = publisher.event(action, request, slot, attempt, body,
-                                               preceding_events=envelopes)
+                    try:
+                        proposal = publisher.event(action, request, slot, attempt, body,
+                                                   preceding_events=envelopes)
+                    except RetainedAuditPublicationError as error:
+                        if required_publisher is None or publisher is required_publisher:
+                            raise
+                        # This seal stays durable. A ready independent lane must
+                        # not wait for another wallet to regain its signing key.
+                        proposal = dict(available=False, reason=str(error)[:300])
                     if not proposal.get('available'):
                         proposals.append(proposal)
                         continue
@@ -392,6 +400,10 @@ def ready_audit_view(peer, audit, anchor=None):
                          _report_absent=not reports and not audits), job if exact else None
 
 
+class AuditReadyStateChanged(PublicationPending):
+    """The waiting seal needs immediate reconciliation with the active branch."""
+
+
 def commit_ready(publisher, audit, retain_self):
     """Publish retained answers and narrow the attempt on an actual tip race."""
     peers = getattr(publisher.worker, 'audit_publishers', (publisher,))
@@ -455,7 +467,10 @@ def _commit_ready_at_tip(publisher, audit, retain_self, peers):
                 verify_committed_event(publisher.worker.rpc, audit, current['publication_intent'], anchor)
                 audit['publication_intent'] = current['publication_intent']
                 return dict(available=True, confirmed_block=current['publication_intent']['hash'])
-            raise RuntimeError(f'Ready audit changed before grouped commitment ({own_decline}); seal retained')
+            message = f'Ready audit changed before grouped commitment ({own_decline}); seal retained'
+            if job and job['state'] in ('committed', 'passed', 'failed'):
+                raise AuditReadyStateChanged(message)
+            raise RuntimeError(message)
         # A lost or duplicated local cursor cannot put two commitments for
         # the same canonical attempt in a single signed prefix.
         own = identity(audit)
@@ -481,7 +496,8 @@ def _commit_ready_at_tip(publisher, audit, retain_self, peers):
             if any(peer is publisher for peer, _ in included):
                 retain_self(intent)
         outcomes = apply_group([(peer, 'commit', *identity(row), row['answer']['commitment']) for peer, row in selected],
-                               on_intent=retain, on_prepared=retain_included, required_parent=anchor)
+                               on_intent=retain, on_prepared=retain_included, required_parent=anchor,
+                               required_publisher=publisher)
         return outcomes[next(i for i, (peer, _) in enumerate(selected) if peer is publisher)]
 
 

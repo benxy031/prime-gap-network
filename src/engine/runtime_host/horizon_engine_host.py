@@ -35,7 +35,7 @@ from pgn_index import SessionIndexWalBudgetExceeded
 
 from horizon_engine_capabilities import NATIVE_SOURCE, IMAGES, qualified_workers
 
-ENGINE_HOST_VERSION = "2026.11.23.104"
+ENGINE_HOST_VERSION = "2026.11.23.106"
 
 GAP = re.compile(r"\bGAP merit=([0-9.eE+\-]+) gap=(\d+) lower=(\d+) upper=(\d+)")
 COUNTERS = re.compile(r"\[pgn-counters\].*?\bpositions=(\d+)\b.*?\btests=(\d+)\b")
@@ -77,6 +77,55 @@ def close_durable_output(store, job, *args, **kwargs):
     """No caller observation or process close substitutes for the WAL return."""
     store.closed(*args, **kwargs)
     return job.acknowledge_output()
+
+
+def verified_bitmap_oom(job):
+    """A failed, closed Windows dispatch, never a work-completion receipt."""
+    if not job.committed or not job.resumed or not job.stream_finished.is_set() or job.output_closed.is_set():
+        return False
+    receipt = job.result()
+    owner = job.manager.owner
+    if receipt is None or receipt['exit'] != 2 or owner.poll() != 2:
+        return False
+    final = getattr(owner, '_done_result', None)
+    if (not isinstance(final, dict) or final.get('schema') != 'PGN_OWNER_OUTPUT_V2'
+            or final.get('token') != owner.token or final.get('image_sha256') != owner.image_sha256
+            or final.get('closed') is not True or final.get('started') is not True
+            or final.get('orphan') is not False or final.get('error') is not None
+            or final.get('exit') != 2 or final.get('output_job') is not None):
+        return False
+    from pgn_output_spool import SpoolError, bound_job_context, verified_segments
+    try:
+        context = bound_job_context(owner.root, owner.token)
+        if context is None:
+            return False
+        binding = context['binding']
+        if binding['sequence'] != job.sequence or binding['nonce'] != job.nonce or binding['command'] != list(map(str, job.args)):
+            return False
+        spool = final.get('output_spool')
+        if not isinstance(spool, dict):
+            return False
+        start, end = binding['output_start'], spool.get('end_offset')
+        if type(start) is not int or type(end) is not int or not 0 < end - start <= 65536:
+            return False
+        paths = verified_segments(owner.root / 'output', spool, owner.token)
+        if start < spool['base_offset']:
+            return False
+        output = bytearray()
+        for segment, path in zip(spool['segments'], paths, strict=True):
+            if segment['end'] <= start:
+                continue
+            with path.open('rb') as stream:
+                data = stream.read(segment['bytes'] + 1)
+            if len(data) != segment['bytes'] or hashlib.sha256(data).hexdigest() != segment['sha256']:
+                return False
+            output.extend(data[max(0, start - segment['start']):])
+        if len(output) != end - start or not output.endswith(b"\n"):
+            return False
+        # This line is pinned to the currently qualified original direct PE.
+        return output.split(b"\n")[-2].removesuffix(b"\r") == b"PGN CUDA out of memory line1178"
+    except (OSError, ValueError, TypeError, KeyError, SpoolError):
+        return False
 
 
 def commit_bound_output(store, job, owner_file):
@@ -572,8 +621,28 @@ class EngineService:
                             self.publish(store, "SEARCHING", native_pid=job.pid)
                 finally:
                     reader_stop.set()
-                    if job.poll() is not None:
+                    if job.stream_finished.is_set() or job.poll() is not None:
                         reader.join(timeout=5)
+                if (os.name == 'nt' and getattr(self, 'complement', None) is None
+                        and not self.pause_requested() and job.stream_finished.is_set()
+                        and (store.meta["positions"], store.meta["tests"]) == (old_positions, old_tests)):
+                    lower = [candidate for candidate in candidates if candidate[0] < identity["profile_k"]]
+                    if lower and verified_bitmap_oom(job):
+                        closed_instance = chunk["instance"]
+                        self.manager.shutdown()
+                        if instance_alive(closed_instance):
+                            raise RuntimeError("Previous bitmap allocation owner remains live")
+                        store.closed("PAUSED", active, paused, instance_closed=True)
+                        if self.pause_requested():
+                            self.publish(store, "PAUSED")
+                            return {"state": "PAUSED", "ticket_id": cfg["ticket_id"]}
+                        if chunk.get("trusted_checkpoint") is None:
+                            store.retire_unstarted_chunk()
+                        else:
+                            self.boundary(store, start + old_positions)
+                            store.retire_closed_prefix(native_positions, native_tests)
+                        candidates = lower
+                        continue
                 code = job.wait(timeout=90)
                 duration, _ = clock.finish()
                 active += duration

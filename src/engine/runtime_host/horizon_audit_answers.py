@@ -182,7 +182,7 @@ class AuditAnswers:
                 return False
             return db.execute('SELECT 1 FROM answers WHERE name=?', (name,)).fetchone() is not None
 
-    def recover_seal(self,name,expected):
+    def recover_seal(self,name,expected,*,require_durable=False):
         """Recover before any nonce generation or mutable answer-file write."""
         self.checked_name(name)
         with self._seal_lock:
@@ -199,6 +199,8 @@ class AuditAnswers:
                 # A complete immutable copy may predate the catalogue commit
                 # when that first transaction was interrupted.
                 if digest is None:digest=actual
+            if require_durable and digest is None:
+                return None
             current=None
             if named.is_file():
                 try:current,actual=self.read(name)
@@ -206,6 +208,8 @@ class AuditAnswers:
                     if digest is None and sealed is None:raise
                 else:
                     if digest is None or actual==digest:
+                        if digest is None and expected.get('answer') not in (None,current['answer']):
+                            raise AuditSealRecoveryRequired('Conflicting unregistered audit seals; both copies retained')
                         try:
                             self.check_binding(current,expected)
                         except AuditSealRecoveryRequired:

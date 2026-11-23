@@ -3,6 +3,10 @@ from pathlib import Path
 import datetime as dt, json, os, queue, struct, threading, time, uuid
 from dataclasses import dataclass
 
+
+TERMINAL_DRAIN_GRACE_SECONDS = 5.0
+
+
 class ResidentProtocolError(RuntimeError):
     pass
 
@@ -139,6 +143,8 @@ class Job:
         self.lines = queue.Queue(maxsize=128)
         self.output_closed = threading.Event()
         self.stream_finished = threading.Event()
+        self._owner_exit_observed = None
+        self._terminal_drain_lock = threading.Lock()
         self._result = None
         self._input_guard = None
         self._receipt_error_since = None
@@ -163,7 +169,11 @@ class Job:
             try:
                 value = self.lines.get(timeout=0.05)
             except queue.Empty:
-                if self.manager.owner.poll() is not None and self.lines.empty():
+                if self.stream_finished.is_set() and self.lines.empty():
+                    return
+                # The owner can finish while its already persisted output is
+                # still being transferred into this queue by the reader.
+                if self.poll() is not None and self.lines.empty():
                     return
                 continue
             if value is None:
@@ -218,6 +228,18 @@ class Job:
             return None
         closed = self.manager.owner.poll()
         if closed is not None:
+            if not self.output_closed.is_set() and not self.stream_finished.is_set():
+                with self._terminal_drain_lock:
+                    now = time.monotonic()
+                    if self._owner_exit_observed is None:
+                        self._owner_exit_observed = now
+                    if now - self._owner_exit_observed < TERMINAL_DRAIN_GRACE_SECONDS:
+                        return None
+            # Receipt/terminal publication may have raced the owner check.
+            # The exit alone still cannot establish successful computation.
+            value = self.result()
+            if self._receipt_error_since is not None:
+                return None
             if value is None:
                 return closed or 8
             if self.output_closed.is_set():

@@ -187,6 +187,54 @@ class SealRecoveryTests(unittest.TestCase):
         self.assertEqual(self.compute_calls, 0)
         self.assertEqual(self.commits, [])
 
+    def test_unregistered_conflicting_answers_remain_unpublished(self):
+        self.remove_registration()
+        named = self.named.read_bytes()
+        competing = deepcopy(self.audit)
+        competing['answer'] = audit_commitment(self.ticket, 0, list(range(5)), ['7'] * 5, '5' * 64)
+        save(self.current, competing)
+        cursor = self.current.read_bytes()
+        with self.assertRaisesRegex(AuditSealRecoveryRequired, 'Conflicting unregistered audit seals'):
+            self.audits.process_one()
+        self.assertEqual(self.named.read_bytes(), named)
+        self.assertEqual(self.current.read_bytes(), cursor)
+        self.assertEqual(self.commits, [])
+
+    def test_chain_change_after_archival_keeps_the_live_cursor(self):
+        from horizon_audit_recovery import progress_path
+        from horizon_coordination import PublicationPending
+
+        self.remove_registration()
+        self.audit['actor'] = '0014' + '4' * 40
+        save(self.named, self.audit)
+        self.audits.answers.register([self.name])
+        seal = self.audits.folder / 'sealed-answers' / (self.name + '.json')
+        original = seal.read_bytes()
+        competing = deepcopy(self.audit)
+        competing['answer'] = audit_commitment(self.ticket, 0, list(range(5)), ['7'] * 5, '5' * 64)
+        save(self.current, competing)
+        cursor = self.current.read_bytes()
+        self.audits.worker.args.genesis = '7' * 64
+        anchors = iter(['a' * 64] * 3 + ['b' * 64])
+        self.audits.worker.rpc = SimpleNamespace(call=lambda method: next(anchors))
+        self.audits.state = lambda request: dict(request_id=request, jobs=[
+            dict(slot=1, attempt=0, state='assigned', expired=True)])
+        retired = []
+        self.audits.on_retired = lambda value, anchor: retired.append(value)
+
+        with self.assertRaisesRegex(PublicationPending, 'Chain changed during audit retirement'):
+            self.audits.process_one()
+        root, genesis = self.audits.retained_progress_location()
+        progress, _ = progress_path(root, genesis, competing)
+        self.assertTrue(progress.with_suffix('.conflict').is_file())
+        self.assertFalse(progress.exists())
+        archived = next((self.audits.folder / 'retained-assignments').glob('*.json'))
+        self.assertEqual(archived.read_bytes(), cursor)
+        self.assertEqual(self.current.read_bytes(), cursor)
+        self.assertEqual(seal.read_bytes(), original)
+        self.assertEqual(retired, [])
+        self.assertEqual(self.commits, [])
+
     def test_current_lost_answer_reuses_registered_seal_without_publication_intent(self):
         partial = deepcopy(self.audit)
         partial.pop('answer')

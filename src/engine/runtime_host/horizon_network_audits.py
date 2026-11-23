@@ -12,7 +12,8 @@ from horizon_coordination import confirm_candidate, validate_intent, Coordinatio
 from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch
 from horizon_owner_reports import OwnerReports
 from horizon_audit_progress import partition_identity, presentation as audit_presentation
-from horizon_audit_recovery import assignment_absence_confirmed, recover_retired_progress, retain_changed_assignment
+from horizon_audit_recovery import (RetiredAuditSealConflict, archive_assignment_cursor, assignment_absence_confirmed,
+                                    recover_retired_progress, retain_changed_assignment)
 from horizon_audit_snapshot import AnchoredAuditStates, identity
 
 def save(file, value):
@@ -247,37 +248,67 @@ class NetworkAudits:
         root, genesis = self.retained_progress_location()
         return recover_retired_progress(root, genesis, audit)
 
-    def retire_assignment(self, audit, state, anchor):
+    def retire_assignment(self, audit, state, anchor, *, archive_conflict=False):
         root, genesis = self.retained_progress_location()
+        catalogue_conflict = False
         with self.worker.network_lock:
             if self.worker.rpc.call('getbestblockhash') != anchor:
                 raise CoordinationParentChanged('Chain changed during audit retirement; current work retained')
             if audit.get('answer'):
                 name = f"{audit['request_id']}-{audit['slot']}-{audit['attempt']}"
                 self.answers.check_binding(audit, audit)
-                retained = self.answers.recover_seal(name, audit)
-                if retained is None:
-                    save(self.folder / (name + '.json'), audit)
-                    self.answers.register([name])
-                elif retained['answer'] != audit['answer']:
-                    raise ValueError('Current cursor differs from the retained audit seal')
+                try:
+                    retained = self.answers.recover_seal(name, audit)
+                except AuditSealBindingMismatch:
+                    if not archive_conflict:
+                        raise
+                    # The caller proved that this cursor is no longer
+                    # authorized. Archive it without replacing the other seal.
+                else:
+                    if retained is None:
+                        save(self.folder / (name + '.json'), audit)
+                        self.answers.register([name])
+                    elif retained['answer'] != audit['answer']:
+                        if not archive_conflict:
+                            raise ValueError('Current cursor differs from the retained audit seal')
+                        catalogue_conflict = True
             return retain_changed_assignment(
                 self.folder, audit, state, anchor, self.worker.rpc,
                 self.on_retired or (lambda value, block: None),
-                checkpoint_root=root, genesis=genesis,
+                checkpoint_root=root, genesis=genesis, archive_conflict=archive_conflict,
+                catalogue_conflict=catalogue_conflict,
             )
 
     def restore_reassigned_answer(self, audit):
         """Recover one exact sealed answer; never scan or recompute a range."""
         name = audit['request_id'] + '-' + str(audit['slot']) + '-' + str(audit['attempt'])
-        audit = self.restore_retired_progress(audit)
-        cached = self.answers.recover_seal(name, audit)
+        try:
+            audit = self.restore_retired_progress(audit)
+        except RetiredAuditSealConflict:
+            # The shared checkpoint is ambiguous. An existing, independently
+            # recorded seal for this lane still binds the exact assignment.
+            cached = self.answers.recover_seal(name, audit, require_durable=True)
+            if cached is None:
+                raise
+        else:
+            cached = self.answers.recover_seal(name, audit)
         if cached is None:
             return audit
-        if audit.get('answer') and audit['answer'] != cached['answer']:
-            raise ValueError('Active and inactive audit seals disagree')
         if 'target_merit_q16' in audit and audit['target_merit_q16'] != cached.get('target_merit_q16'):
             raise ValueError('Retained audit seal target differs from the active target')
+        if audit.get('answer') and audit['answer'] != cached['answer']:
+            if audit.get('publication_intent'):
+                raise PublicationPending('Audit publication intent and recovered seal disagree; both retained')
+            # The recovered answer has the existing catalogue digest or an
+            # independent immutable copy. Preserve the mutable copy in case
+            # it is later needed to reconcile a network publication.
+            with self.worker.network_lock:
+                journal = self.folder / 'current.json'
+                with journal.open('rb') as stream:
+                    raw = stream.read(262145)
+                if len(raw) > 262144 or json.loads(raw) != audit:
+                    raise PublicationPending('Audit cursor changed during seal reconciliation')
+                archive_assignment_cursor(self.folder, raw)
         # A scheduling cursor can lose its answer without a publication intent
         # or cycle callback. The seal is independent of both mutable contexts.
         restored = dict(cached)
@@ -649,16 +680,16 @@ class NetworkAudits:
             if expired_or_foreign or replaced:
                 if anchor is None:
                     anchor = self.worker.rpc.call('getbestblockhash')
-                self.retire_assignment(audit, current, anchor)
+                self.retire_assignment(audit, current, anchor, archive_conflict=True)
                 return 'retired'
             try:
                 restored = self.restore_reassigned_answer(audit)
-            except AuditSealBindingMismatch:
+            except (AuditSealBindingMismatch, RetiredAuditSealConflict):
                 if self.on_retired is None or not job or job["state"] not in ("passed", "failed"):
                     raise
                 # Core finalized this slot. Its verdict cannot authenticate a
                 # differently bound local seal or stop the next cycle.
-                self.retire_assignment(audit, current, anchor)
+                self.retire_assignment(audit, current, anchor, archive_conflict=True)
                 return 'retired'
             if restored != audit:
                 save(journal, restored)
@@ -672,7 +703,7 @@ class NetworkAudits:
                             or job.get("commitment") != audit.get("answer", {}).get("commitment")
                             or not audit.get("publication_intent")):
                         if self.on_retired is not None:
-                            self.retire_assignment(audit, current, anchor)
+                            self.retire_assignment(audit, current, anchor, archive_conflict=True)
                             return 'retired'
                         raise RuntimeError("Audit assignment changed; private computation retained for reconciliation")
                     # The per-audit intent survives another lane overwriting the
@@ -801,13 +832,19 @@ class NetworkAudits:
             save(journal, audit)
             save(self.folder / (name + ".json"), audit)
         if getattr(self.worker, 'audit_prefix_supported', False):
-            from horizon_audit_batch import commit_ready
+            from horizon_audit_batch import AuditReadyStateChanged, commit_ready
             # The calculation barrier is above this block. Once ready, only
             # publish or reconcile the journal under the shared lane lock.
             with self.worker.network_lock:
                 audit['commit_ready'] = True
                 save(journal, audit)
-                receipt = commit_ready(self, audit, retain_publication)
+                try:
+                    receipt = commit_ready(self, audit, retain_publication)
+                except AuditReadyStateChanged:
+                    # Another seal may already be confirmed for this exact
+                    # assignment. Resolve it now without recomputing or
+                    # waiting for the error loop to revisit the cursor.
+                    return self.resume_grouped_commit(journal, audit)
                 return self.finish_commit(journal, audit, receipt)
         else:
             receipt = self.apply("commit", audit["request_id"], audit["slot"], audit["attempt"], answer["commitment"],
@@ -841,7 +878,12 @@ class NetworkAudits:
                 # A canonical commitment already satisfied this assignment.
                 # Without its exact local receipt, release only the scheduling
                 # cursor. Never acknowledge the same answer a second time.
-                self.retire_assignment(audit, state, anchor)
+                obsolete = (job is None or
+                            job.get("expired") is True or
+                            bool(job.get("actor") and job["actor"] != audit.get("actor")) or
+                            bool(job.get("ranges") and job["ranges"] != audit["ranges"]) or
+                            job["state"] in ("committed", "passed", "failed"))
+                self.retire_assignment(audit, state, anchor, archive_conflict=obsolete)
                 return "retired"
             if committed:
                 verify_committed_event(self.worker.rpc, audit, intent, anchor)
