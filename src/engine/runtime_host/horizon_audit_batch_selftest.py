@@ -42,6 +42,7 @@ class Fixture:
         if method=='getpgnreports':return [dict(ticket='d'*64,report_root=self.report_root)]
         if method=='getpgnscientificwork':return dict(target_numerator='27',target_denominator='1')
         if method=='getpgnauditstate':return [self.state(params[2])]
+        if method=='getpgnauditactivity':raise CoreRpcError(-32601,'Method not found')
         if method=='getpgnworkview':
             request=params[3]
             return dict(schema='PGN_WORK_VIEW_V1',kind='audits',request_id=request,
@@ -716,6 +717,8 @@ class BatchTests(unittest.TestCase):
                 return dict(isvalid=True,scriptPubKey=actor)
             if method == 'getbestblockhash':
                 return PARENT
+            if method == 'getpgnauditactivity':
+                raise CoreRpcError(-32601,'Method not found')
             self.assertEqual(method,'getpgnworkview')
             return dict(schema='PGN_WORK_VIEW_V1',kind='audits',offset=0,limit=100,
                 state=dict(bestblockhash=PARENT,height=5,genesis=genesis),

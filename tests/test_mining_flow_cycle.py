@@ -185,8 +185,6 @@ class MiningFlowCycleTests(unittest.TestCase):
             flow.gpu = ResidentGpuQueue(None, threading.Event(), threading.Event(),
                                         None, None, None, None, may_start=flow.may_start_work)
             flow.gpu.submit(dict(ticket_id='search'), dict(role='search', work_cycle=cycle), 1)
-            flow.gpu.submit(dict(ticket_id='regular'), dict(role='audit', work_cycle=cycle,
-                            physical_cycle=True, audit_position=1), 1)
             context = dict(role='audit', audit_position=0, presentation=dict(audit_id=extra_id),
                            audit_request_id=extra['request_id'], audit_slot=0, audit_attempt=0,
                            audit_actor=extra['actor'])
@@ -202,20 +200,85 @@ class MiningFlowCycleTests(unittest.TestCase):
             flow.gpu.search[0].context['work_cycle'] = cycle
             self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'extra')
             self.assertIsNone(flow.physical_audits.snapshot(cycle)[0])
-            self.assertIsNone(flow.gpu._next())
+            regular['physical_cycle'] = cycle
+            flow.gpu.submit(dict(ticket_id='regular'), dict(role='audit', work_cycle=cycle,
+                            physical_cycle=True, audit_position=1, audit_request_id=regular['request_id'],
+                            audit_slot=regular['slot'], audit_attempt=regular['attempt'],
+                            audit_actor=regular['actor']), 1)
+            self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'regular')
             self.assertFalse(flow.physical_audits.catchup_ready(cycle))
             block = 'f' * 64
             flow.physical_audits.completed_extra(cycle, extra_id, block)
             first = dict(request_id='a' * 64, slot=0, attempt=0)
             flow.physical_audits.bind(cycle, 0, first)
+            first['physical_cycle'] = cycle
+            flow.audit_lanes[0].current_audit = first
             flow.gpu.submit(dict(ticket_id='first'), dict(role='audit', work_cycle=cycle,
-                            physical_cycle=True, audit_position=0), 1)
+                            physical_cycle=True, audit_position=0, audit_request_id=first['request_id'],
+                            audit_slot=first['slot'], audit_attempt=first['attempt']), 1)
             self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'first')
             flow.physical_audits.committed(cycle, 0, first, block)
-            self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'regular')
             flow.physical_audits.committed(cycle, 1, regular, block)
             self.assertEqual(flow.physical_audits.completed_extras(cycle), [extra_id])
             self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'search')
+
+    def test_assigned_native_audit_can_compute_while_other_lane_recovers(self):
+        from horizon_cycle_execution import CycleExecution
+        from horizon_gpu_queue import ResidentGpuQueue
+
+        class PublicationCondition(threading.Condition):
+            def wait(self, timeout=None):
+                waiting.set()
+                return super().wait(timeout)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cycle, anchor = 'b' * 64, 'c' * 64
+            waiting, running, quitting = threading.Event(), threading.Event(), threading.Event()
+            running.set()
+            flow = object.__new__(MiningFlow)
+            flow.worker = SimpleNamespace(running=running, quitting=quitting)
+            flow.finalizer = None
+            flow.outbox = SimpleNamespace(capacity_available=lambda: True)
+            flow.cycles = SimpleNamespace(snapshot=lambda _: dict(stage='prepared', hold=''),
+                                          may_search=lambda _: True)
+            flow.physical_audits = CycleExecution(Path(temporary), 'a' * 64)
+            flow.physical_audits.mark_native(cycle, {cycle})
+            flow.physical_audits.prepare(cycle, {cycle})
+            actor = '0014' + 'e' * 40
+            audit = dict(request_id='d' * 64, slot=1, attempt=2, physical_cycle=cycle, actor=actor)
+            flow.audit_lanes = [SimpleNamespace(current_audit=None), SimpleNamespace(current_audit=audit)]
+            flow.physical_audits.bind(cycle, 1, audit)
+            flow.bind_audit_cycle = lambda *_: None
+            flow.gpu = ResidentGpuQueue(None, running, quitting, None, None, None, None,
+                                        may_start=flow.may_start_work)
+            flow.gpu.condition = PublicationCondition()
+            flow.gpu.submit(dict(ticket_id='search'), dict(role='search', work_cycle=cycle), 1)
+            exact = dict(role='audit', work_cycle=cycle, physical_cycle=True, audit_position=1,
+                         audit_request_id=audit['request_id'], audit_slot=1, audit_attempt=2, audit_actor=actor)
+            flow.gpu.submit(dict(ticket_id='retired'), dict(exact, audit_attempt=1), 1)
+            flow.gpu.submit(dict(ticket_id='other_actor'), dict(exact, audit_actor='0014' + 'a' * 40), 1)
+            flow.gpu.submit(dict(ticket_id='assigned'), exact, 1)
+            self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'assigned')
+            self.assertIsNone(flow.gpu._next())
+
+            permitted = []
+            publisher = threading.Thread(target=lambda: permitted.append(flow.before_audit_commit(1, audit)))
+            publisher.start()
+            try:
+                self.assertTrue(waiting.wait(2))
+                self.assertEqual(permitted, [])
+                flow.physical_audits.unavailable(cycle, 0, anchor)
+                flow.gpu.wake()
+                publisher.join(2)
+                self.assertEqual(permitted, [True])
+                self.assertIsNone(flow.gpu._next())
+                flow.physical_audits.committed(cycle, 1, audit, anchor)
+                flow.physical_audits.skip_catchup(cycle, anchor)
+                self.assertEqual(flow.gpu._next().ticket['ticket_id'], 'search')
+            finally:
+                quitting.set()
+                flow.gpu.wake()
+                publisher.join(2)
 
     def test_old_partition_archive_cannot_bind_as_fresh(self):
         from horizon_audit_progress import partition_identity
@@ -346,6 +409,9 @@ class MiningFlowCycleTests(unittest.TestCase):
                     if method == 'getwalletinfo': return dict(private_keys_enabled=True)
                     if method == 'decodescript': return dict(address='fixture-auditor')
                     if method == 'validateaddress':return dict(isvalid=True,scriptPubKey='0014'+'1'*40)
+                    if method == 'getpgnauditactivity':
+                        from horizon_core_rpc import CoreRpcError
+                        raise CoreRpcError(-32601, 'Method not found')
                     if method == 'getpgnworkview':
                         if len(args) == 4 and args[3] in self.jobs:
                             requested = args[3]

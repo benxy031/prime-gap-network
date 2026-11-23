@@ -253,9 +253,23 @@ class MiningFlow:
         if job.context["role"] == "audit":
             if cycle is not None:
                 if job.context.get("physical_cycle"):
-                    return (not self.cycles.snapshot(cycle)["hold"]
-                            and (not self.physical_audits.is_native(cycle) or self.fresh_boundary() == cycle)
-                            and self.physical_audits.may_audit(cycle, job.context["audit_position"]))
+                    native = self.physical_audits.is_native(cycle)
+                    if self.cycles.snapshot(cycle)["hold"] or (native and self.fresh_boundary() != cycle):
+                        return False
+                    position = job.context["audit_position"]
+                    if not native:
+                        return self.physical_audits.may_audit(cycle, position)
+                    # An exact assigned partition can be computed while its
+                    # sibling is recovered or published. The publication and
+                    # search barriers still wait for the same confirmations.
+                    tasks = self.physical_audits.snapshot(cycle)
+                    audit = self.audit_lanes[position].current_audit
+                    identity = (job.context.get('audit_request_id'), job.context.get('audit_slot'),
+                                job.context.get('audit_attempt'))
+                    return bool(tasks and audit and audit.get('physical_cycle') == cycle
+                                and audit.get('actor') == job.context.get('audit_actor')
+                                and self.service_identity(audit) == identity
+                                and tasks[position] == self.physical_audits.ref(audit))
                 return self.cycles.may_audit(cycle, job.context["audit_position"])
             owner = self.extra_audit_owner(job)
             journal = getattr(self, 'physical_audits', None)
@@ -651,6 +665,18 @@ class MiningFlow:
 
     def before_audit_commit(self, position, audit):
         self.bind_audit_cycle(position, audit)
+        physical_cycle = audit.get("physical_cycle")
+        if position == 1 and physical_cycle and self.physical_audits.is_native(physical_cycle):
+            with self.gpu.condition:
+                while self.worker.running.is_set() and not self.worker.quitting.is_set():
+                    tasks = self.physical_audits.snapshot(physical_cycle)
+                    if (not tasks or tasks[position] != self.physical_audits.ref(audit)
+                            or self.cycles.snapshot(physical_cycle)["hold"]):
+                        return False
+                    if self.physical_audits.may_audit(physical_cycle, position):
+                        return True
+                    self.gpu.condition.wait(.1)
+            return False
         cycle = audit.get("work_cycle")
         if cycle is None:
             return True
@@ -908,13 +934,21 @@ class MiningFlow:
         bind = getattr(worker.source, "bind_cycle", None)
         if bind is not None:
             cycle = job.context.get("work_cycle")
-            if cycle:
-                state = self.cycles.snapshot(cycle)
-                if job.context.get("physical_cycle"):
-                    state["audits"] = self.physical_audits.snapshot(cycle)
-                bind(job.ticket, job.context, state)
-            else:
+            state = self.cycles.snapshot(cycle) if cycle else None
+            if state is not None and job.context.get("physical_cycle"):
+                tasks = self.physical_audits.snapshot(cycle)
+                position = job.context["audit_position"]
+                if (tasks and tasks[position] and tasks[position]["stage"] == "assigned"
+                        and all(task and task["stage"] in ("committed", "unavailable")
+                                for task in tasks[:position])):
+                    state["audits"] = tasks
+                else:
+                    # Early GPU work has no ordered mixed CPU grant.
+                    state = None
+            if state is None:
                 worker.source.clear_cycle()
+            else:
+                bind(job.ticket, job.context, state)
         save(worker.root / "gpu-active.json", dict(ticket_id=job.ticket["ticket_id"],
              sequence=job.view_sequence, role=job.context["role"], context=job.context))
         (worker.root / "pause.request").unlink(missing_ok=True)
