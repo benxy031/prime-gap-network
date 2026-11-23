@@ -403,15 +403,21 @@ class NetworkWorker:
         save(self.root / "coordination-intent.json", intent)
         return dict(block_hash=intent["hash"], operation_sha256=operation)
 
-    def address(self):
+    def address(self, *, create=True):
         if self.args.miner:
             selected = self.args.miner
         else:
             try:
                 known = self.rpc.call("getaddressesbylabel", ["Horizon miner"], wallet=True)
             except RuntimeError:
+                if not create:
+                    raise
                 known = {}
-            selected = next(iter(known)) if known else self.rpc.call("getnewaddress", ["Horizon miner", "bech32"], wallet=True)
+            selected = next(iter(known), None)
+            if selected is None and create:
+                selected = self.rpc.call("getnewaddress", ["Horizon miner", "bech32"], wallet=True)
+        if not create:
+            return selected
         admission = getattr(self, "admission", None)
         if admission is not None:
             admission.select_identity(selected)

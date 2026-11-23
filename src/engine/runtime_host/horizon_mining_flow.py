@@ -14,6 +14,8 @@ from horizon_preseal_queue import PresealQueue
 from horizon_ticket_prefetch import TicketPrefetch
 from horizon_work_cycle import WorkCycleJournal
 from horizon_core_rpc import CoreRpcError
+from horizon_native_work_duty import identity as work_duty_identity, read_status as read_work_duty_status
+from horizon_testnet_admission import script_for
 from horizon_service_presentation import audit_view_ref, preparation_view
 from horizon_ticket_archive import SCHEMA as COMPLETED_TICKET_SCHEMA
 from horizon_audit_progress import presentation as audit_presentation
@@ -103,7 +105,7 @@ class AuditGpuProxy:
             try:
                 return future.result(.2)
             except TimeoutError:
-                continue
+                self.flow.refresh_unbound_service()
         raise CancelledError("Audit work retained for restart")
 
 class MiningFlow:
@@ -267,7 +269,16 @@ class MiningFlow:
         # journals reconstruct the bound after restart; no new credit ledger.
         observe=getattr(self.prefetch,'service_observation',None)
         status=observe() if callable(observe) else getattr(self.prefetch,'native_service_status',None)
-        if not isinstance(status,dict) or not status.get('enforced'):return False
+        if status is None:
+            request = getattr(self.prefetch, 'request_missing_service_observation', None)
+            if callable(request):
+                request()
+        if not isinstance(status, dict) or not status.get('enforced'):
+            return False
+        observed_actor = status.get('observed_actor')
+        audit_actor = job.context.get('audit_actor')
+        if observed_actor is not None and audit_actor is not None and observed_actor != audit_actor:
+            return False
         identity=(job.context.get('audit_request_id'),job.context.get('audit_slot'),job.context.get('audit_attempt'))
         known={self.service_identity(ref)for ref in status.get('credits',[])}
         # Only a fresh post-confirmation Core observation can retire a completed
@@ -278,7 +289,9 @@ class MiningFlow:
         self.unbound_service_audits.difference_update(retired)
         self.unbound_service_completed.difference_update(retired)
         if not self.unbound_service_seeded:
-            candidates=[lane.current_audit for lane in self.audit_lanes if lane.current_audit]
+            retained = [lane.current_audit for lane in self.audit_lanes]
+            candidates = [audit for audit in retained
+                          if audit and (observed_actor is None or audit.get('actor') in (None, observed_actor))]
             candidates.sort(key=lambda a:(-len(a.get('counts',[])),self.service_identity(a)))
             self.unbound_service_audits.update(known)
             for audit in candidates:
@@ -290,6 +303,41 @@ class MiningFlow:
         if len(known|self.unbound_service_audits)>=2:return False
         self.unbound_service_audits.add(identity)
         return True
+
+    def read_unbound_service(self):
+        worker = self.worker
+        signer = worker.address(create=False)
+        if not signer:
+            return None
+        actor = script_for(worker.rpc, signer)
+        status = read_work_duty_status(worker.rpc, signer, worker.args.genesis)
+        if (status is None or not status['enforced'] or status['may_request'] is not False
+                or status.get('status') != 'audit_work_required'):
+            return None
+        credits = status.get('credits')
+        if (not isinstance(credits, list) or len(credits) > 2
+                or any(not isinstance(ref, dict) or not work_duty_identity(ref.get('request_id'))
+                       or type(ref.get('slot')) is not int or ref['slot'] not in (0, 1)
+                       or type(ref.get('attempt')) is not int or not 0 <= ref['attempt'] < 2**32
+                       for ref in credits)
+                or len({self.service_identity(ref) for ref in credits}) != len(credits)):
+            raise ValueError('Invalid confirmed audit service credits')
+        if worker.address(create=False) != signer:
+            return None
+        return dict(status, observed_actor=actor)
+
+    def refresh_unbound_service(self):
+        worker = self.worker
+        try:
+            refreshed = self.prefetch.refresh_requested_service_observation(
+                self.read_unbound_service
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            # Keep the queued partitions intact while the owning Core is busy.
+            worker.network_notice = 'Audit service status unavailable: ' + str(error)[:300]
+            return
+        if refreshed:
+            self.gpu.wake()
 
     def physical_ready(self, cycle):
         state = self.cycles.snapshot(cycle)

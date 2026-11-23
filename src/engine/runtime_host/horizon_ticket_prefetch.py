@@ -21,6 +21,9 @@ class TicketPrefetch:
         self.error = None
         self.native_service_status = None
         self.native_service_generation = 0
+        self.service_observation_requested = False
+        self.service_observation_running = False
+        self.next_service_observation = 0.0
         self.thread = threading.Thread(target=self._run, name="ticket-preparation", daemon=True)
 
     def start(self):
@@ -36,11 +39,41 @@ class TicketPrefetch:
         with self.condition:
             return self.native_service_status
 
+    def request_missing_service_observation(self):
+        with self.condition:
+            if self.native_service_status is None:
+                self.service_observation_requested = True
+
+    def refresh_requested_service_observation(self, read_status):
+        # Reused by both audit producers. Never do RPC under the GPU queue
+        # lock or depend on the ticket allocator reaching its own gate.
+        with self.condition:
+            if (not self.service_observation_requested or self.native_service_status is not None
+                    or self.service_observation_running or not self.enabled.is_set()
+                    or self.stopping.is_set() or time.monotonic() < self.next_service_observation):
+                return False
+            self.service_observation_running = True
+            generation = self.native_service_generation
+        try:
+            status = read_status()
+            if status is None:
+                return False
+            with self.condition:
+                if (self.native_service_status is None and self.enabled.is_set()
+                        and not self.stopping.is_set()):
+                    return self.publish_service_observation(generation, status)
+            return False
+        finally:
+            with self.condition:
+                self.service_observation_running = False
+                self.next_service_observation = time.monotonic() + 1.0
+
     def publish_service_observation(self, generation, status):
         with self.condition:
             if generation != self.native_service_generation:
                 return False
             self.native_service_status = status
+            self.service_observation_requested = False
             return True
 
     def _run(self):

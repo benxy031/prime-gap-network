@@ -14,7 +14,7 @@ def identity(value):
     return type(value)is str and re.fullmatch('[0-9a-f]{64}',value)is not None and value!='0'*64
 
 
-def gate(rpc,signer,genesis):
+def read_status(rpc, signer, genesis):
     try:value=rpc.call('getpgnworkdutystatus',[signer])
     except CoreRpcError as error:
         if error.code==-32601:return None
@@ -23,9 +23,18 @@ def gate(rpc,signer,genesis):
             or value.get('genesis')!=genesis or type(value.get('enforced'))is not bool
             or not identity(value.get('bestblockhash'))):
         raise ValueError('Native work-duty status belongs to another or unknown chain')
-    if value['enforced']:
-        if type(value.get('may_request'))is not bool:raise ValueError('Explicit native service permission required')
-        if not value['may_request']:raise NativeAuditServiceRequired('Required audit service before the next search range: '+str(value.get('status','held'))[:80],value)
+    if value['enforced'] and type(value.get('may_request')) is not bool:
+        raise ValueError('Explicit native service permission required')
+    return value
+
+
+def gate(rpc, signer, genesis):
+    value = read_status(rpc, signer, genesis)
+    if value is not None and value['enforced'] and not value['may_request']:
+        raise NativeAuditServiceRequired(
+            'Required audit service before the next search range: ' + str(value.get('status', 'held'))[:80],
+            value,
+        )
     return value
 
 
