@@ -15,7 +15,8 @@ import stat
 
 OWNER_CAPACITY = 128 * 1024 * 1024
 POOL_CAPACITY = 2 * 1024 * 1024 * 1024
-MAXIMUM_ENTRIES = 200000
+TICKET_NAME = re.compile('[0-9a-f]{64}')
+OWNER_NAME = re.compile('native-owner-[0-9a-f]{32}')
 
 
 class OutputCapacityExceeded(BufferError):
@@ -26,12 +27,15 @@ class OutputCapacityBusy(RuntimeError):
     code = 'NATIVE_OUTPUT_POOL_BUSY'
 
 
-def _plain(path, directory=False):
-    value = path.lstat()
+def _plain_metadata(value, directory=False):
     if (stat.S_ISLNK(value.st_mode)
             or getattr(value, 'st_file_attributes', 0) & 0x400
             or not (stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode))):
         raise ValueError('Native output capacity path is redirected or unsupported')
+
+
+def _plain(path, directory=False):
+    _plain_metadata(path.lstat(), directory)
 
 
 def scope(output, token):
@@ -40,35 +44,28 @@ def scope(output, token):
     owner, ticket = output.parent, output.parent.parent
     tickets = ticket.parent
     if (output.name != 'output' or owner.name != 'native-owner-' + token
-            or not re.fullmatch('[0-9a-f]{64}', ticket.name) or tickets.name != 'tickets'):
+            or not TICKET_NAME.fullmatch(ticket.name) or tickets.name != 'tickets'):
         return None
     for path in (owner, ticket, tickets, tickets.parent):
         _plain(path, directory=True)
     return tickets
 
 
+def _matching(directory, matches):
+    with os.scandir(directory) as items:
+        for item in items:
+            if matches(item.name):
+                yield item
+
+
 def _reserved_bytes(tickets):
-    entries = 0
     reserved = 0
-
-    def bounded(directory):
-        nonlocal entries
-        with os.scandir(directory) as items:
-            for item in items:
-                entries += 1
-                if entries > MAXIMUM_ENTRIES:
-                    raise OutputCapacityExceeded('Native output inventory capacity reached; retained output unchanged')
-                yield Path(item.path)
-
-    for ticket in bounded(tickets):
-        if not re.fullmatch('[0-9a-f]{64}', ticket.name):
-            continue
-        _plain(ticket, directory=True)
-        for owner in bounded(ticket):
-            if not re.fullmatch('native-owner-[0-9a-f]{32}', owner.name):
-                continue
-            _plain(owner, directory=True)
-            output = owner / 'output'
+    for ticket in _matching(tickets, TICKET_NAME.fullmatch):
+        _plain(Path(ticket.path), directory=True)
+        for owner in _matching(ticket.path, OWNER_NAME.fullmatch):
+            owner_path = Path(owner.path)
+            _plain(owner_path, directory=True)
+            output = owner_path / 'output'
             if not output.exists() and not output.is_symlink():
                 continue  # Historical nonsegmented output is outside this pool.
             _plain(output, directory=True)
@@ -88,12 +85,13 @@ def _reserved_bytes(tickets):
             # seal and refuses further append. Charge every retained byte,
             # including unacknowledged data or files Windows could not unlink.
             retained = 0
-            for path in bounded(output):
-                if path.name.endswith('.log'):
-                    _plain(path)
-                    retained += path.stat().st_size
-                    if retained > OWNER_CAPACITY:
-                        raise OutputCapacityExceeded('Existing native output exceeds its owner capacity; preserve it for recovery')
+            for item in _matching(output, lambda name: name.endswith('.log')):
+                path = Path(item.path)
+                _plain(path)
+                # Windows directory entries can cache a growing log's size.
+                retained += path.stat().st_size
+                if retained > OWNER_CAPACITY:
+                    raise OutputCapacityExceeded('Existing native output exceeds its owner capacity; preserve it for recovery')
             reserved += retained if finished else OWNER_CAPACITY
     return reserved
 

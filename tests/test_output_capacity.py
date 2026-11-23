@@ -1,5 +1,8 @@
 """Real filesystem reservations and concurrent processes; no GPU/native worker."""
+from contextlib import contextmanager
+from itertools import chain, repeat
 from pathlib import Path
+from types import SimpleNamespace
 import json
 import os
 import subprocess
@@ -108,11 +111,22 @@ class OutputCapacityTests(unittest.TestCase):
         output,token=self.owner(3)
         with self.assertRaises(capacity.OutputCapacityExceeded):spool.Writer(output,token,64,128)
 
-    def test_inventory_has_a_finite_entry_budget(self):
-        self.writer(1)
-        output,token=self.owner(2)
-        with patch.object(capacity,'MAXIMUM_ENTRIES',1):
-            with self.assertRaises(capacity.OutputCapacityExceeded):spool.Writer(output,token,64,128)
+    def test_large_ticket_history_does_not_block_native_output(self):
+        first = self.writer(1)
+        first.append(b'closed and still retained\n')
+        first.finish()
+        tickets = self.root / 'tickets'
+        scandir = os.scandir
+        historical = SimpleNamespace(name='scientific-result.json.gz', path=str(tickets/'scientific-result.json.gz'))
+
+        @contextmanager
+        def historical_inventory(directory):
+            with scandir(directory) as entries:
+                yield chain(repeat(historical, 200001), entries) if Path(directory) == tickets else entries
+
+        with patch.object(capacity.os, 'scandir', historical_inventory):
+            self.writer(2)
+        self.assertEqual(list(spool.Reader(first.root, lambda: True)), ['closed and still retained\n'])
 
     def test_existing_oversized_owner_is_not_undercharged(self):
         first=self.writer(1)
