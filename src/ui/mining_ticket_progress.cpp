@@ -21,6 +21,7 @@
 namespace pgn::ui {
 namespace {
 constexpr int PrimaryWorkHeight=120, ConcurrentWorkRowHeight=24;
+const QString chainSyncCaption=QStringLiteral("Waiting for chain synchronization");
 QJsonObject legacyAuditScope(const QJsonObject& frame){
  if(frame.value("work_role")!="search"||frame.value("source_stale").toBool()||
     frame.value("phase")=="Waiting for connection"||frame.value("phase")=="Synchronizing")return {};
@@ -463,7 +464,8 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
  setToolTip(attention?QString("<qt><b>Mining stopped</b><br>%1</qt>").arg(
      (reason.isEmpty()?QString("Open Diagnostics for the failure details"):reason).toHtmlEscaped().replace("\n","<br>")):
      auditCompletion.isEmpty()?QString{}:QString("<qt>%1</qt>").arg(auditCompletion.toHtmlEscaped()));
- setAccessibleDescription(attention?miningAttentionStatus(reason):auditCompletion);
+ setAccessibleDescription(attention?miningAttentionStatus(reason):
+     frame.value("phase")=="Synchronizing"?chainSyncCaption:auditCompletion);
  setProperty("pgn_ticket_flow_received",QVariant::fromValue(flow_.received()));setProperty("pgn_ticket_flow_coalesced",QVariant::fromValue(flow_.coalesced()));
  ensureOverlay();update();if(overlay_){overlay_->synchronize();overlay_->update();}
 }
@@ -500,7 +502,8 @@ void MiningTicketProgress::paintConcurrentWork(QPainter& painter){
   const bool measured=doneOk&&totalOk&&std::isfinite(done)&&std::isfinite(total)&&total>0&&done>=0&&done<=total;
   const double fraction=measured?done/total:0.;
   const auto auditCompletion=disconnected?QString{}:auditCompletionStatus(frame);
-  const QString status=!auditCompletion.isEmpty()?auditCompletion:
+  const QString status=phase=="Synchronizing"?chainSyncCaption:
+      !auditCompletion.isEmpty()?auditCompletion:
       measured?phase+QString(" · %1%").arg(100*fraction,0,'f',2):phase;
   const auto color=disconnected?QColor("#a7b8bf"):QColor("#8cb9ec");
   painter.fillRect(QRect(16,top,available,ConcurrentWorkRowHeight-2),QColor("#0b222b"));
@@ -592,6 +595,7 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const bool attention=frame_.value("phase")=="Needs attention";
  const auto auditCompletion=auditCompletionStatus(frame_);
  const QString status=attention?miningAttentionStatus(frame_.value("message").toString()):
+      phase=="Synchronizing"?chainSyncCaption:
       !auditCompletion.isEmpty()?auditCompletion:displayPhase+(fraction?QString(" · ≈ %1%").arg(100* *fraction,0,'f',2):QString{});
  const QString positions=frame_.contains("positions_total")?(audit?QString("Complete audit · "):QString{})+positionFormats(frame_.value("positions_total").toString()).inlineText()+" positions":QString{};
  QString remaining;

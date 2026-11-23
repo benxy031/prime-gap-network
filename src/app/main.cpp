@@ -1537,9 +1537,13 @@ int main(int argc,char** argv) {
     const auto label=QString("%1 (%2)").arg(deviceName.isEmpty()?QString("GPU"):deviceName,device.right(8));
     liveDataNotice->setText(QString("%1 · %2").arg(label,*stopRequested?
       QString("Stopping · waiting for controller confirmation"):QString("Waiting for live miner data")));
-    liveDataNotice->show();
+    // Keep an explicit OFF acknowledgement visible. Generic live-data
+    // waits remain available in Diagnostics without interrupting the layout.
+    liveDataNotice->setVisible(*stopRequested);
    };
-   connectionRecovery->onSilenceCleared=[liveDataNotice]{liveDataNotice->hide();};
+   connectionRecovery->onSilenceCleared=[liveDataNotice]{
+    liveDataNotice->clear();liveDataNotice->hide();
+   };
    connectionRecovery->disconnected=[canvas,profile,miningToggle,pendingCard,ticketProgressRail,connectionRecovery,presentationSequence]{
     canvas->setProperty("pgn_worker_stream_phase","Disconnected");auto frame=canvas->property("pgn_network_ticket_frame").toJsonObject();frame.insert("phase","Disconnected");frame.insert("source_stale",true);const auto retainedRun=frame.value("ticket_id").toString();frame=pgn::ui::currentAssignmentPresentation(frame);canvas->setProperty("pgn_network_ticket_frame",frame);ticketProgressRail->present(frame);
     FrontierTelemetrySnapshot stale;stale.sequence=++*presentationSequence;stale.observedUtc=QDateTime::currentDateTimeUtc();stale.sourceMode="live";stale.runId=retainedRun;stale.authoritative=true;stale.stale=true;stale.gpuUuid=profile.value("gpu_uuid").toString();stale.gpuName=profile.value("device_name").toString();stale.state="stopped";stale.raw.insert("pgn_device_enabled",false);stale.raw.insert("pgn_process_running",false);pgn::ui::presentDevice(canvas,stale);

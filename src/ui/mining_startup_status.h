@@ -66,7 +66,7 @@ inline QJsonObject diagnosticMiningStartup(QWidget* canvas){
  QJsonArray notices;
  for(const auto* notice:canvas->window()->findChildren<QLabel*>("pgn-gpu-live-data-notice")){
   if(notices.size()==32)break;
-  if(!notice->isHidden())notices.append(QJsonObject{
+  if(!notice->text().isEmpty())notices.append(QJsonObject{
    {"device",notice->property("pgn_gpu_device_id").toString().left(80)},
    {"text",diagnosticStatusText(notice->text())},
    {"visible",notice->isVisible()&&!notice->window()->isMinimized()}});

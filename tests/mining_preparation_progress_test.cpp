@@ -258,12 +258,22 @@ int main(int argc,char** argv){
   check(rail.property("pgn_ticket_display_phase").toString()=="Paused","Assigned search concealed its paused state");
   check(!rail.property("pgn_ticket_cycle_eta_seconds").isValid(),"Paused work advertised an active cycle ETA");
 
-  auto retained=search;retained["phase"]="Synchronizing";retained["positions"]="1224065679360";retained["source_age_ns"]="129666390000000";const auto saved=retained;
+  auto retained=search;retained["schema"]="PGN_HORIZON_MINING_VIEW_UNAVAILABLE_V1";retained["phase"]="Synchronizing";retained["positions"]="1224065679360";retained["source_age_ns"]="129666390000000";const auto saved=retained;
   const auto waiting=currentAssignmentPresentation(retained);
   check(retained==saved,"Presentation rewrite mutated retained computation evidence");
   check(!waiting.contains("ticket_id")&&!waiting.contains("positions")&&!waiting.contains("audit_service"),"Unverified prior assignment leaked into current synchronization presentation");
   render(waiting,"captures/waiting-assignment.png");
   check(rail.property("pgn_ticket_display_phase").toString()=="Synchronizing"&&!rail.property("pgn_ticket_progress_fraction").isValid(),"Actual widget displayed prior ticket progress before current assignment verification");
+  check(rail.property("pgn_ticket_work_presentation").toJsonObject().value("status")=="Waiting for chain synchronization",
+        "Verified synchronization wait did not show on the normal status row");
+  check(rail.accessibleDescription()=="Waiting for chain synchronization",
+        "Synchronization wait was missing for assistive technology");
+  auto storageHold=waiting;
+  storageHold["phase"]="Needs attention";
+  storageHold["message"]="Session index WAL budget reached";
+  render(storageHold,"captures/real-storage-failure.png");
+  check(rail.property("pgn_ticket_work_presentation").toJsonObject().value("status").toString().contains("storage unavailable"),
+        "An actionable storage failure was concealed as synchronization");
   for(const auto* phase:{"Searching","Reconnecting","Waiting for connection","Disconnected","Needs attention"}){
    auto stale=search;stale["phase"]=phase;stale["source_stale"]=true;
    const auto checkpoint=stale;
