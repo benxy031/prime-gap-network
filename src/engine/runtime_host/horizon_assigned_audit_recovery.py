@@ -7,7 +7,8 @@ from http.client import HTTPException
 from pathlib import Path
 import hashlib
 import json
-from horizon_audit_answers import AuditAnswers, AuditSealRecoveryRequired
+from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch, AuditSealRecoveryRequired
+from horizon_audit_recovery import recover_retired_progress
 from horizon_core_rpc import CoreRpcError, CoreRpcUnavailable
 from pgn_session import atomic_bytes
 from report_commitment import canonical_bytes, audit_commitment
@@ -15,6 +16,10 @@ from report_commitment import canonical_bytes, audit_commitment
 
 class AssignmentRecoveryRpcUnavailable(RuntimeError):
     """An optional assignment recovery read could not complete."""
+
+
+class LegacyAuditSignerUnresolved(AuditSealBindingMismatch):
+    """The original actor is missing from a retained legacy record."""
 
 
 def digest(value):
@@ -50,7 +55,11 @@ class AssignedAuditRecovery:
             if any(value.get(k) != candidate[k] for k in ('request_id', 'slot', 'attempt')):
                 continue
             if any(value.get(k) != candidate[k] for k in ('ticket', 'report_root', 'ranges')):
-                raise ValueError('Retained inactive audit differs from the assigned scientific work')
+                continue
+            if value.get('actor') is None and (value.get('answer') or value.get('publication_intent')):
+                raise LegacyAuditSignerUnresolved('Legacy audit seal retained while its original signer is unresolved')
+            if value.get('actor', candidate['actor']) != candidate['actor']:
+                continue
             counts = value.get('counts')
             if (not isinstance(counts, list) or len(counts) > 5
                     or any(type(n) is not int or not 0 <= n < 2**64 for n in counts)):
@@ -194,6 +203,11 @@ class AssignedAuditRecovery:
                                      ticket=report['ticket'], report_root=report['report_root'],
                                      slot=slot, attempt=attempt, actor=actor, ranges=ranges, counts=[],
                                      recovered_assignment_anchor=state['bestblockhash'])
+                    try:
+                        candidate = self.retain_legacy_answer(candidate)
+                    except LegacyAuditSignerUnresolved:
+                        candidate = None
+                        continue
                     break
                 if candidate is not None:
                     break
@@ -202,7 +216,9 @@ class AssignedAuditRecovery:
                     from horizon_audit_batch import signable_actor
                     if not read(signable_actor, worker, actor):
                         return None, False
-                candidate = self.retain_legacy_answer(candidate)
+                candidate = recover_retired_progress(
+                    worker.root / 'work-cycles' / 'retained-audit-progress', worker.args.genesis, candidate
+                )
             if read(worker.rpc.call, 'getbestblockhash') != state['bestblockhash']:
                 return None, False  # No cursor/journal mutation from a stale page.
             complete = len(reports) < 100 and not waiting_for_seal_lane

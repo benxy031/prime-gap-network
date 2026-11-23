@@ -89,7 +89,7 @@ class AuditAnswers:
 
     @staticmethod
     def check_binding(value,expected):
-        if any(value.get(k)!=expected.get(k)for k in ('request_id','slot','attempt','ticket','report_root','ranges')):
+        if any(value.get(k)!=expected.get(k)for k in ('request_id','slot','attempt','ticket','report_root','actor','ranges')):
             raise AuditSealBindingMismatch('Sealed audit replay differs from the reassigned work; retained original must not be used for another generation')
         counts=value.get('counts')
         if (not isinstance(counts,list)or len(counts)!=len(expected['ranges'])
@@ -137,7 +137,7 @@ class AuditAnswers:
                         finally:os.close(fd)
             saved,actual=self.read_path(name,target)
             if actual!=digest:raise AuditSealRecoveryRequired('Sealed answer changed after registration')
-            if any(saved.get(k)!=value.get(k)for k in ('request_id','slot','attempt','ticket','report_root','ranges')):
+            if any(saved.get(k)!=value.get(k)for k in ('request_id','slot','attempt','ticket','report_root','actor','ranges')):
                 raise AuditSealBindingMismatch('Sealed audit replay differs from the reassigned work; immutable generation differs')
             if saved.get('counts')!=value.get('counts'):
                 raise AuditSealRecoveryRequired('Sealed audit replay does not match its committed counts')

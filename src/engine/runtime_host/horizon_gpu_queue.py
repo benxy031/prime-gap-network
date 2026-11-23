@@ -35,6 +35,12 @@ class GpuJob:
     storage_retries: int = 0
     completed_result: dict | None = None
     retired: bool = False
+    submitted_context: dict = field(init=False, repr=False)
+
+    def __post_init__(self):
+        # The execution lane may attach a budget owner or adopt prepared work.
+        # Deduplication must compare the original submission, not that state.
+        self.submitted_context = copy.deepcopy(self.context)
 
 class ResidentGpuQueue:
     minimum_service_ns = 1_000_000_000
@@ -75,7 +81,7 @@ class ResidentGpuQueue:
         with self.condition:
             if identity in self.jobs:
                 old = self.jobs[identity]
-                if old.ticket != ticket or old.context != context:
+                if old.ticket != ticket or old.submitted_context != context:
                     raise ValueError("Queued GPU work identity changed")
                 return old.future
             lane = self.search if role == "search" else self.audits
@@ -272,9 +278,19 @@ class ResidentGpuQueue:
                         job.storage_retry_after = time.monotonic() + min(2.0, .25 * 2 ** min(job.storage_retries - 1, 3))
                         job.view_sequence = None
                     else:
-                        # Retain a failed job and require explicit restart.
                         self.enabled.clear()
-                    (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
+                    if not storage_retry and job.context["role"] == "audit" and job.completed_result is None:
+                        # Failed before producing a result. Release the exact
+                        # queued identity and finish its waiter before allowing
+                        # the audit lane to submit this partition again.
+                        identity = job.ticket["ticket_id"]
+                        if self.jobs.get(identity) is job:
+                            self.jobs.pop(identity)
+                        job.future.set_exception(error)
+                    else:
+                        # Preserve storage retries and completed results. A
+                        # completed job retries the handoff without computing.
+                        (self.search if job.context["role"] == "search" else self.audits).appendleft(job)
                 if storage_retry:
                     self.on_error(error)
                     self.last_completed = None

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import copy, json, sys, tempfile, threading, unittest
 from unittest.mock import patch
 from horizon_audit_batch import apply_group,reserve_assignments,commit_ready,save,LEGACY_AUDIT_USAGE,retain_assignments
-from horizon_coordination import native_header_hash
+from horizon_coordination import PublicationPending, native_header_hash
 from horizon_core_rpc import CoreRpcError
 from horizon_network_audits import NetworkAudits
 
@@ -20,6 +20,8 @@ def commitment_script(event):
 class Fixture:
     def __init__(self, root):
         self.root=root;self.tip=PARENT;self.lock=threading.RLock();self.jobs={};self.sent=[];self.intents={};self.calls=[];self.crash=False;self.conflict=False;self.more_work=False;self.additional_jobs={};self.watchonly=False
+        self.omit_audit_projection=False
+        self.report_root='e'*64
         self.block_outputs={}
         self.peers=[]
         for index in range(2):
@@ -37,14 +39,15 @@ class Fixture:
         if method=='decodescript':return dict(address='owned-'+params[0])
         if method=='getaddressinfo':return dict(ismine=True,iswatchonly=self.watchonly,scriptPubKey=params[0][6:])
         if method=='getwalletinfo':return dict(private_keys_enabled=True)
-        if method=='getpgnreports':return [dict(ticket='d'*64,report_root='e'*64)]
+        if method=='getpgnreports':return [dict(ticket='d'*64,report_root=self.report_root)]
+        if method=='getpgnscientificwork':return dict(target_numerator='27',target_denominator='1')
         if method=='getpgnauditstate':return [self.state(params[2])]
         if method=='getpgnworkview':
             request=params[3]
             return dict(schema='PGN_WORK_VIEW_V1',kind='audits',request_id=request,
                         state=dict(bestblockhash=self.tip,genesis='7'*64),
-                        reports=[dict(request_id=request,ticket='d'*64,report_root='e'*64)],
-                        audits=[dict(request_id=request,**self.state(request))])
+                        reports=[dict(request_id=request,ticket='d'*64,report_root=self.report_root)],
+                        audits=[] if self.omit_audit_projection else [dict(request_id=request,**self.state(request))])
         if method=='getblockheader':
             if params[0] not in self.intents:raise CoreRpcError(-5,'unknown block')
             return dict(hash=params[0],height=1,confirmations=1 if self.tip==params[0] else -1)
@@ -229,6 +232,31 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(self.f.tip,active)
         self.assertEqual(len(self.f.sent),1)
         self.assertEqual(json.loads((self.f.peers[0].folder/'current.json').read_bytes()),audits[0])
+    def test_tip_advance_during_grouped_commit_rechecks_and_resigns_only_the_caller(self):
+        first, second = self.f.peers
+        audits = self.ready()
+        self.f.conflict = True
+        before_tip = self.f.tip
+        result = commit_ready(first, audits[0], lambda _:None)
+        self.assertEqual(result['confirmed_block'], self.f.tip)
+        self.assertEqual(len(self.f.sent), 2)
+        self.assertEqual(len(self.f.sent[-1]), 1)
+        sent = json.loads(bytes.fromhex(self.f.sent[-1][0]))
+        self.assertEqual((sent['slot'], sent['parent'], sent['body']), (0, 'b'*64, audits[0]['answer']['commitment']))
+        self.assertNotEqual(sent['parent'], before_tip)
+        self.assertEqual(json.loads((second.folder/'current.json').read_bytes()), audits[1])
+        self.assertEqual(self.f.jobs[1]['state'], 'assigned')
+
+    def test_missing_canonical_attempt_is_not_a_parent_retry(self):
+        audits = self.ready()
+        first = self.f.peers[0]
+        before = (first.folder / 'current.json').read_bytes()
+        self.f.jobs.pop(0)
+        with self.assertRaisesRegex(RuntimeError, 'report identity or exact attempt unavailable'):
+            commit_ready(first, audits[0], lambda _:None)
+        self.assertEqual((first.folder / 'current.json').read_bytes(), before)
+        self.assertEqual(len(self.f.sent), 1)
+
     def test_unavailable_peer_keeps_its_seal_without_an_unrelated_receipt(self):
         audits=self.ready()
         other=self.f.peers[1]
@@ -338,17 +366,271 @@ class BatchTests(unittest.TestCase):
         kept=list((publisher.folder/'retained-assignments').glob('*.json'))
         self.assertEqual(len(kept),1);self.assertEqual(kept[0].read_bytes(),raw)
         self.assertEqual(retired,[(audit,PARENT)])
-    def test_watchonly_signer_cannot_reenter_legacy_assignment_recovery(self):
-        from horizon_network_audits import NetworkAudits
-        root=self.f.root/'watchonly-caller';root.mkdir();recovered=[];self.f.watchonly=True
-        def recover(folder):recovered.append(folder);return None,True
-        worker=SimpleNamespace(root=root,rpc=self.f,network_lock=self.f.lock,args=SimpleNamespace(),
-            source=SimpleNamespace(),audit_prefix_supported=True,recover_assigned_audit=recover)
-        publisher=NetworkAudits(worker)
-        publisher.apply=lambda *args:dict(available=False,unavailable_reason='no_eligible_independent_work',actor='0014'+'1'*40)
-        self.assertEqual(publisher.process_one(),'none')
-        self.assertEqual(recovered,[])
-        self.assertEqual(publisher.last_unavailable['unavailable_reason'],'signing_key_unavailable')
+
+    def test_unsealed_five_counts_resume_after_cursor_archival_on_another_lane(self):
+        root = self.f.root / 'recovered-progress'
+        first = root / 'first'
+        second = root / 'second'
+        first.mkdir(parents=True)
+        second.mkdir()
+        retired = []
+        source = SimpleNamespace(run_ticket=lambda *args: self.fail('Exact completed range must not recompute'))
+        common = dict(rpc=self.f, network_lock=self.f.lock, args=SimpleNamespace(genesis='7'*64),
+                      source=source, retained_audit_progress=root / 'shared', running=threading.Event())
+        common['running'].set()
+        old = NetworkAudits(SimpleNamespace(root=first, **common),
+                            on_retired=lambda audit, anchor: retired.append((audit, anchor)))
+        old.state = lambda request: {}
+        audit = dict(request_id=REQUEST, ticket='d'*64, report_root='e'*64, slot=0, attempt=0,
+                     actor='0014'+'1'*40, counts=[4, 9, 1, 7, 2], target_merit_q16=27*65536,
+                     ranges=[dict(index=i, start=str(i*10+10), end=str(i*10+20)) for i in range(5)])
+        path = old.folder / 'current.json'
+        save(path, audit)
+        original = path.read_bytes()
+        self.f.omit_audit_projection = True
+        with self.assertRaisesRegex(PublicationPending, 'view incomplete'):
+            old.process_one()
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(retired, [])
+        self.f.omit_audit_projection = False
+        self.assertEqual(old.process_one(), 'retired')
+        self.assertFalse(path.exists())
+        self.assertEqual(next((old.folder/'retained-assignments').glob('*.json')).read_bytes(), original)
+        self.assertEqual(retired, [(audit, PARENT)])
+        fresh = {key:value for key,value in audit.items() if key != 'target_merit_q16'}
+        fresh['counts'] = []
+        resumed = NetworkAudits(SimpleNamespace(root=second, **common),
+                                before_commit=lambda current: False)
+        resumed.apply = lambda action: dict(available=False, unavailable_reason='no_eligible_independent_work')
+        resumed.worker.recover_assigned_audit = lambda folder: (fresh, True)
+        self.assertEqual(resumed.process_one(), 'paused')
+        again = json.loads((resumed.folder/'current.json').read_bytes())
+        self.assertEqual(again, audit)
+        self.assertEqual(self.f.sent, [])
+        self.assertEqual(resumed.restore_retired_progress(dict(fresh, attempt=1))['counts'], [])
+        self.assertEqual(resumed.restore_retired_progress(dict(fresh, actor='0014'+'2'*40))['counts'], [])
+        self.assertEqual(resumed.restore_retired_progress(dict(fresh, ranges=audit['ranges'][::-1]))['counts'], [])
+        with self.assertRaisesRegex(ValueError, 'differ from the active prefix'):
+            resumed.restore_retired_progress(dict(fresh, counts=[11]))
+        with self.assertRaisesRegex(ValueError, 'differs from the active target'):
+            resumed.restore_retired_progress(dict(fresh, counts=[4], target_merit_q16=26*65536))
+
+    def test_real_claim_recovers_the_original_seal_from_an_inactive_lane(self):
+        from horizon_assigned_audit_recovery import AssignedAuditRecovery
+        from report_commitment import audit_commitment
+
+        root = self.f.root / 'role-change'
+        former_role = root / 'audit-lanes' / '0'
+        current_role = root / 'service-audit-lanes' / '0'
+        former_role.mkdir(parents=True)
+        current_role.mkdir(parents=True)
+        args = SimpleNamespace(genesis='7'*64)
+        actor = '0014'+'1'*40
+        ranges = [dict(index=i, start=str(i*10+10), end=str(i*10+20)) for i in range(5)]
+        answer = audit_commitment('d'*64, 0, list(range(5)), ['4', '9', '1', '7', '2'], '8'*64)
+        audit = dict(request_id=REQUEST, ticket='d'*64, report_root='e'*64, slot=0, attempt=0,
+                     actor=actor, counts=[4, 9, 1, 7, 2], target_merit_q16=27*65536,
+                     ranges=ranges, answer=answer, commit_ready=True)
+        common = dict(args=args, rpc=self.f, network_lock=self.f.lock, address=lambda:'owner')
+        progress = root / 'work-cycles' / 'retained-audit-progress'
+        old = NetworkAudits(SimpleNamespace(root=former_role, retained_audit_progress=progress, **common),
+                            on_retired=lambda *_:None)
+        journal = old.folder / 'current.json'
+        save(journal, audit)
+        original = journal.read_bytes()
+        self.f.jobs = {}
+        self.f.omit_audit_projection = True
+        with self.assertRaisesRegex(PublicationPending, 'view incomplete'):
+            old.process_one()
+        self.assertEqual(journal.read_bytes(), original)
+        self.f.omit_audit_projection = False
+        self.f.jobs = {0:dict(attempt=1, state='assigned')}
+        self.assertEqual(old.process_one(), 'retired')
+        name = f'{REQUEST}-0-0.json'
+        sealed = old.folder / 'sealed-answers' / name
+        sealed_bytes = sealed.read_bytes()
+        self.assertFalse(journal.exists())
+        (old.folder / name).unlink()
+
+        self.f.jobs = {0:dict(state='assigned', actor=actor, expired=False,
+                              actor_policy_accepted=True, ranges=ranges)}
+        call = self.f.call
+        def recovery_rpc(method, params=None, **kwargs):
+            if method == 'validateaddress':
+                return dict(isvalid=True, scriptPubKey=actor)
+            if method == 'getpgnworkview' and len(params) == 3:
+                return dict(schema='PGN_WORK_VIEW_V1', kind='audits', offset=0, limit=100,
+                    state=dict(bestblockhash=PARENT, height=5, genesis=args.genesis),
+                    reports=[dict(request_id=REQUEST, ticket='d'*64, report_root='e'*64)],
+                    audits=[dict(request_id=REQUEST, **self.f.state(REQUEST))])
+            return call(method, params, **kwargs)
+        self.f.call = recovery_rpc
+        recovery = AssignedAuditRecovery(SimpleNamespace(root=root, **common))
+        source = SimpleNamespace(run_ticket=lambda *args: self.fail('An original seal must not recompute'))
+        new = NetworkAudits(SimpleNamespace(root=current_role, retained_audit_progress=progress, source=source, **common),
+                            before_commit=lambda current:False)
+        recovered, complete = recovery.claim(new.folder, verify_signer=True)
+        self.assertTrue(complete)
+        self.assertEqual(recovered['answer'], answer)
+        changed = dict(recovered, ranges=[dict(part, start=str(int(part['start'])+1)) for part in ranges], counts=[])
+        changed.pop('answer')
+        self.assertNotIn('answer', new.restore_retired_progress(changed))
+        self.assertEqual(new.process_one(), 'paused')
+        self.assertEqual(json.loads((new.folder/'current.json').read_bytes())['answer'], answer)
+        self.assertEqual(sealed.read_bytes(), sealed_bytes)
+        self.assertEqual(self.f.sent, [])
+
+    def test_complete_absence_at_a_later_tip_can_release_but_repeated_same_tip_cannot(self):
+        from horizon_audit_recovery import assignment_absence_confirmed
+        prior, current = '3'*64, '4'*64
+        audit = dict(assigned_audit_anchor=prior)
+        calls = []
+        def get_header(method, params):
+            calls.append((method,params))
+            return dict(hash=prior,confirmations=-1)
+        rpc = SimpleNamespace(call=get_header)
+        self.assertFalse(assignment_absence_confirmed(audit, dict(_report_binding_observed=True), prior, rpc))
+        self.assertFalse(assignment_absence_confirmed(audit, {}, current, rpc))
+        self.assertTrue(assignment_absence_confirmed(audit, dict(_report_binding_observed=True), current, rpc))
+        self.assertTrue(assignment_absence_confirmed(audit, dict(_report_absent=True), current, rpc))
+        self.assertEqual(calls,[('getblockheader',[prior,True])])
+
+    def test_legacy_absence_needs_an_exact_report_confirmation(self):
+        from horizon_audit_recovery import assignment_absence_confirmed
+        legacy = dict(request_id=REQUEST)
+        for report, tip, expected in (([], PARENT, True), ([dict(request_id=REQUEST)], PARENT, False),
+                                      ([], 'b'*64, False)):
+            with self.subTest(report=report, tip=tip):
+                def respond(method, params=None):
+                    if method == 'getpgnreports':
+                        self.assertEqual(params, [0, 1, REQUEST])
+                        return report
+                    self.assertEqual(method, 'getbestblockhash')
+                    return tip
+                self.assertEqual(assignment_absence_confirmed(
+                    legacy, dict(_report_absent=True), PARENT, SimpleNamespace(call=respond)), expected)
+
+    def test_complete_report_replacement_releases_only_the_obsolete_cursor(self):
+        from report_commitment import audit_commitment
+        for sealed in (False, True):
+            with self.subTest(sealed=sealed):
+                root = self.f.root / f'replacement-{sealed}'
+                root.mkdir()
+                self.f.tip = PARENT
+                self.f.more_work = False
+                self.f.sent.clear()
+                self.f.additional_jobs.clear()
+                self.f.report_root = 'a'*64
+                ranges = [dict(index=i, start=str(i*10+10), end=str(i*10+20)) for i in range(5)]
+                actor = '0014'+'1'*40
+                self.f.jobs[0] = dict(state='assigned', actor=actor, expired=False, ranges=ranges,
+                                      actor_policy_accepted=True)
+                retired=[]
+                source=SimpleNamespace(run_ticket=lambda *args:self.fail('Replaced work must not compute'))
+                worker=SimpleNamespace(root=root,rpc=self.f,args=SimpleNamespace(genesis='7'*64),
+                    network_lock=self.f.lock,source=source,running=threading.Event(),
+                    audit_group_journal=root/'group.json',quitting=threading.Event(),
+                    ledger=self.f.ledger,address=lambda:'owner')
+                publisher=NetworkAudits(worker,on_retired=lambda item,block:retired.append((item,block)))
+                audit=dict(request_id=REQUEST,ticket='d'*64,report_root='e'*64,slot=0,attempt=0,
+                    actor=actor,counts=[3]*5 if sealed else [],target_merit_q16=27*65536,ranges=ranges)
+                if sealed:
+                    audit.update(commit_ready=True,
+                        answer=audit_commitment(audit['ticket'],0,list(range(5)),['3']*5,'8'*64))
+                journal=publisher.folder/'current.json'
+                save(journal,audit)
+                original=journal.read_bytes()
+                self.assertEqual(publisher.process_one(),'retired')
+                self.assertEqual(retired,[(audit,PARENT)])
+                self.assertFalse(journal.exists())
+                self.assertEqual(next((publisher.folder/'retained-assignments').glob('*.json')).read_bytes(),original)
+                if sealed:
+                    self.assertEqual(publisher.answers.recover_seal(f'{REQUEST}-0-0',audit)['answer'],audit['answer'])
+                self.assertEqual(self.f.sent,[])
+                self.f.more_work=True
+                worker.audit_publishers=(publisher,)
+                publisher.event=lambda action,request,slot,attempt,body,preceding_events=None: self.f.event(
+                    0,action,request,slot,attempt,body,preceding_events)
+                self.assertEqual(publisher.process_one(),'paused')
+                self.assertEqual(json.loads(journal.read_bytes())['request_id'],'f'*64)
+                self.assertEqual(len(self.f.sent),1)
+                self.assertEqual([json.loads(bytes.fromhex(envelope))['action']
+                                  for envelope in self.f.sent[0]],['assign'])
+
+    def test_legacy_seal_with_unrecorded_actor_cannot_enter_the_active_cursor(self):
+        from horizon_assigned_audit_recovery import AssignedAuditRecovery
+        from horizon_audit_answers import AuditSealBindingMismatch
+        from report_commitment import audit_commitment
+        root = self.f.root / 'legacy-actor'
+        path = root / 'audit-lanes' / '0' / 'audits' / 'current.json'
+        path.parent.mkdir(parents=True)
+        ranges = [dict(index=i,start=str(i*10+10),end=str(i*10+20)) for i in range(5)]
+        old = dict(request_id=REQUEST,ticket='d'*64,report_root='e'*64,slot=0,attempt=0,
+                   ranges=ranges,counts=[4]*5,target_merit_q16=27*65536,
+                   answer=audit_commitment('d'*64,0,list(range(5)),['4']*5,'8'*64))
+        save(path, old)
+        raw = path.read_bytes()
+        genesis = '7'*64
+        actor = '0014'+'1'*40
+        following = 'f'*64
+        job = dict(slot=0,attempt=0,state='assigned',actor=actor,expired=False,actor_policy_accepted=True,ranges=ranges)
+        def rpc(method, params=None):
+            if method == 'validateaddress':
+                return dict(isvalid=True,scriptPubKey=actor)
+            if method == 'getbestblockhash':
+                return PARENT
+            self.assertEqual(method,'getpgnworkview')
+            return dict(schema='PGN_WORK_VIEW_V1',kind='audits',offset=0,limit=100,
+                state=dict(bestblockhash=PARENT,height=5,genesis=genesis),
+                reports=[dict(request_id=value,ticket='d'*64,report_root='e'*64)
+                         for value in (REQUEST,following)],
+                audits=[dict(request_id=value,jobs=[job]) for value in (REQUEST,following)])
+        worker = SimpleNamespace(root=root,args=SimpleNamespace(genesis=genesis),
+            address=lambda:'owner',rpc=SimpleNamespace(call=rpc),network_lock=self.f.lock)
+        recovery = AssignedAuditRecovery(worker)
+        candidate = dict(old,actor=actor,counts=[])
+        candidate.pop('answer')
+        with self.assertRaisesRegex(AuditSealBindingMismatch,'original signer'):
+            recovery.retain_legacy_answer(candidate)
+        active = root / 'service-audit-lanes' / '0' / 'audits'
+        active.mkdir(parents=True)
+        recovered,complete = recovery.claim(active)
+        self.assertTrue(complete)
+        self.assertEqual(recovered['request_id'],following)
+        self.assertEqual(recovered['counts'],[])
+        self.assertNotIn('answer',recovered)
+        self.assertEqual(path.read_bytes(),raw)
+        self.assertNotIn('answer',candidate)
+
+    def test_stale_owner_disclosure_row_cannot_preempt_the_current_generation(self):
+        from hashlib import sha256
+        from horizon_audit_batch import disclose_local_ready
+        from report_commitment import audit_commitment, canonical_bytes
+        ticket = 'd'*64
+        owner_body = {'report':'saved owner report'}
+        report_root = sha256(canonical_bytes(owner_body)).hexdigest()
+        report = self.f.root / 'tickets' / ticket / 'network-report.json'
+        report.parent.mkdir(parents=True)
+        save(report,dict(report_root=report_root,body=owner_body))
+        actor_a,actor_b = '0014'+'1'*40,'0014'+'2'*40
+        common = dict(request_id=REQUEST,ticket=ticket,report_root=report_root,slot=0,attempt=0)
+        a = dict(common,actor=actor_a,answer=audit_commitment(ticket,0,list(range(5)),['4']*5,'6'*64))
+        b = dict(common,actor=actor_b,answer=audit_commitment(ticket,0,list(range(5)),['4']*5,'8'*64))
+        state = dict(jobs=[
+            dict(slot=0,attempt=0,state='committed',actor=actor_b,commitment=b['answer']['commitment']),
+            dict(slot=1,attempt=0,state='committed'),
+        ])
+        worker=SimpleNamespace(root=self.f.root,rpc=SimpleNamespace(call=lambda method,params:[dict(ticket=ticket,report_root=report_root)]))
+        owner=SimpleNamespace(worker=worker,state=lambda request:state)
+        lane=SimpleNamespace(state=lambda request:state)
+        with patch('horizon_audit_batch.apply_group') as submit:
+            self.assertEqual(disclose_local_ready(owner,[(lane,'old',a),(lane,'current',b)]),([],[]))
+            operations=submit.call_args.args[0]
+            self.assertEqual([operation[1] for operation in operations],['reveal_report','reveal'])
+            self.assertEqual(operations[-1][-1],canonical_bytes(b['answer']['body']).hex())
+            submit.reset_mock()
+            self.assertEqual(disclose_local_ready(owner,[(lane,'old',a)]),([],[]))
+            submit.assert_not_called()
 
 def run():
     import io, socket, subprocess

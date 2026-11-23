@@ -12,6 +12,7 @@ from horizon_coordination import confirm_candidate, validate_intent, Coordinatio
 from horizon_audit_answers import AuditAnswers, AuditSealBindingMismatch
 from horizon_owner_reports import OwnerReports
 from horizon_audit_progress import partition_identity, presentation as audit_presentation
+from horizon_audit_recovery import assignment_absence_confirmed, recover_retired_progress, retain_changed_assignment
 from horizon_audit_snapshot import AnchoredAuditStates, identity
 
 def save(file, value):
@@ -236,12 +237,47 @@ class NetworkAudits:
         values = self.worker.rpc.call("getpgnauditstate", [0, 1, request])
         return values[0] if values else {}
 
+    def retained_progress_location(self):
+        return (
+            getattr(self.worker, 'retained_audit_progress', self.folder / 'retained-progress'),
+            getattr(getattr(self.worker, 'args', None), 'genesis', None),
+        )
+
+    def restore_retired_progress(self, audit):
+        root, genesis = self.retained_progress_location()
+        return recover_retired_progress(root, genesis, audit)
+
+    def retire_assignment(self, audit, state, anchor):
+        root, genesis = self.retained_progress_location()
+        with self.worker.network_lock:
+            if self.worker.rpc.call('getbestblockhash') != anchor:
+                raise CoordinationParentChanged('Chain changed during audit retirement; current work retained')
+            if audit.get('answer'):
+                name = f"{audit['request_id']}-{audit['slot']}-{audit['attempt']}"
+                self.answers.check_binding(audit, audit)
+                retained = self.answers.recover_seal(name, audit)
+                if retained is None:
+                    save(self.folder / (name + '.json'), audit)
+                    self.answers.register([name])
+                elif retained['answer'] != audit['answer']:
+                    raise ValueError('Current cursor differs from the retained audit seal')
+            return retain_changed_assignment(
+                self.folder, audit, state, anchor, self.worker.rpc,
+                self.on_retired or (lambda value, block: None),
+                checkpoint_root=root, genesis=genesis,
+            )
+
     def restore_reassigned_answer(self, audit):
         """Recover one exact sealed answer; never scan or recompute a range."""
         name = audit['request_id'] + '-' + str(audit['slot']) + '-' + str(audit['attempt'])
+        audit = self.restore_retired_progress(audit)
         cached = self.answers.recover_seal(name, audit)
         if cached is None:
             return audit
+        if audit.get('answer') and audit['answer'] != cached['answer']:
+            raise ValueError('Active and inactive audit seals disagree')
+        if 'target_merit_q16' in audit and audit['target_merit_q16'] != cached.get('target_merit_q16'):
+            raise ValueError('Retained audit seal target differs from the active target')
         # A scheduling cursor can lose its answer without a publication intent
         # or cycle callback. The seal is independent of both mutable contexts.
         restored = dict(cached)
@@ -592,17 +628,28 @@ class NetworkAudits:
             # A historic seal belongs only to its exact scientific work.
             # Check the authoritative assignment before touching recovery,
             # so an obsolete cursor cannot block a different live cycle.
-            anchor = self.worker.rpc.call('getbestblockhash') if self.on_retired is not None else None
-            current = self.state(audit["request_id"])
-            job = next((j for j in current.get("jobs", []) if j["slot"] == audit["slot"] and j["attempt"] == audit["attempt"]), None)
+            from horizon_audit_batch import ready_audit_view
+            native_lane = (getattr(self.worker, 'audit_group_journal', None) is not None
+                           and getattr(self.worker, 'audit_prefix_supported', None) is not False)
+            if native_lane:
+                anchor, current, job = ready_audit_view(self, audit)
+            else:
+                anchor = self.worker.rpc.call('getbestblockhash') if self.on_retired is not None else None
+                current = self.state(audit["request_id"])
+                job = next((j for j in current.get("jobs", []) if j["slot"] == audit["slot"] and j["attempt"] == audit["attempt"]), None)
+                if job is None:
+                    anchor, current, job = ready_audit_view(self, audit, anchor)
+            replaced = job is None and assignment_absence_confirmed(audit, current, anchor, self.worker.rpc)
+            if job is None and not replaced:
+                raise PublicationPending('Audit assignment view incomplete; local work retained')
             expired_or_foreign = job and job['state'] == 'assigned' and (
-                job.get('expired') is True or ('actor' in audit and job.get('actor') != audit['actor']))
-            if expired_or_foreign or (job is None and self.on_retired is not None):
-                from horizon_audit_recovery import retain_changed_assignment
+                job.get('expired') is True
+                or (job.get('actor') and audit.get('actor') and job['actor'] != audit['actor'])
+                or (job.get('ranges') and job['ranges'] != audit['ranges']))
+            if expired_or_foreign or replaced:
                 if anchor is None:
                     anchor = self.worker.rpc.call('getbestblockhash')
-                retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc,
-                    self.on_retired or (lambda value, block: None))
+                self.retire_assignment(audit, current, anchor)
                 return 'retired'
             try:
                 restored = self.restore_reassigned_answer(audit)
@@ -611,8 +658,7 @@ class NetworkAudits:
                     raise
                 # Core finalized this slot. Its verdict cannot authenticate a
                 # differently bound local seal or stop the next cycle.
-                from horizon_audit_recovery import retain_changed_assignment
-                retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc, self.on_retired)
+                self.retire_assignment(audit, current, anchor)
                 return 'retired'
             if restored != audit:
                 save(journal, restored)
@@ -626,8 +672,7 @@ class NetworkAudits:
                             or job.get("commitment") != audit.get("answer", {}).get("commitment")
                             or not audit.get("publication_intent")):
                         if self.on_retired is not None:
-                            from horizon_audit_recovery import retain_changed_assignment
-                            retain_changed_assignment(self.folder, audit, current, anchor, self.worker.rpc, self.on_retired)
+                            self.retire_assignment(audit, current, anchor)
                             return 'retired'
                         raise RuntimeError("Audit assignment changed; private computation retained for reconciliation")
                     # The per-audit intent survives another lane overwriting the
@@ -676,6 +721,7 @@ class NetworkAudits:
                 # before the catalogue can return BUSY/ENOSPC: a retry must resume
                 # this assignment, not ask for another and waive its service slot.
                 # Seal recovery still precedes any computation or nonce creation.
+                audit = self.restore_retired_progress(audit)
                 save(journal, audit)
             audit = self.restore_reassigned_answer(audit)
             save(journal, audit)
@@ -779,6 +825,8 @@ class NetworkAudits:
                     or not audit.get("commit_ready") or not audit.get("answer")):
                 raise PublicationPending("Ready audit changed during reconciliation; seal retained")
             anchor, state, job = ready_audit_view(self, audit)
+            if job is None and not assignment_absence_confirmed(audit, state, anchor, self.worker.rpc):
+                raise PublicationPending('Ready audit assignment view incomplete; seal retained')
             bound = (job and audit.get("actor") and job.get("actor") == audit["actor"]
                      and job.get("ranges") == audit["ranges"] and job.get("expired") is False)
             assigned = bound and job["state"] == "assigned" and job.get("actor_policy_accepted") is True
@@ -793,8 +841,7 @@ class NetworkAudits:
                 # A canonical commitment already satisfied this assignment.
                 # Without its exact local receipt, release only the scheduling
                 # cursor. Never acknowledge the same answer a second time.
-                from horizon_audit_recovery import retain_changed_assignment
-                retain_changed_assignment(self.folder, audit, state, anchor, self.worker.rpc, self.on_retired)
+                self.retire_assignment(audit, state, anchor)
                 return "retired"
             if committed:
                 verify_committed_event(self.worker.rpc, audit, intent, anchor)

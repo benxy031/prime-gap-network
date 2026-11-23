@@ -77,10 +77,13 @@ class AuditGpuProxy:
     def queue_ticket(self, ticket, maximum_piece):
         if ticket['ticket_id'] in self.prepared:
             previous, limit, future = self.prepared[ticket['ticket_id']]
-            if not future.cancelled() and not (future.done() and isinstance(future.exception(), CancelledError)):
+            cancelled = future.cancelled()
+            failure = future.exception() if future.done() and not cancelled else None
+            if not cancelled and not isinstance(failure, CancelledError):
                 if previous != ticket or limit != maximum_piece:
                     raise ValueError('Prepared audit partition identity changed')
-                return future
+                if failure is None:
+                    return future
             self.prepared.pop(ticket['ticket_id'])
         audit = self.audit.current_audit
         self.flow.bind_audit_cycle(self.position, audit)
@@ -105,6 +108,8 @@ class AuditGpuProxy:
             try:
                 return future.result(.2)
             except TimeoutError:
+                if future.done():
+                    return future.result()
                 self.flow.refresh_unbound_service()
         raise CancelledError("Audit work retained for restart")
 
@@ -179,7 +184,8 @@ class MiningFlow:
             proxy = AuditGpuProxy(self, index)
             lane = SimpleNamespace(root=folder, args=worker.args, rpc=worker.rpc,
                                    running=worker.running, quitting=worker.quitting, network_lock=worker.network_lock,
-                                   source=proxy, address=worker.address, ledger=worker.ledger)
+                                   source=proxy, address=worker.address, ledger=worker.ledger,
+                                   retained_audit_progress=worker.root / 'work-cycles' / 'retained-audit-progress')
             if lab_actors is not None and not native_actors:
                 lane.address = lambda actor=lab_actors[index]: actor
             else:

@@ -352,7 +352,7 @@ def retain_assignments(peers, group):
             if identity(json.loads(path.read_bytes())) != identity(row['audit']):
                 raise ValueError('Assignment reservation conflicts with retained lane')
         else:
-            writes.append((path, audit))
+            writes.append((path, dict(audit, assigned_audit_anchor=anchor)))
     if peers[0].worker.rpc.call('getbestblockhash') != anchor:
         raise CoordinationParentChanged('Assignment recovery anchor changed; journal retained')
     for path, audit in writes:
@@ -378,18 +378,53 @@ def ready_audit_view(peer, audit, anchor=None):
         raise CoordinationParentChanged('Audit work view changed; seal retained')
     row = audits[0] if audits else {}
     report = reports[0] if reports else {}
-    job = next((j for j in row.get('jobs', []) if (j['slot'], j['attempt']) ==
+    jobs = row.get('jobs')
+    if jobs is not None and (not isinstance(jobs, list) or len(jobs) > 2
+            or any(not isinstance(j, dict) or type(j.get('slot')) is not int or j['slot'] not in (0, 1)
+                   or type(j.get('attempt')) is not int or not 0 <= j['attempt'] < 2**32 for j in jobs)
+            or len({j['slot'] for j in jobs}) != len(jobs)):
+        raise ValueError('Invalid anchored audit jobs; seal retained')
+    job = next((j for j in jobs or [] if (j['slot'], j['attempt']) ==
                 (audit['slot'], audit['attempt'])), None)
     exact = report.get('ticket') == audit['ticket'] and report.get('report_root') == audit['report_root']
-    return current, row, job if exact else None
+    complete = jobs is not None and hash_identity(report.get('ticket')) and hash_identity(report.get('report_root'))
+    return current, dict(row, _report_binding_observed=complete,
+                         _report_absent=not reports and not audits), job if exact else None
 
 
 def commit_ready(publisher, audit, retain_self):
-    """Include only seals whose own before_commit boundary has already passed."""
+    """Publish retained answers and narrow the attempt on an actual tip race."""
     peers = getattr(publisher.worker, 'audit_publishers', (publisher,))
+    try:
+        return _commit_ready_at_tip(publisher, audit, retain_self, peers)
+    except CoordinationParentChanged:
+        # Recheck the complete binding on the fresh parent. Prior signatures
+        # are scoped to the abandoned parent, and the second lane can wait
+        # with its seal intact while this one confirms.
+        return _commit_ready_at_tip(publisher, audit, retain_self, (publisher,))
+
+
+def _ready_decline(row, job):
+    if job is None:
+        return 'report identity or exact attempt unavailable'
+    if job['state'] != 'assigned':
+        return 'canonical state is ' + job['state']
+    if job.get('expired') is not False:
+        return 'assignment deadline is not open'
+    if job.get('actor_policy_accepted') is not True:
+        return 'assignment actor is no longer eligible'
+    if not row.get('actor') or job.get('actor') != row['actor']:
+        return 'assignment actor changed'
+    if job.get('ranges') != row['ranges']:
+        return 'assigned ranges changed'
+    return None
+
+
+def _commit_ready_at_tip(publisher, audit, retain_self, peers):
     with publisher.worker.network_lock:
         anchor = publisher.worker.rpc.call('getbestblockhash')
         selected = []
+        own_decline = 'ready seal unavailable in the local cursor'
         for peer in peers:
             path = peer.folder / 'current.json'
             if not path.exists() or path.stat().st_size > 262144:
@@ -397,12 +432,18 @@ def commit_ready(publisher, audit, retain_self):
             row = json.loads(path.read_bytes())
             if not row.get('commit_ready') or not row.get('answer'):
                 continue
+            if peer is publisher and any(
+                row.get(key) != audit.get(key)
+                for key in ('request_id', 'slot', 'attempt', 'ticket', 'report_root', 'actor', 'ranges', 'answer')
+            ):
+                own_decline = 'local cursor binding changed'
+                continue
             _, _, job = ready_audit_view(peer, row, anchor)
-            if (job and job['state'] == 'assigned' and job.get('expired') is False
-                    and job.get('actor_policy_accepted') is True
-                    and row.get('actor') and job.get('actor') == row['actor']
-                    and job.get('ranges') == row['ranges']):
+            decline = _ready_decline(row, job)
+            if decline is None:
                 selected.append((peer, row))
+            elif peer is publisher:
+                own_decline = decline
         if not any(peer is publisher for peer, _ in selected):
             current = json.loads((publisher.folder / 'current.json').read_bytes())
             _, _, job = ready_audit_view(publisher, audit, anchor)
@@ -414,7 +455,7 @@ def commit_ready(publisher, audit, retain_self):
                 verify_committed_event(publisher.worker.rpc, audit, current['publication_intent'], anchor)
                 audit['publication_intent'] = current['publication_intent']
                 return dict(available=True, confirmed_block=current['publication_intent']['hash'])
-            raise RuntimeError('Ready audit changed before grouped commitment; seal retained')
+            raise RuntimeError(f'Ready audit changed before grouped commitment ({own_decline}); seal retained')
         # A lost or duplicated local cursor cannot put two commitments for
         # the same canonical attempt in a single signed prefix.
         own = identity(audit)
@@ -475,12 +516,21 @@ def disclose_local_ready(owner, queued):
         if sealed.get('report_root') != reports[0]['report_root'] or hashlib.sha256(canonical_bytes(sealed['body'])).hexdigest() != reports[0]['report_root']:
             raise ValueError('Local owner disclosure differs from confirmed commitment')
         operations = [(owner, 'reveal_report', request, 0, 0, canonical_bytes(sealed['body']).hex())]
+        current_jobs = {(job['slot'], job['attempt']):job for job in jobs}
         seen = set()
         for publisher, name, audit in rows:
             key = identity(audit)
-            if key not in seen:
-                seen.add(key)
-                operations.append((publisher, 'reveal', *key, canonical_bytes(audit['answer']['body']).hex()))
+            job = current_jobs.get((audit['slot'],audit['attempt']))
+            if (key in seen or not job
+                    or reports[0]['ticket'] != audit['ticket']
+                    or reports[0]['report_root'] != audit['report_root']
+                    or job.get('commitment') != audit['answer']['commitment']
+                    or (audit.get('actor') is not None and job.get('actor') != audit['actor'])):
+                continue
+            seen.add(key)
+            operations.append((publisher, 'reveal', *key, canonical_bytes(audit['answer']['body']).hex()))
+        if len(operations) == 1:
+            continue
         try:
             apply_group(operations)
         except RetainedAuditPublicationError as error:

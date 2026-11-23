@@ -39,6 +39,7 @@
 #include <node/txorphanage.h>
 #include <node/txreconciliation.h>
 #include <node/warnings.h>
+#include <pgn/native_body_window.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
 #include <policy/packages.h>
@@ -251,11 +252,13 @@ struct Peer {
     ~Peer() { pgn::social::Close(m_social_link); }
 
     // Native scientific headers acquire work only after full body validation.
-    // Keep one untrusted body request per peer, outside the accepted index.
-    std::optional<uint256> m_pgn_body_request GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
+    // The native request window holds hashes only. Hints never acquire chain work.
+    pgn::NativeBodyWindow<uint256> m_pgn_body_window GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
     NodeClock::time_point m_pgn_body_requested_at GUARDED_BY(NetEventsInterface::g_msgproc_mutex){};
+    std::chrono::microseconds m_pgn_first_body_wait GUARDED_BY(NetEventsInterface::g_msgproc_mutex){};
+    std::chrono::microseconds m_pgn_body_service GUARDED_BY(NetEventsInterface::g_msgproc_mutex){};
+    bool m_pgn_first_body GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
     // These hints never enter the accepted block index or acquire chain work.
-    // Amortize header suffix requests while keeping one body in flight.
     std::deque<CBlockHeader> m_pgn_pending_headers GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
     // Advisory download progress only; never a source of chain work.
     std::atomic<int> m_pgn_announced_height{-1};
@@ -458,6 +461,13 @@ struct CNodeState {
     //! Since when we're stalling block download progress (in microseconds), or 0.
     std::chrono::microseconds m_stalling_since{0us};
     std::list<QueuedBlock> vBlocksInFlight;
+    std::size_t m_pgn_reserved_bodies GUARDED_BY(cs_main){0};
+
+    int DownloadCredits() const EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    {
+        const auto outstanding = vBlocksInFlight.size() + m_pgn_reserved_bodies;
+        return std::max(0, MAX_BLOCKS_IN_TRANSIT_PER_PEER - static_cast<int>(outstanding));
+    }
     //! When the first entry in vBlocksInFlight started downloading. Don't care when vBlocksInFlight is empty.
     std::chrono::microseconds m_downloading_since{0us};
     //! Whether we consider this a preferred download peer.
@@ -672,7 +682,13 @@ private:
      * This returns true if a getheaders is actually sent, and false otherwise.
      */
     bool MaybeSendGetHeaders(CNode& pfrom, const CBlockLocator& locator, Peer& peer) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
-    bool RequestNextNativeBody(CNode& pfrom, Peer& peer) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+    // One outbound peer can borrow extra in-flight credits. Serial download
+    // remains available on every peer, including across a native branch change.
+    std::optional<NodeId> m_pgn_window_peer GUARDED_BY(g_msgproc_mutex);
+    // A failed speculative connection must not disable good routes.
+    std::vector<std::string> m_pgn_serial_routes GUARDED_BY(g_msgproc_mutex);
+    bool RequestNextNativeBody(CNode& pfrom, Peer& peer) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex, !m_peer_mutex);
+    void AbortNativeBodyWindow(CNode& pfrom, Peer& peer, bool serial_route = true) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
     /** Potentially fetch blocks from this peer upon receipt of a new headers tip */
     void HeadersDirectFetchBlocks(CNode& pfrom, const Peer& peer, const CBlockIndex& last_header);
     /** Update peer state based on received headers message */
@@ -1911,6 +1927,13 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
 
     LOCK(cs_main);
 
+    const auto* state = State(peer_id);
+    if (!state) return util::Unexpected{"Peer does not exist"};
+    if (state->m_pgn_reserved_bodies != 0 &&
+        state->vBlocksInFlight.size() + state->m_pgn_reserved_bodies >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        return util::Unexpected{"Peer download window is full"};
+    }
+
     // Forget about all prior requests
     RemoveBlockRequest(block_index.GetBlockHash(), std::nullopt);
 
@@ -2638,7 +2661,7 @@ void PeerManagerImpl::HeadersDirectFetchBlocks(CNode& pfrom, const Peer& peer, c
             std::vector<CInv> vGetData;
             // Download as much as possible, from earliest to latest.
             for (const CBlockIndex* pindex : vToFetch | std::views::reverse) {
-                if (nodestate->vBlocksInFlight.size() >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+                if (nodestate->vBlocksInFlight.size() + nodestate->m_pgn_reserved_bodies >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
                     // Can't download any more from this peer
                     break;
                 }
@@ -2726,8 +2749,11 @@ void PeerManagerImpl::UpdatePeerStateForReceivedHeaders(CNode& pfrom, Peer& peer
 
 bool PeerManagerImpl::RequestNextNativeBody(CNode& pfrom, Peer& peer)
 {
-    if (peer.m_pgn_body_request) return false;
-    std::optional<uint256> needed;
+    if (!peer.m_pgn_body_window.Empty()) return false;
+    if (m_pgn_window_peer && !GetPeerRef(*m_pgn_window_peer)) m_pgn_window_peer.reset();
+    const bool may_prefetch = !pfrom.IsInboundConn() && !m_pgn_window_peer &&
+        std::ranges::find(m_pgn_serial_routes, pfrom.addr.ToStringAddrPort()) == m_pgn_serial_routes.end();
+    std::vector<CInv> requests;
     {
         LOCK(cs_main);
         while (!peer.m_pgn_pending_headers.empty()) {
@@ -2741,16 +2767,58 @@ bool PeerManagerImpl::RequestNextNativeBody(CNode& pfrom, Peer& peer)
                 peer.m_pgn_pending_headers.clear();
                 break;
             }
-            needed = hash;
+            auto* state = State(pfrom.GetId());
+            const auto in_flight = state ? state->vBlocksInFlight.size() : MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+            const auto maximum = static_cast<std::size_t>(MAX_BLOCKS_IN_TRANSIT_PER_PEER);
+            if (in_flight >= maximum) {
+                peer.m_pgn_pending_headers.push_front(header);
+                break;
+            }
+            const std::size_t capacity = maximum - in_flight;
+            const std::size_t width = may_prefetch && parent == m_chainman.ActiveChain().Tip()
+                ? peer.m_pgn_body_window.SuggestedWidth(capacity, peer.m_pgn_first_body_wait, peer.m_pgn_body_service)
+                : 1;
+            requests.emplace_back(MSG_WITNESS_BLOCK, hash);
+            peer.m_pgn_body_window.Begin(hash);
+            auto previous = hash;
+            while (requests.size() < width && !peer.m_pgn_pending_headers.empty()) {
+                const auto& next = peer.m_pgn_pending_headers.front();
+                const auto next_hash = next.GetHash();
+                const auto* next_index = m_chainman.m_blockman.LookupBlockIndex(next_hash);
+                if (next.hashPrevBlock != previous || (next_index && (next_index->nStatus & BLOCK_HAVE_DATA))) break;
+                requests.emplace_back(MSG_WITNESS_BLOCK, next_hash);
+                peer.m_pgn_body_window.Append(next_hash);
+                previous = next_hash;
+                peer.m_pgn_pending_headers.pop_front();
+            }
+            state->m_pgn_reserved_bodies = requests.size();
             break;
         }
     }
-    if (!needed) return false;
-    peer.m_pgn_body_request = *needed;
+    if (requests.empty()) return false;
+    if (peer.m_pgn_body_window.Speculative()) m_pgn_window_peer = pfrom.GetId();
     peer.m_pgn_body_pending = true;
+    peer.m_pgn_first_body = true;
     peer.m_pgn_body_requested_at = NodeClock::now();
-    MakeAndPushMessage(pfrom, NetMsgType::GETDATA, std::vector<CInv>{CInv{MSG_WITNESS_BLOCK, *needed}});
+    MakeAndPushMessage(pfrom, NetMsgType::GETDATA, requests);
     return true;
+}
+
+void PeerManagerImpl::AbortNativeBodyWindow(CNode& pfrom, Peer& peer, bool serial_route)
+{
+    Assume(peer.m_pgn_body_window.Speculative());
+    // Close the transport before reusing its credits. Replies from the old
+    // request must never be mistaken for a new serial request.
+    if (serial_route) {
+        constexpr std::size_t MAX_SERIAL_ROUTES{8};
+        const auto route = pfrom.addr.ToStringAddrPort();
+        if (std::ranges::find(m_pgn_serial_routes, route) == m_pgn_serial_routes.end()) {
+            if (m_pgn_serial_routes.size() == MAX_SERIAL_ROUTES) m_pgn_serial_routes.erase(m_pgn_serial_routes.begin());
+            m_pgn_serial_routes.push_back(route);
+        }
+    }
+    pfrom.fDisconnect = true;
+    LogDebug(BCLog::NET, "Native block prefetch stopped; reverting to serial downloads, peer=%d\n", pfrom.GetId());
 }
 
 void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
@@ -2808,9 +2876,9 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     if (m_chainman.m_options.pgn_candidate_science_budget || m_chainman.m_options.pgn_candidate_bootstrap_budget) {
         // An unverified header cannot create chain work or an index entry.
-        // Fetch its body first, one connected block at a time. Retain only a
-        // bounded linked hint window; none of it is accepted chain state.
-        if (peer.m_pgn_body_request || !CanServeWitnesses(peer)) return;
+        // Only the next body can enter validation. Additional linked headers
+        // are hints for transporting bodies ahead of that boundary.
+        if (!peer.m_pgn_body_window.Empty() || !CanServeWitnesses(peer)) return;
         static constexpr size_t MAX_NATIVE_HEADER_WINDOW{64};
         peer.m_pgn_pending_headers.clear();
         {
@@ -4359,7 +4427,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // We want to be a bit conservative just to be extra careful about DoS
         // possibilities in compact block processing...
         if (pindex->nHeight <= m_chainman.ActiveChain().Height() + 2) {
-            if ((already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK && nodestate->vBlocksInFlight.size() < MAX_BLOCKS_IN_TRANSIT_PER_PEER) ||
+            if ((already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK &&
+                 nodestate->vBlocksInFlight.size() + nodestate->m_pgn_reserved_bodies < MAX_BLOCKS_IN_TRANSIT_PER_PEER) ||
                  requested_block_from_this_peer) {
                 std::list<QueuedBlock>::iterator* queuedBlockIt = nullptr;
                 if (!BlockRequested(pfrom.GetId(), *pindex, &queuedBlockIt)) {
@@ -4546,19 +4615,40 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         LogDebug(BCLog::NET, "received block %s peer=%d\n", pblock->GetHash().ToString(), pfrom.GetId());
 
+        const uint256 hash{pblock->GetHash()};
+        const auto arrival = peer.m_pgn_body_window.Classify(hash);
+        if (arrival == pgn::BodyArrival::OutOfOrder) {
+            AbortNativeBodyWindow(pfrom, peer);
+            return;
+        }
+        const bool requested_native_body = arrival == pgn::BodyArrival::Head;
+        const bool native_batch_head = requested_native_body && peer.m_pgn_body_window.Speculative();
+        const auto received = NodeClock::now();
+        if (native_batch_head) {
+            const bool eligible = WITH_LOCK(cs_main, {
+                const auto& active = m_chainman.ActiveChain();
+                const auto* tip = active.Tip();
+                const auto* already_active = m_chainman.m_blockman.LookupBlockIndex(hash);
+                return (tip && tip->GetBlockHash() == pblock->hashPrevBlock) ||
+                    (already_active && (already_active->nStatus & BLOCK_HAVE_DATA) && active.Contains(*already_active));
+            });
+            if (!eligible) {
+                AbortNativeBodyWindow(pfrom, peer, /*serial_route=*/false);
+                return;
+            }
+        }
         const CBlockIndex* prev_block{WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.LookupBlockIndex(pblock->hashPrevBlock))};
 
         // Check for possible mutation if it connects to something we know so we can check for Segwit being active
         if (prev_block && IsBlockMutated(/*block=*/*pblock, /*check_witness_root=*/true)) {
             LogDebug(BCLog::NET, "Received mutated block from peer=%d\n", peer.m_id);
             Misbehaving(peer, "mutated block");
-            WITH_LOCK(cs_main, RemoveBlockRequest(pblock->GetHash(), peer.m_id));
+            WITH_LOCK(cs_main, RemoveBlockRequest(hash, peer.m_id));
+            if (native_batch_head) AbortNativeBodyWindow(pfrom, peer);
             return;
         }
 
         bool forceProcessing = false;
-        const uint256 hash(pblock->GetHash());
-        const bool requested_native_body = peer.m_pgn_body_request == hash;
         {
             LOCK(cs_main);
             // Always process the block if we requested it, since we may
@@ -4572,12 +4662,40 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
         ProcessBlock(pfrom, pblock, forceProcessing);
         if (requested_native_body) {
-            peer.m_pgn_body_request.reset();
+            const CBlockIndex* accepted;
+            bool body_available, still_on_branch, parent_still_tip;
+            {
+                LOCK(cs_main);
+                accepted = m_chainman.m_blockman.LookupBlockIndex(hash);
+                body_available = accepted && (accepted->nStatus & BLOCK_HAVE_DATA);
+                const auto& active = m_chainman.ActiveChain();
+                still_on_branch = body_available && active.Contains(*accepted);
+                parent_still_tip = active.Tip() && active.Tip()->GetBlockHash() == pblock->hashPrevBlock;
+            }
+            if (native_batch_head && !still_on_branch) {
+                AbortNativeBodyWindow(pfrom, peer, /*serial_route=*/!body_available && parent_still_tip);
+                return;
+            }
+            if (peer.m_pgn_first_body) {
+                peer.m_pgn_first_body_wait = std::chrono::duration_cast<std::chrono::microseconds>(received - peer.m_pgn_body_requested_at);
+                peer.m_pgn_first_body = false;
+            }
+            peer.m_pgn_body_service = std::chrono::duration_cast<std::chrono::microseconds>(NodeClock::now() - received);
+            const bool advanced = peer.m_pgn_body_window.Advance(hash);
+            Assume(advanced);
+            {
+                LOCK(cs_main);
+                if (auto* state = State(pfrom.GetId())) {
+                    state->m_pgn_reserved_bodies = peer.m_pgn_body_window.Count();
+                }
+            }
+            if (!peer.m_pgn_body_window.Empty()) {
+                peer.m_pgn_body_requested_at = NodeClock::now();
+                return;
+            }
             peer.m_pgn_body_pending = false;
-            const CBlockIndex* accepted{WITH_LOCK(cs_main, return m_chainman.m_blockman.LookupBlockIndex(hash))};
-            if (accepted && WITH_LOCK(cs_main, return (accepted->nStatus & BLOCK_HAVE_DATA) != 0)) {
-                // The next hint is used only after its parent's full body was
-                // accepted. Recheck that boundary before each request.
+            if (m_pgn_window_peer == pfrom.GetId()) m_pgn_window_peer.reset();
+            if (body_available) {
                 if (!RequestNextNativeBody(pfrom, peer)) {
                     peer.m_last_getheaders_timestamp = {};
                     MaybeSendGetHeaders(pfrom, GetLocator(accepted), peer);
@@ -4785,6 +4903,10 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             for (CInv &inv : vInv) {
                 if (inv.IsGenTxMsg()) {
                     tx_invs.emplace_back(ToGenTxid(inv));
+                } else if (inv.IsGenBlkMsg() && peer.m_pgn_body_window.Speculative() &&
+                           peer.m_pgn_body_window.Classify(inv.hash) != pgn::BodyArrival::Unrelated) {
+                    AbortNativeBodyWindow(pfrom, peer);
+                    break;
                 }
             }
         }
@@ -5508,10 +5630,17 @@ bool PeerManagerImpl::SendMessages(CNode& node)
     const auto now{NodeClock::now()};
     const auto current_time{GetTime<std::chrono::microseconds>()};
 
-    if (peer.m_pgn_body_request && now - peer.m_pgn_body_requested_at > 60s) {
+    const auto native_body_timeout = peer.m_pgn_body_window.Speculative() && !peer.m_pgn_first_body
+        ? peer.m_pgn_body_window.SuffixIdleTimeout(peer.m_pgn_first_body_wait, peer.m_pgn_body_service)
+        : std::chrono::microseconds{60s};
+    if (!peer.m_pgn_body_window.Empty() && now - peer.m_pgn_body_requested_at > native_body_timeout) {
+        if (peer.m_pgn_body_window.Speculative()) AbortNativeBodyWindow(node, peer);
         LogDebug(BCLog::NET, "Native full-body request timed out, peer=%d\n", node.GetId());
         node.fDisconnect = true;
         return true;
+    }
+    if (peer.m_pgn_body_window.Empty() && !peer.m_pgn_pending_headers.empty()) {
+        RequestNextNativeBody(node, peer);
     }
 
     // The logic below does not apply to private broadcast peers, so skip it.
@@ -5940,17 +6069,14 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        if (CanServeBlocks(peer) && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && state.vBlocksInFlight.size() < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        if (CanServeBlocks(peer) && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && state.DownloadCredits() > 0) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
-            auto get_inflight_budget = [&state]() {
-                return std::max(0, MAX_BLOCKS_IN_TRANSIT_PER_PEER - static_cast<int>(state.vBlocksInFlight.size()));
-            };
 
             // If there are multiple chainstates, download blocks for the
             // current chainstate first, to prioritize getting to network tip
             // before downloading historical blocks.
-            FindNextBlocksToDownload(peer, get_inflight_budget(), vToDownload, staller);
+            FindNextBlocksToDownload(peer, state.DownloadCredits(), vToDownload, staller);
             auto historical_blocks{m_chainman.GetHistoricalBlockRange()};
             if (historical_blocks && !IsLimitedPeer(peer)) {
                 // If the first needed historical block is not an ancestor of the last,
@@ -5958,10 +6084,11 @@ bool PeerManagerImpl::SendMessages(CNode& node)
                 const CBlockIndex* from_tip = LastCommonAncestor(historical_blocks->first, historical_blocks->second);
                 TryDownloadingHistoricalBlocks(
                     peer,
-                    get_inflight_budget(),
+                    state.DownloadCredits(),
                     vToDownload, from_tip, historical_blocks->second);
             }
             for (const CBlockIndex *pindex : vToDownload) {
+                if (state.DownloadCredits() == 0) break;
                 uint32_t nFetchFlags = GetFetchFlags(peer);
                 vGetData.emplace_back(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash());
                 BlockRequested(node.GetId(), *pindex);
