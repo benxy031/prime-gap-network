@@ -262,12 +262,22 @@ class MiningFlow:
             if journal is not None and journal.is_native(owner):
                 audit = self.audit_lanes[job.context['audit_position']].current_audit
                 retained = self.cycles.extra_audit_cycle(job.context['presentation']['audit_id'])
+                if self.fresh_boundary() != owner:
+                    return False
+                if retained == owner:
+                    # An unfinished reserved audit can occupy the lane needed
+                    # to prepare the first regular audit. Let it finish under
+                    # its original allowance even before regular service is ready.
+                    job_identity = (job.context['audit_request_id'], job.context['audit_slot'],
+                                    job.context['audit_attempt'])
+                    return (audit is not None and self.service_identity(audit) == job_identity
+                            and audit.get('actor') == job.context.get('audit_actor')
+                            and not self.cycles.snapshot(owner)['hold'])
                 if not retained and audit is not None and not self.audit_has_no_progress(audit):
                     job.context['finish_retained_audit'] = True
-                    return self.fresh_boundary() == owner
-                return (self.fresh_boundary() == owner and journal.ready(owner)
-                        and (retained == owner or (not journal.catchup_ready(owner)
-                                                    and not self.cycles.extra_audits(owner))))
+                    return True
+                return (journal.ready(owner) and not journal.catchup_ready(owner)
+                        and not self.cycles.extra_audits(owner))
             return self.may_unbound_audit(job) if owner is None else self.cycles.may_extra_audit(owner, job.context['presentation']['audit_id'])
         if job.context.get("legacy_assignment"):
             return True
@@ -1207,15 +1217,19 @@ class MiningFlow:
                 audit.recovery_pending = None
                 if outcome == "none":
                     proposal = audit.last_unavailable or {}
+                    reason = proposal.get("unavailable_reason")
                     # A prefetch during another calculation cannot waive the
                     # next cycle's audits before its actual service boundary.
                     with self.gpu.condition:
                         active = self.gpu.active
                         at_boundary = active is None or active.context.get("work_cycle") == pending
-                    if fresh is not None:
+                    if reason == "assignment_recovery_pending":
+                        # The next recovery page can locate the live audit.
+                        # Keep the ticket eligible to receive that assignment.
+                        audit.recovery_pending = proposal["reason"]
+                    elif fresh is not None:
                         self.resolve_fresh_availability(fresh, pending, position, proposal)
                     elif pending and at_boundary and self.pending_audit(position) == pending:
-                        reason = proposal.get("unavailable_reason")
                         if proposal.get("genesis") != self.worker.args.genesis:
                             raise ValueError("Audit availability belongs to another or unknown chain")
                         if reason == "no_eligible_independent_work":

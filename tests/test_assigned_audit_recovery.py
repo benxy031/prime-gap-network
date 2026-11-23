@@ -67,6 +67,34 @@ class Tests(unittest.TestCase):
         fresh=AssignedAuditRecovery(self.worker);a,_=fresh.claim(self.folders[0]);self.assertEqual(a['request_id'],f'{101:064x}')
         self.assertEqual(json.loads(fresh.cursor.read_bytes())['offset'],100)
 
+    def test_sibling_reuses_complete_empty_scan_only_at_the_same_tip(self):
+        self.rpc.pages = {0: page(0, range(1, 101)), 100: page(100, [])}
+        for row in self.rpc.pages[0]['audits']:
+            row['jobs'] = []
+        self.assertEqual(self.recovery.claim(self.folders[0]), (None, False))
+        self.assertEqual(self.recovery.claim(self.folders[0]), (None, True))
+        self.assertEqual(self.recovery.claim(self.folders[1]), (None, True))
+        self.assertEqual([args[1] for method, args in self.rpc.calls if method == 'getpgnworkview'],
+                         [0, 100])
+        self.rpc.tip = '9' * 64
+        self.rpc.pages[0] = page(0, [102])
+        self.rpc.pages[0]['state']['bestblockhash'] = self.rpc.tip
+        audit, _ = self.recovery.claim(self.folders[1])
+        self.assertEqual(audit['request_id'], report(102)['request_id'])
+
+    def test_pages_from_different_tips_do_not_establish_shared_empty_scan(self):
+        self.rpc.pages = {0: page(0, range(1, 101)), 100: page(100, [])}
+        for row in self.rpc.pages[0]['audits']:
+            row['jobs'] = []
+        self.assertEqual(self.recovery.claim(self.folders[0]), (None, False))
+        self.rpc.tip = '9' * 64
+        self.rpc.pages[100]['state']['bestblockhash'] = self.rpc.tip
+        self.assertEqual(self.recovery.claim(self.folders[0]), (None, True))
+        self.rpc.pages[0] = page(0, [102])
+        self.rpc.pages[0]['state']['bestblockhash'] = self.rpc.tip
+        audit, _ = self.recovery.claim(self.folders[1])
+        self.assertEqual(audit['request_id'], report(102)['request_id'])
+
     def test_previous_wallet_cursor_restarts_on_page_zero(self):
         past_actor = '0014' + '1' * 40
         self.recovery.cursor.write_text(json.dumps(dict(genesis=CHAIN, actor=past_actor, offset=100)))

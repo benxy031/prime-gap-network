@@ -38,6 +38,7 @@ class AssignedAuditRecovery:
         self.worker = worker
         self.cursor = worker.root / 'assigned-audit-recovery.json'
         self.active_root = active_root
+        self.empty_observation = None
 
     def retain_legacy_answer(self, candidate):
         """Inactive journals are retained data, never reservations of a GPU lane."""
@@ -108,6 +109,14 @@ class AssignedAuditRecovery:
             actor = identity.get('scriptPubKey')
             if identity.get('isvalid') is not True or not canonical_signing_script(actor):
                 raise ValueError('Authenticated miner signing script required for audit recovery')
+            journals = [worker.root / self.active_root / str(i) / 'audits/current.json' for i in range(2)]
+            observed = self.empty_observation
+            if observed is not None:
+                (genesis, signer, anchor), next_page = observed
+                if (next_page is None and (genesis, signer) == (worker.args.genesis, actor)
+                        and not any(journal.exists() for journal in journals)
+                        and read(worker.rpc.call, 'getbestblockhash') == anchor):
+                    return None, True
             offset = 0
             if self.cursor.is_file():
                 if self.cursor.stat().st_size > 1024:
@@ -140,7 +149,6 @@ class AssignedAuditRecovery:
             reserved = set()
             # Only the two execution lanes can reserve a job. A retained
             # journal from a retired signer/flow is an input to migration.
-            journals = [worker.root / self.active_root / str(i) / 'audits/current.json' for i in range(2)]
             for journal in journals:
                 if not journal.is_file():
                     continue
@@ -150,6 +158,7 @@ class AssignedAuditRecovery:
                 reserved.add((value.get('request_id'), value.get('slot'), value.get('attempt')))
             candidate = None
             waiting_for_seal_lane = False
+            retained_work = bool(reserved)
             progress = worker.root / 'work-cycles' / 'retained-audit-progress'
             seen = set()
             for row in rows:
@@ -199,6 +208,7 @@ class AssignedAuditRecovery:
                                     recovered_assignment_anchor=state['bestblockhash'])
                     retained, _ = progress_path(progress, worker.args.genesis, selected)
                     if retained is not None and retained.with_suffix('.conflict').is_file():
+                        retained_work = True
                         continue
                     seal_lanes = [AuditAnswers(path.parent) for path in journals]
                     holders = [lane.folder for lane in seal_lanes if lane.records_seal(name)]
@@ -212,6 +222,7 @@ class AssignedAuditRecovery:
                         candidate = recover_retired_progress(progress, worker.args.genesis, candidate)
                     except (LegacyAuditSignerUnresolved, RetiredAuditSealConflict):
                         candidate = None
+                        retained_work = True
                         continue
                     break
                 if candidate is not None:
@@ -222,6 +233,7 @@ class AssignedAuditRecovery:
                     if not read(signable_actor, worker, actor):
                         return None, False
             if read(worker.rpc.call, 'getbestblockhash') != state['bestblockhash']:
+                self.empty_observation = None
                 return None, False  # No cursor/journal mutation from a stale page.
             complete = len(reports) < 100 and not waiting_for_seal_lane
             # Stay on a page with a candidate so the second lane can recover
@@ -235,4 +247,12 @@ class AssignedAuditRecovery:
                 atomic_bytes(journal, canonical_bytes(candidate) + b'\n')
             atomic_bytes(self.cursor, canonical_bytes(dict(genesis=worker.args.genesis,
                          actor=actor, offset=next_offset)) + b'\n')
+            scope = worker.args.genesis, actor, state['bestblockhash']
+            # Share a negative result only after the entire empty scan stayed
+            # on one verified tip and left no known or unresolved assignment.
+            if (candidate is None and not retained_work and not waiting_for_seal_lane
+                    and (offset == 0 or observed == (scope, offset))):
+                self.empty_observation = scope, None if complete else next_offset
+            else:
+                self.empty_observation = None
             return candidate, complete
