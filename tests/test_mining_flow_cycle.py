@@ -280,6 +280,54 @@ class MiningFlowCycleTests(unittest.TestCase):
                 flow.gpu.wake()
                 publisher.join(2)
 
+    def test_next_signed_ticket_prepares_audits_while_previous_search_runs(self):
+        from horizon_cycle_execution import CycleExecution
+        from horizon_gpu_queue import ResidentGpuQueue
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cycle, previous, ticket = 'b' * 64, 'c' * 64, 'd' * 64
+            running, quitting = threading.Event(), threading.Event()
+            flow = object.__new__(MiningFlow)
+            flow.worker = SimpleNamespace(root=root)
+            state = dict(work=dict(request_id=cycle), stage='prepared', hold='')
+            flow.cycles = SimpleNamespace(snapshot=lambda _: state, extra_audit_cycle=lambda _: None,
+                                          value=dict(cycles=[state]))
+            flow.physical_audits = CycleExecution(root, 'a' * 64)
+            flow.physical_audits.mark_native(cycle, {cycle})
+            flow.physical_audits.prepare(cycle, {cycle})
+            flow.cycle_audit_positions = {}
+            flow.prefetch = SimpleNamespace(ready=dict(request_id=cycle, ticket=ticket))
+            flow.gpu = ResidentGpuQueue(None, running, quitting, None, None, None, None)
+            flow.gpu.active = SimpleNamespace(context=dict(role='search', work_cycle=previous))
+            flow.gpu.submit(dict(ticket_id=ticket), dict(role='search', prepared=True, work_cycle=cycle), 1)
+            flow.audit_lanes = []
+            for position in (0, 1):
+                actor = '0014' + 'e' * 40
+                audit = dict(request_id=f'{40 + position:064x}', slot=position, attempt=0,
+                             actor=actor, ranges=[dict(index=0, start='100', end='200')], counts=[])
+                folder = root / str(position)
+                folder.mkdir()
+                flow.audit_lanes.append(SimpleNamespace(folder=folder, current_audit=audit))
+                flow.prefetch.ready['ticket'] = 'f' * 64
+                self.assertFalse(flow.can_bind_physical(cycle, position, audit))
+                flow.prefetch.ready['ticket'] = ticket
+                audit['counts'] = [1]
+                self.assertFalse(flow.can_bind_physical(cycle, position, audit))
+                audit['counts'] = []
+                flow.bind_audit_cycle(position, audit)
+                self.assertEqual(json.loads((folder / 'current.json').read_bytes())['physical_cycle'], cycle)
+                exact = dict(role='audit', work_cycle=cycle, physical_cycle=True,
+                             audit_position=position, audit_request_id=audit['request_id'],
+                             audit_slot=position, audit_attempt=0, audit_actor=actor)
+                job = SimpleNamespace(context=exact)
+                self.assertFalse(flow.may_start_work(job))
+                self.assertEqual(flow.physical_audits.snapshot(cycle)[position],
+                                 flow.physical_audits.ref(audit))
+            flow.gpu.active = None
+            self.assertEqual(flow.fresh_boundary(), cycle)
+            self.assertTrue(flow.may_start_work(job))
+
     def test_old_partition_archive_cannot_bind_as_fresh(self):
         from horizon_audit_progress import partition_identity
         from horizon_audit_partition_archive import NAME

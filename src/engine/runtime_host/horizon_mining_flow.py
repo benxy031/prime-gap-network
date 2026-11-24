@@ -571,10 +571,25 @@ class MiningFlow:
         return not any((tickets / partition_identity(audit, part) / name).exists()
                        for part in audit['ranges'] for name in checkpoints)
 
+    def is_next_prepared_audit_cycle(self, cycle):
+        prefetch = getattr(self, 'prefetch', None)
+        with self.gpu.condition:
+            active = self.gpu.active
+            if active is None or active.context.get('role') != 'search':
+                return False
+            ready = getattr(prefetch, 'ready', None)
+            pending = self.gpu.search[0] if self.gpu.search else None
+            return bool(ready and ready['request_id'] == cycle and pending
+                        and pending.context.get('prepared')
+                        and pending.context.get('work_cycle') == cycle
+                        and pending.ticket['ticket_id'] == ready['ticket']
+                        and active.context.get('work_cycle') != cycle)
+
     def can_bind_physical(self, cycle, position, audit):
         journal = self.physical_audits
         return (not journal.is_native(cycle) or journal.bound_audit(audit, position) == cycle
-                or (self.fresh_boundary() == cycle and self.audit_has_no_progress(audit)))
+                or ((self.fresh_boundary() == cycle or self.is_next_prepared_audit_cycle(cycle))
+                    and self.audit_has_no_progress(audit)))
 
     def reconcile_physical_extra_bindings(self):
         # Earlier recovery could forget the saved physical binding, then
@@ -872,9 +887,8 @@ class MiningFlow:
             from horizon_native_work_duty import observe
             with self.worker.network_lock:
                 native = observe(self.worker.rpc, work, self.worker.args.genesis, previous)
-        if getattr(self.worker, 'cpu_only', False):
-            from horizon_cycle_retirement import reconcile_cpu_capacity
-            reconcile_cpu_capacity(self, work)
+        from horizon_cycle_retirement import reconcile_capacity
+        reconcile_capacity(self, work)
         request = work['request_id']
         physical = getattr(self, 'physical_audits', None)
         if (new_gpu_work and physical is not None and native is not None and not getattr(self.worker, 'cpu_only', False)

@@ -3,13 +3,14 @@ import copy,json,sys,tempfile,threading,unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 P=Path(__file__).resolve().parent;Q=P.parent
+if not (Q/'src/engine/runtime_host').is_dir():Q=P.parent/'gpu111-joint-private'
 sys.path[:0]=[str(P),str(Q/'src/engine/runtime_host'),str(Q/'src/protocol')]
 from horizon_work_cycle import WorkCycleJournal
 from horizon_cycle_retirement import observe_inactive,retain_inactive,reconcile_cpu_capacity
 
 class Rpc:
     def __init__(self,cycle,genesis):
-        self.view=dict(schema='PGN_WORK_VIEW_V1',kind='tickets',request_id=cycle['work']['request_id'],reports=[],state=dict(genesis=genesis,bestblockhash='b'*64,height=999,leases=[]));self.tip='b'*64
+        self.view=dict(schema='PGN_WORK_VIEW_V1',kind='tickets',offset=0,limit=1,request_id=cycle['work']['request_id'],reports=[],state=dict(genesis=genesis,bestblockhash='b'*64,height=999,lease_offset=0,leases=[]));self.tip='b'*64
     def call(self,method,args=None):
         return copy.deepcopy(self.view)if method=='getpgnworkview'else self.tip
 
