@@ -104,11 +104,17 @@ class AuditPartitionArchiveTests(unittest.TestCase):
         self.assertEqual(view.frame(second)['scopes']['ticket'], boundary['scopes']['ticket'])
 
     def test_crash_after_count_before_handoff_recovers_without_recomputation(self):
+        computed = []
+        self.audit.on_computed = lambda: computed.append(
+            ((self.folder / NAME).exists(), len(self.acked)))
         with patch.object(self.source,'retain_audit_partition',side_effect=OSError('Controlled handoff crash')):
             with self.assertRaises(OSError):self.audit.process_one()
         self.assertEqual(self.computations,1);self.assertEqual(self.acked,[])
+        self.assertEqual(computed, [])
+        self.assertIsNone(self.audit.computed_audit)
         self.assertFalse(self.compact()['compacted']);self.assertTrue((self.folder/'session-index.sqlite3').exists())
         self.assertEqual(self.audit.process_one(),'paused');self.assertEqual(self.computations,1)
+        self.assertEqual(computed, [(True, 1)])
         self.assertTrue(self.compact()['compacted'])
 
     def test_changed_recorded_count_cannot_release_source_or_raw_index(self):

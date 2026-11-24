@@ -46,7 +46,7 @@ class ResidentGpuQueue:
     minimum_service_ns = 1_000_000_000
     maximum_scheduled_search_piece = 4 * 10**12
 
-    def __init__(self, engine, enabled, stopping, on_start, on_result, on_paused, on_error, on_waiting=None, *, clock_ns=time.monotonic_ns, policy_clock=time.monotonic, may_start=None, check_start=None):
+    def __init__(self, engine, enabled, stopping, on_start, on_result, on_paused, on_error, on_waiting=None, *, clock_ns=time.perf_counter_ns, policy_clock=time.monotonic, may_start=None, check_start=None):
         self.engine = engine
         self.enabled, self.stopping = enabled, stopping
         self.on_start, self.on_result = on_start, on_result
@@ -167,8 +167,15 @@ class ResidentGpuQueue:
         return None
 
     def complete(self, job, result, finished=None):
-        self.on_result(job, copy.deepcopy(result))
+        accepted = self.on_result(job, copy.deepcopy(result))
         with self.condition:
+            if not job.retired and accepted is False:
+                # A durable same-identity result may await a publication gate.
+                # Retry its handoff automatically, without activation/arithmetic.
+                job.storage_retry_after = max(job.storage_retry_after,time.monotonic()+.25)
+                (self.search if job.context['role']=='search'else self.audits).appendleft(job)
+                self.condition.notify_all()
+                return
             if job.retired:
                 return
             self.last_completed = (job.ticket["ticket_id"], finished if finished is not None else self.clock_ns())
@@ -278,8 +285,8 @@ class ResidentGpuQueue:
                     announced_pause = True
                     self.last_completed = None
                     continue
-                # Persist the completed handoff before publishing another active
-                # job. This callback must never perform network requests.
+                # Retain the completed handoff before publishing another active
+                # job. The scheduler condition is released during the callback.
                 job.completed_result = copy.deepcopy(result)
                 self.complete(job, job.completed_result, finished)
             except Exception as error:

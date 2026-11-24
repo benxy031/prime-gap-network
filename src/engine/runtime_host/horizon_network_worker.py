@@ -215,6 +215,15 @@ class NetworkWorker:
         cpu_only = getattr(self, 'cpu_only', False)
         current = self.source.current_frame if cpu_only else None
         item = self.audits.presentation
+        work = getattr(self, 'current', None)
+        speculative_snapshot = getattr(self, 'speculative_progress_snapshot', None)
+        speculative = speculative_snapshot() if not cpu_only and speculative_snapshot is not None else None
+        if speculative is not None:
+            ticket, cycle, sequence, work = speculative
+            if (not cycle or work['ticket'] != ticket or work['request_id'] != cycle
+                    or event.get('ticket_id') != ticket or sequence != self.sequence):
+                return
+            item = None
         paused = event.get('phase') == 'PAUSED_ACK'
         if item:
             try:
@@ -241,13 +250,14 @@ class NetworkWorker:
                     frame.update(request_id=self.current['request_id'],title='Ticket '+str(self.current.get('ticket_number','')),work_role='search')
                 self.emit(frame)
             return
-        if not self.current:
-            return
-        if event.get("phase") == "PAUSED":
+        if not work or event.get("phase") == "PAUSED":
             return
         try:
-            frame = ticket_frame(self.root / "tickets" / self.current["ticket"], self.sequence, self.current.get("ticket_number"))
-            frame["request_id"] = self.current["request_id"]
+            frame = ticket_frame(self.root / "tickets" / work["ticket"], self.sequence, work.get("ticket_number"))
+            if speculative is not None and (frame.get("ticket_id") != work["ticket"]
+                                              or speculative_snapshot() != speculative):
+                return
+            frame["request_id"] = work["request_id"]
             frame["work_role"] = "search"
             if self.network_notice:
                 frame["network_notice"] = self.network_notice
@@ -258,6 +268,8 @@ class NetworkWorker:
             frame["validation_state"] = "Coordination pilot ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· independently audited acceptance remains separate"
             self.emit(frame)
         except (OSError, ValueError, KeyError):
+            if speculative is not None and speculative_snapshot() != speculative:
+                return
             self.message("Checkpoint saved; GPU released" if event.get("phase") == "PAUSED_ACK" else "Starting ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· preparing the first coherent checkpoint", "Paused" if event.get("phase") == "PAUSED_ACK" else "Starting")
 
     def configure_cpu_resource(self, control):

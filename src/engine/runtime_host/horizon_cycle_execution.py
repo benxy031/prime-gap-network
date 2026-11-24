@@ -244,10 +244,13 @@ class CycleExecution:
             raise ValueError('Physical audit is bound to multiple cycles')
         return matches[0] if matches else None
 
-    def bind(self, cycle, position, audit):
+    def bind(self, cycle, position, audit, *, replace_unavailable=False):
         task = self.ref(audit)
         def change(records):
             previous = records[cycle][position]
+            if replace_unavailable and previous and previous['stage'] == 'unavailable':
+                records[cycle][position] = task
+                return
             if previous is not None and any(previous.get(k) != task[k] for k in ('request', 'slot', 'attempt')):
                 raise ValueError('Physical cycle slot is already assigned')
             if previous is None:

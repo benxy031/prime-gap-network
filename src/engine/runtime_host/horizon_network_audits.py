@@ -31,7 +31,7 @@ def partition_ticket(audit, part):
                 threshold_policy=fields(start, end)['threshold_policy'], target_merit_q16=audit['target_merit_q16'])
 
 class NetworkAudits:
-    def __init__(self, worker, *, on_assigned=None, on_committed=None, before_commit=None, on_reassigned=None, reassignment_needed=None, on_retired=None):
+    def __init__(self, worker, *, on_assigned=None, on_committed=None, before_commit=None, on_reassigned=None, reassignment_needed=None, on_retired=None, on_computed=None):
         self.worker = worker
         self.folder = worker.root / "audits"
         self.folder.mkdir(exist_ok=True)
@@ -45,6 +45,8 @@ class NetworkAudits:
         self.owner_poll_more = False
         self.presentation = None
         self.current_audit = None
+        self.computed_audit = None
+        self.on_computed = on_computed
         self.last_unavailable = None
         self.on_assigned = on_assigned
         self.on_committed = on_committed
@@ -649,6 +651,7 @@ class NetworkAudits:
     def process_one(self):
         self.last_unavailable = None
         self.current_audit = None
+        self.computed_audit = None
         journal = self.folder / "current.json"
         if journal.is_file():
             if journal.stat().st_size > 262144:
@@ -805,6 +808,11 @@ class NetworkAudits:
             if callable(retain):retain(audit,part,result)
             if callable(acknowledge):
                 acknowledge(identity)
+        # The exact results are verified and saved, including the retained
+        # partition sources. Other GPU work can proceed while we publish.
+        self.computed_audit = audit
+        if self.on_computed is not None:
+            self.on_computed()
         if self.before_commit is not None and not self.before_commit(audit):
             return "paused"
         answer = audit.get("answer")
@@ -863,6 +871,7 @@ class NetworkAudits:
                     or any(audit.get(key) != observed.get(key) for key in binding)
                     or not audit.get("commit_ready") or not audit.get("answer")):
                 raise PublicationPending("Ready audit changed during reconciliation; seal retained")
+            self.current_audit = audit # Retain the exact hot lifecycle during publication replay.
             anchor, state, job = ready_audit_view(self, audit)
             if job is None and not assignment_absence_confirmed(audit, state, anchor, self.worker.rpc):
                 raise PublicationPending('Ready audit assignment view incomplete; seal retained')

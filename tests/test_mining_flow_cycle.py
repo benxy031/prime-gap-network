@@ -328,6 +328,87 @@ class MiningFlowCycleTests(unittest.TestCase):
             self.assertEqual(flow.fresh_boundary(), cycle)
             self.assertTrue(flow.may_start_work(job))
 
+    def test_late_assignment_fills_a_prepared_ticket_waiver_before_search(self):
+        from horizon_cycle_execution import CycleExecution
+        from horizon_gpu_queue import ResidentGpuQueue
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cycle, ticket, anchor = 'b' * 64, 'c' * 64, 'd' * 64
+            flow = object.__new__(MiningFlow)
+            flow.worker = SimpleNamespace(root=root)
+            state = dict(work=dict(request_id=cycle), stage='prepared', hold='', native_service={})
+            flow.cycles = SimpleNamespace(snapshot=lambda _: state, value=dict(cycles=[state]),
+                                          extra_audit_cycle=lambda _: None)
+            flow.physical_audits = CycleExecution(root, 'a' * 64)
+            flow.physical_audits.mark_native(cycle, {cycle})
+            flow.physical_audits.prepare(cycle, {cycle})
+            flow.physical_audits.unavailable(cycle, 1, anchor)
+            flow.gpu = ResidentGpuQueue(None, threading.Event(), threading.Event(), None, None, None, None)
+            flow.gpu.submit(dict(ticket_id=ticket), dict(role='search', prepared=True, work_cycle=cycle), 1)
+            flow.cycle_audit_positions = {}
+            flow.audit_lanes = [None, SimpleNamespace(folder=root)]
+            audit = dict(request_id='e' * 64, slot=1, attempt=0, actor='0014' + 'f' * 40,
+                         ranges=[dict(index=0, start='100', end='200')], counts=[])
+            self.assertEqual(flow.physical_assignment_target(1), cycle)
+            self.assertIsNone(flow.physical_audits.pending(1, [state]))
+            flow.cycles.extra_audit_cycle = lambda _: cycle
+            flow.bind_audit_cycle(1, audit)
+            self.assertEqual(flow.physical_audits.snapshot(cycle)[1]['stage'], 'unavailable')
+            flow.cycles.extra_audit_cycle = lambda _: None
+            flow.gpu.active = flow.gpu.search[0]
+            self.assertIsNone(flow.physical_assignment_target(1))
+            flow.gpu.active = None
+            flow.bind_audit_cycle(1, audit)
+            self.assertEqual(flow.physical_audits.snapshot(cycle)[1], flow.physical_audits.ref(audit))
+            self.assertEqual(json.loads((root / 'current.json').read_bytes())['physical_cycle'], cycle)
+
+    def test_prepared_extra_can_run_while_exact_regular_result_is_publishing(self):
+        from horizon_cycle_execution import CycleExecution
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            genesis, cycle, anchor = 'a' * 64, 'b' * 64, 'c' * 64
+            flow = object.__new__(MiningFlow)
+            flow.worker = SimpleNamespace(root=root)
+            state = dict(work=dict(request_id=cycle), stage='prepared', hold='')
+            flow.cycles = SimpleNamespace(snapshot=lambda _: state, value=dict(cycles=[state]),
+                                          extra_audits=lambda _: [], extra_audit_cycle=lambda _: None)
+            flow.prefetch = SimpleNamespace(ready=None)
+            flow.physical_audits = CycleExecution(root, genesis)
+            flow.physical_audits.mark_native(cycle, {cycle})
+            flow.physical_audits.prepare(cycle, {cycle})
+            sibling = dict(request_id='f' * 64, slot=1, attempt=0)
+            flow.physical_audits.bind(cycle, 1, sibling)
+            flow.physical_audits.committed(cycle, 1, sibling, anchor)
+            regular = dict(request_id='d' * 64, slot=0, attempt=0, physical_cycle=cycle)
+            extra = dict(request_id='e' * 64, slot=0, attempt=0,
+                         ranges=[dict(index=0, start='100', end='200')])
+            flow.physical_audits.bind(cycle, 0, regular)
+            lane = SimpleNamespace(current_audit=regular)
+            flow.audit_lanes = [lane, SimpleNamespace(current_audit=extra)]
+            flow.gpu = SimpleNamespace(active=None, search=[SimpleNamespace(context=dict(role='search', work_cycle=cycle))])
+            flow.fresh_boundary = lambda: cycle
+            job = SimpleNamespace(context=dict(role='audit', audit_position=1,
+                audit_request_id=extra['request_id'], audit_slot=0, audit_attempt=0,
+                presentation=dict(audit_id=audit_view_ref(extra['request_id'], 0, 0)['audit_id'])))
+
+            self.assertFalse(flow.may_start_work(job))
+            lane.computed_audit = dict(regular, attempt=1)
+            self.assertFalse(flow.may_start_work(job))
+            lane.computed_audit = regular
+            self.assertTrue(flow.may_start_work(job))
+            job.context['audit_actor'] = '0014' + 'f' * 40
+            self.assertFalse(flow.may_start_work(job))
+            job.context['audit_actor'] = None
+            state['hold'] = 'Saved confirmation requires reconciliation'
+            self.assertFalse(flow.may_start_work(job))
+            state['hold'] = ''
+            self.assertFalse(flow.physical_audits.ready(cycle))
+            self.assertFalse(flow.physical_audits.catchup_ready(cycle))
+            lane.current_audit = dict(regular, attempt=1)
+            self.assertFalse(flow.may_start_work(job))
+
     def test_old_partition_archive_cannot_bind_as_fresh(self):
         from horizon_audit_progress import partition_identity
         from horizon_audit_partition_archive import NAME

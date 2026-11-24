@@ -193,6 +193,7 @@ class MiningFlow:
             else:
                 lane.recover_assigned_audit = self.assigned_audit_recovery.claim
             audit = NetworkAudits(lane,
+                on_computed=self.gpu.wake,
                 on_assigned=lambda value, index=index: self.bind_audit_cycle(index, value),
                 on_reassigned=lambda value, block, index=index: self.reopen_audit_cycle(index, value, block),
                 on_retired=lambda value, anchor, index=index: self.retire_audit_cycle(index, value, anchor),
@@ -211,6 +212,7 @@ class MiningFlow:
         self.cycle_audit_positions = {}
         self.controlled_lab_audit_actors = lab_actors is not None and not native_actors
         worker.audit_service_snapshot = self.audit_service_snapshot
+        worker.speculative_progress_snapshot = self.speculative_progress_snapshot
         self.report_thread = threading.Thread(target=self.publish_reports, name="report-publication", daemon=True)
         from horizon_report_poll import ReportPoller
         self.report_poller = ReportPoller(worker.audits, [*self.audit_lanes, *self.legacy_audit_publishers])
@@ -224,6 +226,9 @@ class MiningFlow:
 
     def may_start_work(self, job):
         job.context.pop('ready_audit_observation', None)
+        if (job.context.get('extra_publication_overlap') and getattr(job,'completed_result',None) is not None
+                and not self.physical_ready(job.context['work_cycle'])):
+            return True # Retry only a retained result/repair, even under report backpressure.
         if job.context['role'] == 'search' and getattr(self, 'recovered_report', None) is not None:
             return False
         if job.context['role'] == 'search' and self.finalizer is None and not self.outbox.capacity_available():
@@ -242,10 +247,10 @@ class MiningFlow:
                 audit = self.audit_lanes[index].current_audit
                 if audit is not None and (audit.get('request_id'), audit.get('slot'), audit.get('attempt')) == (job.context.get('audit_request_id'), job.context.get('audit_slot'), job.context.get('audit_attempt')):
                     target = (audit.get('physical_cycle') or physical.bound_audit(audit, index)
-                              or physical.pending(index, self.local_audit_cycles()))
+                              or self.physical_assignment_target(index))
                     counted_extra = self.cycles.extra_audit_cycle(job.context.get('presentation', {}).get('audit_id'))
                     if target and not counted_extra and self.can_bind_physical(target, index, audit):
-                        physical.bind(target, index, audit)
+                        physical.bind(target, index, audit, replace_unavailable=physical.is_native(target))
                         audit['physical_cycle'] = target
                         job.context.update(work_cycle=target, physical_cycle=True)
                         self.cycle_audit_positions[(target, index)] = sum(int(r['end'])-int(r['start']) for r in audit['ranges'])
@@ -290,13 +295,24 @@ class MiningFlow:
                 if not retained and audit is not None and not self.audit_has_no_progress(audit):
                     job.context['finish_retained_audit'] = True
                     return True
-                return (journal.ready(owner) and not journal.catchup_ready(owner)
+                job_identity = (job.context['audit_request_id'], job.context['audit_slot'],
+                                job.context['audit_attempt'])
+                state = self.cycles.snapshot(owner)
+                return (state['stage'] == 'prepared' and not state['hold'] and audit is not None
+                        and self.service_identity(audit) == job_identity
+                        and audit.get('actor') == job.context.get('audit_actor')
+                        and self.native_regular_calculated(owner) and not journal.catchup_ready(owner)
                         and not self.cycles.extra_audits(owner))
             return self.may_unbound_audit(job) if owner is None else self.cycles.may_extra_audit(owner, job.context['presentation']['audit_id'])
         if job.context.get("legacy_assignment"):
             return True
         state = self.cycles.snapshot(cycle)
-        return not state["hold"] and self.physical_ready(cycle) and (self.cycles.may_search(cycle) or
+        if job.context.get('extra_publication_overlap') and job.completed_result is not None:
+            # Completed GPU work only retries its handoff/repair, not execution.
+            return not state['hold']
+        from horizon_extra_publication_overlap import candidate
+        speculative = candidate(self,job) is not None
+        return not state["hold"] and (self.physical_ready(cycle) or speculative) and (self.cycles.may_search(cycle) or
                                       state["stage"] == "running" or
                                       state["stage"] == "completed" and not job.context.get("prepared"))
 
@@ -497,6 +513,13 @@ class MiningFlow:
         return False
 
     def confirm_gpu_start(self, job):
+        if (job.context['role']=='search' and job.context.get('work_cycle')
+                and not job.context.get('legacy_assignment') and not self.physical_ready(job.context['work_cycle'])):
+            from horizon_extra_publication_overlap import verify_start
+            try:return verify_start(self,job)
+            except (OSError,RuntimeError,ValueError)as error:
+                self.worker.network_notice='Extra publication overlap not yet verified: '+str(error)[:250]
+                return False
         if job.context['role'] == 'audit':
             return self.confirm_ready_audit(job)
         cycle = job.context.get('work_cycle')
@@ -543,6 +566,23 @@ class MiningFlow:
                 or (journal.snapshot(cycle) is not None and journal.ready(cycle)
                     and journal.catchup_ready(cycle)))
         return journal is None or journal.ready(cycle)
+
+    def native_regular_calculated(self, cycle):
+        journal = self.physical_audits
+        tasks = journal.snapshot(cycle)
+        if not tasks:
+            return False
+        for position, task in enumerate(tasks):
+            if not task:
+                return False
+            if task['stage'] in ('committed', 'unavailable'):
+                continue
+            lane = self.audit_lanes[position]
+            audit = lane.current_audit
+            if (audit is None or getattr(lane, 'computed_audit', None) is not audit
+                    or audit.get('physical_cycle') != cycle or journal.ref(audit) != task):
+                return False
+        return True
 
     def local_audit_cycles(self):
         journal = getattr(self, 'physical_audits', None)
@@ -614,6 +654,19 @@ class MiningFlow:
         physical = journal.pending(position, self.local_audit_cycles()) if journal is not None else None
         return physical or self.cycles.pending(position, retry_permissions=True)
 
+    def physical_assignment_target(self, position):
+        journal = self.physical_audits
+        cycle = self.fresh_boundary()
+        if cycle is not None:
+            tasks = journal.snapshot(cycle)
+            state = self.cycles.snapshot(cycle)
+            # An empty-pool observation belongs to its own block. While the
+            # ticket is still prepared, take authenticated work that arrives later.
+            if (state['stage'] == 'prepared' and not state['hold'] and tasks
+                    and tasks[position] and tasks[position]['stage'] == 'unavailable'):
+                return cycle
+        return journal.pending(position, self.local_audit_cycles())
+
     def extra_audit_owner(self, job):
         audit_id = job.context.get('presentation', {}).get('audit_id')
         if not audit_id:
@@ -648,10 +701,15 @@ class MiningFlow:
                 ident = hashlib.sha256(canonical_bytes(dict(domain='PGN_HORIZON_AUDIT_VIEW_V1', request=audit['request_id'], slot=audit['slot'], attempt=audit['attempt']))).hexdigest()
                 if self.cycles.extra_audit_cycle(ident):
                     return  # This whole audit already belongs to a prior extra section.
-                cycle = physical.pending(position, self.local_audit_cycles())
-            if cycle and physical.snapshot(cycle) is not None and self.can_bind_physical(cycle, position, audit):
-                physical.bind(cycle, position, audit)
-                audit.update(physical_cycle=cycle)
+                cycle = self.physical_assignment_target(position)
+            bound = False
+            if cycle:
+                with self.gpu.condition:
+                    if physical.snapshot(cycle) is not None and self.can_bind_physical(cycle, position, audit):
+                        physical.bind(cycle, position, audit, replace_unavailable=physical.is_native(cycle))
+                        audit['physical_cycle'] = cycle
+                        bound = True
+            if bound:
                 self.cycle_audit_positions[(cycle, position)] = sum(int(r['end'])-int(r['start']) for r in audit['ranges'])
                 save(self.audit_lanes[position].folder / 'current.json', audit)
                 return
@@ -925,6 +983,14 @@ class MiningFlow:
                 self.view_sequence += 1
                 job.view_sequence = self.view_sequence
         worker.sequence = job.view_sequence
+        if (job.context["role"] == "search" and job.context.get('extra_publication_overlap')
+                and not job.context.get('extra_publication_promotion')):
+            # GPU computation only. Keep the allocator/cycle prepared, and
+            # remove every mixed CPU grant until the normal promotion barrier.
+            worker.source.clear_cycle()
+            save(worker.root/'gpu-active.json',dict(ticket_id=job.ticket['ticket_id'],
+                sequence=job.view_sequence,role='search',context=job.context))
+            return
         if job.context["role"] == "search":
             work = job.context["work"]
             if job.context.get("prepared"):
@@ -968,6 +1034,9 @@ class MiningFlow:
         (worker.root / "pause.request").unlink(missing_ok=True)
 
     def completed(self, job, result):
+        if job.context.get('extra_publication_overlap'):
+            from horizon_extra_publication_overlap import finish
+            if not finish(self,job,result):return False
         if job.context["role"] == "search":
             self.queue_report(job.context["work"], result)
             if not job.context.get("legacy_assignment"):
@@ -1178,6 +1247,17 @@ class MiningFlow:
             self.changed.wait(.1)
             self.changed.clear()
 
+    def speculative_progress_snapshot(self):
+        """Read the active GPU presentation identity without promoting its ticket."""
+        with self.gpu.condition:
+            active = self.gpu.active
+            if (active is None or active.retired or active.context.get('role') != 'search'
+                    or not active.context.get('extra_publication_overlap')):
+                return None
+            work = active.context['work']
+            return (active.ticket['ticket_id'], active.context['work_cycle'], active.view_sequence,
+                    {key: work.get(key) for key in ('ticket', 'request_id', 'ticket_number')})
+
     def audit_service_snapshot(self):
         value = self.gpu.audit_service_view()
         # Read-only presentation binding. It does not combine jobs, confer an
@@ -1260,7 +1340,12 @@ class MiningFlow:
             try:
                 pending = self.pending_audit(position)
                 fresh = self.fresh_boundary()
-                outcome = audit.process_one()
+                try:
+                    outcome = audit.process_one()
+                finally:
+                    # Computed-but-unpublished work cannot authorize a handoff
+                    # while the audit lane is recovering from a refusal.
+                    audit.computed_audit = None
                 audit.last_error = None
                 audit.recovery_pending = None
                 if outcome == "none":
