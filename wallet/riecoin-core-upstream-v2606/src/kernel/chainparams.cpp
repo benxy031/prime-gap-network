@@ -31,10 +31,12 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <map>
 #include <span>
+#include <string_view>
 #include <utility>
 
 using namespace util::hex_literals;
@@ -333,7 +335,13 @@ std::unique_ptr<const CChainParams> CChainParams::Main(const MainNetOptions& opt
 std::unique_ptr<const CChainParams> CChainParams::TestNet(const TestNetOptions& options)
 {
     if(!options.dep_opts.version_bits_parameters.empty())throw std::invalid_argument("PGN testnet deployments are genesis-pinned");
-    return pgn::core::CreateNativeTestnetParameters(pgn::core::BuildPgnTestnetDefinition());
+    // Local isolation harness. With PGN_LOCAL_CHAIN unset this is byte for byte
+    // the published testnet; with it set, the same policies build a separate
+    // chain whose genesis, magic and default ports differ, so the two can run
+    // side by side on one machine without peering or sharing state.
+    const char* local=std::getenv("PGN_LOCAL_CHAIN");
+    const std::string_view suffix=(local!=nullptr&&*local!='\0')?std::string_view{local}:std::string_view{};
+    return pgn::core::CreateNativeTestnetParameters(pgn::core::BuildPgnTestnetDefinition(suffix));
 }
 
 std::vector<int> CChainParams::GetAvailableSnapshotHeights() const

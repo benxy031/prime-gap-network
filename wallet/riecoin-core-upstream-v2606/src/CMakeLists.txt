@@ -477,6 +477,13 @@ target_link_libraries(pgn-native-audit-activation-test PRIVATE core_interface ri
 add_executable(pgn-testnet-service-activation-test EXCLUDE_FROM_ALL pgn/testnet_service_activation_test.cpp)
 target_link_libraries(pgn-testnet-service-activation-test PRIVATE core_interface riecoin_node univalue)
 
+# Local isolation harness contract: published testnet unchanged, suffix isolated.
+add_executable(pgn-local-chain-definition-test EXCLUDE_FROM_ALL pgn/local_chain_definition_test.cpp)
+target_link_libraries(pgn-local-chain-definition-test PRIVATE core_interface riecoin_common riecoin_util univalue)
+if(BUILD_TESTS)
+  add_test(NAME local-chain-definition COMMAND pgn-local-chain-definition-test)
+endif()
+
 # Routing regression linked to the real native verifier and body primitives.
 add_executable(pgn-native-bootstrap-dispatch-test EXCLUDE_FROM_ALL pgn/bootstrap_block_dispatch_test.cpp)
 target_link_libraries(pgn-native-bootstrap-dispatch-test PRIVATE core_interface riecoin_node univalue)
