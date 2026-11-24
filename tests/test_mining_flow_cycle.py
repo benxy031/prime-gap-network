@@ -365,6 +365,7 @@ class MiningFlowCycleTests(unittest.TestCase):
 
     def test_prepared_extra_can_run_while_exact_regular_result_is_publishing(self):
         from horizon_cycle_execution import CycleExecution
+        from horizon_gpu_queue import GpuJob, ResidentGpuQueue
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -387,7 +388,8 @@ class MiningFlowCycleTests(unittest.TestCase):
             flow.physical_audits.bind(cycle, 0, regular)
             lane = SimpleNamespace(current_audit=regular)
             flow.audit_lanes = [lane, SimpleNamespace(current_audit=extra)]
-            flow.gpu = SimpleNamespace(active=None, search=[SimpleNamespace(context=dict(role='search', work_cycle=cycle))])
+            flow.gpu = ResidentGpuQueue(None, threading.Event(), threading.Event(), None, None, None, None)
+            flow.gpu.search.append(GpuJob({'ticket_id': 'search'}, dict(role='search', work_cycle=cycle), 10))
             flow.fresh_boundary = lambda: cycle
             job = SimpleNamespace(context=dict(role='audit', audit_position=1,
                 audit_request_id=extra['request_id'], audit_slot=0, audit_attempt=0,

@@ -1,4 +1,4 @@
-"""Same-ticket GPU computation while one exact sealed extra awaits publication.
+"""Same-ticket GPU computation while one exact sealed local audit awaits publication.
 
 No native credit, waiver, report or official cycle promotion is produced here.
 Completed source is retained under the existing preseal-required archive barrier.
@@ -26,8 +26,21 @@ def candidate(flow,job):
             or not flow.cycles.ready(state) or not physical.is_native(cycle)):
         return None
     tasks=physical.snapshot(cycle)
-    if not tasks or any(not task or task['stage']not in('committed','unavailable')for task in tasks):return None
+    if not tasks or any(not task for task in tasks):return None
     extras=flow.cycles.extra_audits(cycle)
+    pending=[position for position,task in enumerate(tasks)if task['stage']=='assigned']
+    if len(pending)==1:
+        position=pending[0]
+        if (extras or any(task['stage']not in('assigned','committed','unavailable')for task in tasks)
+                or physical.catchup_ready(cycle)):return None
+        lane=flow.audit_lanes[position];audit=lane.current_audit
+        if (not audit or audit.get('physical_cycle')!=cycle or physical.ref(audit)!=tasks[position]
+                or not audit.get('answer')or len(audit.get('ranges',[]))!=5 or len(audit.get('counts',[]))!=5):return None
+        ref=audit_view_ref(audit['request_id'],audit['slot'],audit['attempt'])
+        if ref is None:return None
+        return lane,audit,dict(audit_id=ref['audit_id'],commitment=audit['answer']['commitment'],
+                               service='regular',position=position,binding=_audit_binding(audit))
+    if pending or any(task['stage']not in('committed','unavailable')for task in tasks):return None
     if len(extras)!=1 or physical.catchup_ready(cycle):return None
     for lane in flow.audit_lanes:
         audit=lane.current_audit
@@ -38,6 +51,39 @@ def candidate(flow,job):
                 and flow.cycles.extra_audit_cycle(extras[0])==cycle):
             return lane,audit,dict(audit_id=extras[0],commitment=audit['answer']['commitment'])
     return None
+
+
+def _audit_binding(audit):
+    return hashlib.sha256(canonical_bytes({key:audit.get(key)for key in('ticket','report_root','actor','ranges')})).hexdigest()
+
+
+def regular_seal_current(flow, cycle, position, audit):
+    """Keep the verified seal through the prepared search's checkpoint handoff."""
+    gpu = flow.gpu
+    with gpu.condition:
+        if flow.fresh_boundary() != cycle:
+            return False
+        search = gpu.active
+        if search is None:
+            resumed = gpu.resume_job
+            search = (resumed if resumed is not None and resumed.context.get('role') == 'search'
+                      else gpu.search[0] if gpu.search else None)
+        if (search is None or search.retired or search.context.get('role') != 'search'
+                or search.context.get('work_cycle') != cycle or not search.context.get('prepared')):
+            return False
+        ref = search.context.get('extra_publication_overlap', {})
+        ready = flow.prefetch.ready
+        if (ref.get('service') != 'regular' or ref.get('position') != position or not ready
+                or ready.get('request_id') != cycle or ready.get('ticket') != search.ticket['ticket_id']):
+            return False
+        state = flow.cycles.snapshot(cycle)
+        if (state['stage'] != 'prepared' or state['hold']
+                or state['work'] != flow.cycles.work_identity(search.context['work'])):
+            return False
+        current = audit_view_ref(audit.get('request_id'), audit.get('slot'), audit.get('attempt'))
+        return bool(current and ref.get('audit_id') == current['audit_id']
+                    and ref.get('commitment') == (audit.get('answer') or {}).get('commitment')
+                    and ref.get('binding') == _audit_binding(audit))
 
 
 def ticket_status(flow,work):
@@ -78,14 +124,18 @@ def ticket_status(flow,work):
     return dict(status='same',anchor=anchor)
 
 
-def _regular_gate(flow,cycle,anchor=None):
+def _regular_gate(flow,cycle,anchor=None,pending=None):
     """Recheck existing physical confirmations/waivers at a stable Core tip."""
     physical=flow.physical_audits;tasks=physical.snapshot(cycle)
-    if not tasks or any(not task or task['stage']not in('committed','unavailable')for task in tasks):return False
+    if not tasks:return False
+    for position,task in enumerate(tasks):
+        if pending is not None and(position,task)==pending:continue
+        if not task or task['stage']not in('committed','unavailable'):return False
     observed=flow.worker.rpc.call('getbestblockhash')
     if anchor is not None and observed!=anchor:return False
     anchor=observed
-    for task in tasks:
+    for position,task in enumerate(tasks):
+        if pending is not None and(position,task)==pending:continue
         if task['stage']=='unavailable'and task['anchor']==anchor:continue
         if not flow.audit_reference_current(task):return False
     return (flow.worker.rpc.call('getbestblockhash')==anchor and physical.snapshot(cycle)==tasks
@@ -101,7 +151,8 @@ def verify_start(flow,job):
     status=ticket_status(flow,job.context['work'])
     if status['status']!='same':return False
     anchor=status['anchor']
-    if not _regular_gate(flow,job.context['work_cycle'],anchor):return False
+    pending=((ref['position'],flow.physical_audits.ref(audit))if ref.get('service')=='regular'else None)
+    if not _regular_gate(flow,job.context['work_cycle'],anchor,pending):return False
     _,_,canonical=ready_audit_view(lane,audit,anchor)
     if _ready_decline(audit,canonical)is not None:
         # An exact canonical commitment can precede its local receipt callback.

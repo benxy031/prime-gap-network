@@ -78,9 +78,9 @@ class LogicalMinerCpuResources:
     def run_scheduled_ticket(self,ticket,maximum_piece,should_yield):
         with self.control_lock:
             head=self.head
-            mixed=any(lane.enabled for lane in self.lanes.values())
-        # Existing CPU qualification owns a whole result boundary. Preserve
-        # that contract until mixed-resource handoffs are independently tested.
+            mixed=self.binding is not None and any(lane.enabled for lane in self.lanes.values())
+        # A normal CPU grant owns a whole qualified result boundary. With no
+        # grant, use the GPU scheduler so arriving audits can interrupt speculation.
         if mixed:return head.run_ticket(ticket,maximum_piece)
         return self.gpu.run_scheduled_ticket(ticket,maximum_piece,should_yield)
     def close(self):self.head.close()

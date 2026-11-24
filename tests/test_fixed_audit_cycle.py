@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 import sys,threading,unittest
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src/protocol'),str(ROOT/'src/engine/runtime_host')]
 from horizon_mining_flow import MiningFlow
@@ -20,6 +22,88 @@ def make(credits=(),lanes=()):
     return f
 
 class FixedAuditCycleTests(unittest.TestCase):
+    def test_current_ticket_yields_only_for_confirmed_service_needed_by_successor(self):
+        from horizon_gpu_queue import GpuJob
+
+        actor, predecessor = 'actor', 'predecessor'
+        current, alternate = (dict(audit(n, done), actor=actor, ticket=str(n), report_root='root',
+                                   ranges=[dict(index=0, start='0', end='10')])
+                              for n, done in ((100, 4), (101, 0)))
+        flow = make(lanes=[current, alternate])
+        flow.prefetch.ready = None
+        flow.prefetch.refresh_ready_service_observation = Mock()
+        flow.physical_audits = SimpleNamespace(is_native=lambda key: key == predecessor,
+                                               bound_audit=lambda *_: None)
+        flow.physical_assignment_target = lambda _: None
+        flow.cycles = SimpleNamespace(extra_audit_cycle=lambda _: None,
+                                      reserve_extra_audit=Mock(),
+                                      may_search=lambda _: True,
+                                      snapshot=lambda _: dict(stage='running', hold=False))
+        flow.physical_ready = lambda key: key == predecessor
+        flow.outbox = SimpleNamespace(capacity_available=lambda: True)
+        flow.finalizer = None
+        enabled, stop = threading.Event(), threading.Event()
+        enabled.set()
+        flow.gpu = ResidentGpuQueue(None, enabled, stop, None, None, None, None,
+                                    clock_ns=lambda: 2_000_000_000, may_start=flow.may_start_work)
+        search = GpuJob({'ticket_id': 'current'}, dict(role='search', work_cycle=predecessor), 10)
+        flow.gpu.active = search
+        scopes = [flow.ready_audit_scope(item) for item in (current, alternate)]
+        for index, scope in enumerate(scopes):
+            request, slot, attempt = scope[:3]
+            identity, start, end = scope[-1][0]
+            flow.gpu.submit(dict(ticket_id=identity, start=start, end=end),
+                            dict(role='audit', audit_position=index, audit_request_id=request,
+                                 audit_slot=slot, audit_attempt=attempt, audit_actor=actor,
+                                 presentation={'audit_id': request}), 10)
+        first, second = flow.gpu.audits
+        tip = 'anchor'
+        tip_rpc = Mock(return_value=tip)
+        flow.worker = SimpleNamespace(address=lambda **_: 'signer', rpc=SimpleNamespace(call=tip_rpc))
+        status = dict(schema='PGN_NATIVE_WORK_DUTY_STATUS_V1', enforced=True,
+                      may_request=False, status='audit_work_required', credits=[audit(99)],
+                      ready_audits={index: (scope, True) for index, scope in enumerate(scopes)},
+                      observed_actor=actor, ready_signer='signer', bestblockhash=tip)
+        flow.prefetch.native_service_status = dict(status, may_request=True, status='ready')
+        self.assertFalse(flow.gpu.should_yield(search, 0))
+        flow.prefetch.native_service_status = status
+        flow.prefetch.ready = {'ticket': 'already-prepared'}
+        self.assertFalse(flow.gpu.should_yield(search, 0))
+        flow.prefetch.ready = None
+        self.assertFalse(flow.may_start_work(second), 'One missing credit prioritizes the audit with progress')
+        self.assertTrue(flow.gpu.should_yield(search, 0))
+        tip_rpc.assert_not_called()
+        flow.gpu.active = None
+        flow.gpu.search.append(search)
+        self.assertIs(flow.gpu._next(), first)
+        self.assertEqual(first.context['preparing_ticket_service'], predecessor)
+
+        def next_ticket_arrives(_):
+            flow.prefetch.ready = {'ticket': 'already-prepared'}
+            return tip
+
+        tip_rpc.side_effect = next_ticket_arrives
+        self.assertFalse(flow.confirm_ready_audit(first))
+        flow.prefetch.ready = None
+        tip_rpc.side_effect = None
+        tip_rpc.reset_mock()
+        flow.gpu.audits.appendleft(first)
+        self.assertIs(flow.gpu._next(), first)
+        self.assertTrue(flow.confirm_ready_audit(first))
+        tip_rpc.assert_called_once_with('getbestblockhash')
+        with TemporaryDirectory() as temporary:
+            flow.view_sequence, flow.prior_active = 0, {}
+            flow.worker.root = Path(temporary)
+            flow.worker.device_lease = object()
+            flow.worker.audits = SimpleNamespace()
+            flow.worker.source = SimpleNamespace()
+            flow.activate(first)
+            self.assertNotIn('work_cycle', first.context)
+            self.assertNotIn('audit_budget_cycle', first.context)
+            flow.cycles.reserve_extra_audit.assert_not_called()
+        flow.prefetch.native_service_status = dict(status, may_request=True, status='ready')
+        self.assertIs(flow.gpu._next(), search)
+
     def test_confirmed_then_failed_service_is_replaced_without_restart(self):
         f=make(lanes=[audit(100),audit(101)])
         f.cycles=SimpleNamespace(bound_audit=lambda*a:None)
