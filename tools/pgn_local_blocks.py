@@ -118,7 +118,7 @@ def main(argv=None):
     parser.add_argument("--rpcport", required=True, type=int, help="node RPC port")
     parser.add_argument("--cookie", help="RPC cookie file (default: <datadir>/testnet/.cookie)")
     parser.add_argument("--count", type=int, default=1, help="blocks to mine, default 1")
-    parser.add_argument("--requests", action="append", default=[], metavar="SCRIPT_HEX",
+    parser.add_argument("--request", action="append", default=[], metavar="SCRIPT_HEX",
                         help="canonical signed request script, repeatable")
     parser.add_argument("--dry-run", action="store_true", help="find the nonce, do not submit")
     parser.add_argument("--max-counter", type=int, default=MAX_COUNTER,
@@ -130,7 +130,7 @@ def main(argv=None):
     if not 1 <= arguments.max_counter <= MAX_COUNTER:
         raise ValueError("--max-counter must be 1..2^32")
     rpc = Rpc(arguments.rpcport, cookie_for(arguments.datadir, arguments.cookie))
-    requests = [{"script": script} for script in arguments.requests]
+    requests = list(arguments.request)
 
     for index in range(1, arguments.count + 1):
         template = rpc("getpgnbootstraptemplate", [requests] if requests else [])

@@ -491,6 +491,13 @@ if(BUILD_TESTS)
   add_test(NAME gold-partition-counts COMMAND pgn-gold-partition-counts-test)
 endif()
 
+# Phase 1 semantics before the header move: coinbase envelope, pay-once, activation.
+add_executable(pgn-gold-counts-envelope-test EXCLUDE_FROM_ALL pgn/gold_counts_envelope_test.cpp)
+target_link_libraries(pgn-gold-counts-envelope-test PRIVATE core_interface riecoin_common riecoin_util univalue)
+if(BUILD_TESTS)
+  add_test(NAME gold-counts-envelope COMMAND pgn-gold-counts-envelope-test)
+endif()
+
 # Routing regression linked to the real native verifier and body primitives.
 add_executable(pgn-native-bootstrap-dispatch-test EXCLUDE_FROM_ALL pgn/bootstrap_block_dispatch_test.cpp)
 target_link_libraries(pgn-native-bootstrap-dispatch-test PRIVATE core_interface riecoin_node univalue)

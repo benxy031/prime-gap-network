@@ -2,6 +2,7 @@
 // Isolated PGN testnet definition. Old MAIN data and genesis remain unchanged.
 #pragma once
 #include <pgn/native_main_parameters.h>
+#include <pgn/gold_counts_activation.h>
 #include <consensus/merkle.h>
 #include <util/strencodings.h>
 
@@ -36,6 +37,11 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(std::string_view 
     const auto controller_script=BuildCandidateNativeRetargetEnvelope(controller,budget);
     if(!range_script||!science_script||!money_script||!bootstrap_script||!work_script||!controller_script)
         throw std::logic_error("PGN testnet policy encoding failed");
+    // Only the local chain commits the counts-based gold rule. The published
+    // genesis cannot carry it, which is what keeps today's testnet byte for byte
+    // identical and is pinned by the definition test.
+    const auto gold_counts_script=suffix.empty()?std::nullopt:BuildGoldCountsPolicyEnvelope(budget);
+    if(!suffix.empty()&&!gold_counts_script)throw std::logic_error("PGN local gold counts policy encoding failed");
 
     // Genesis commits the detailed era/tier rules before live work is issued.
     // Their state transitions are verified separately from this definition.
@@ -54,6 +60,7 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(std::string_view 
     coinbase.vout={{0,*range_script},{0,*science_script},{0,*money_script},{0,*bootstrap_script},
         {0,*work_script},{0,*controller_script},
         {0,CScript{}<<OP_RETURN<<Bytes{rewards_tag.begin(),rewards_tag.end()}<<rewards}};
+    if(gold_counts_script)coinbase.vout.emplace_back(0,*gold_counts_script);
     CBlock genesis;genesis.nVersion=4;genesis.nTime=1794614400;
     genesis.nBits=bootstrap_bits;genesis.nNonce=NativeBootstrapNonce(0);
     genesis.vtx={MakeTransactionRef(coinbase)};genesis.hashMerkleRoot=BlockMerkleRoot(genesis);

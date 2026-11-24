@@ -241,7 +241,7 @@ RPCMethod getpgnticketrequest(){
 }
 RPCMethod getpgnbootstraptemplate(){
  return RPCMethod{"getpgnbootstraptemplate","Build native coordination work and any exact reserved audit page at the actual parent. No work acceptance, search, spends or caller-selected range. At most256 supplied signed request scripts.",{
-  {"requests",RPCArg::Type::ARR,RPCArg::Optional::OMITTED,"Native signed request envelopes",{{"script",RPCArg::Type::STR_HEX,RPCArg::Optional::OMITTED,"Canonical request script bytes"}}}},
+  {"requests",RPCArg::Type::ARR,RPCArg::Optional::OMITTED,"Canonical request script bytes, as hex strings; the implementation rejects objects here",{{"script",RPCArg::Type::STR_HEX,RPCArg::Optional::OMITTED,"Canonical request script bytes"}}}},
  RPCResult{RPCResult::Type::OBJ,"","Public native work",{
   {RPCResult::Type::STR,"schema","Template schema"},{RPCResult::Type::STR_HEX,"genesis","Native genesis"},
   {RPCResult::Type::STR_HEX,"parent","Exact parent"},{RPCResult::Type::NUM,"height","Proposed height"},
