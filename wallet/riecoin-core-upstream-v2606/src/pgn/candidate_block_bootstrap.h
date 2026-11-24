@@ -3,6 +3,7 @@
 #include <pgn/native_bootstrap_hash.h>
 #include <pgn/native_bootstrap_phase.h>
 #include <pgn/candidate_block_science.h>
+#include <pgn/gold_counts_history.h>
 #include <pgn/proposed_ticket_requests.h>
 #include <pgn/native_report_commitment.h>
 #include <pgn/native_report_audit.h>
@@ -92,6 +93,18 @@ inline NativeBootstrapBlockCheck VerifyNativeBootstrapBlock(const CCoinsView& vi
        (!science_budget||!VerifyProposedNativeWorkDuties(view,parent,history,*proposed.batch,
             science_budget->policy,science_budget->schedule,science_budget->signature,duties)))
         return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
+    // Pay-once: a gold range number already claimed on this branch is refused
+    // before any accepted block can reuse it.
+    bool has_gold{};for(const auto& out:block.vtx.front()->vout)has_gold|=IsGoldCountsScript(out.scriptPubKey);
+    if(has_gold){
+        if(!science_budget)return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
+        const auto gold=VerifyProposedGoldCounts(view,parent,history,block,science_budget->schedule,science_budget->policy);
+        if(gold.verdict==GoldCountsProposedVerdict::HistoryHeld)return {NativeBootstrapBlockVerdict::HistoryHeld,{}};
+        // Inactive is the published testnet: the envelope is an ordinary
+        // zero-value OP_RETURN there, exactly as it is today.
+        if(gold.verdict!=GoldCountsProposedVerdict::Verified&&gold.verdict!=GoldCountsProposedVerdict::Inactive)
+            return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
+    }
     bool has_report{};for(const auto& out:block.vtx.front()->vout)has_report|=IsNativeReportScript(out.scriptPubKey);
     if(has_report&&(!science_budget||!VerifyProposedNativeReportCommitments(view,parent,history,block,science_budget->policy,science_budget->schedule,science_budget->signature)))
         return {NativeBootstrapBlockVerdict::InvalidRequest,{}};

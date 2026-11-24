@@ -22,7 +22,10 @@ namespace pgn::core {
 
 inline constexpr std::string_view GoldCountsPolicyTag{"PGNGOLDCOUNTS-POLICY-1"};
 inline constexpr uint8_t GoldCountsPolicyVersion = 1;
-inline constexpr size_t GoldCountsPolicyPayloadBytes = 1;
+// Two bytes, not one: a lone 0x01 payload would have to be pushed as OP_1 to be
+// canonical, and the genesis policy readers enforce minimal pushes. The second
+// byte is reserved and must be zero, so a future tunable needs no new tag.
+inline constexpr size_t GoldCountsPolicyPayloadBytes = 2;
 
 struct GoldCountsPolicy {
     // The envelope carries no tunables yet: counts, range numbers and the audit
@@ -35,7 +38,7 @@ inline std::optional<CScript> BuildGoldCountsPolicyEnvelope(RangePolicyReadBudge
 {
     if (!budget.maximum_outputs || !budget.maximum_script_bytes ||
         budget.maximum_payload_bytes < GoldCountsPolicyPayloadBytes) return {};
-    const Bytes payload{GoldCountsPolicyVersion};
+    const Bytes payload{GoldCountsPolicyVersion, 0};
     CScript script = CScript{} << OP_RETURN
                               << Bytes{GoldCountsPolicyTag.begin(), GoldCountsPolicyTag.end()}
                               << payload;
@@ -48,8 +51,9 @@ inline std::optional<GoldCountsPolicy> DecodeGoldCountsPolicyPayload(const Bytes
 {
     if (payload.size() > budget.maximum_payload_bytes) return {};
     if (payload.size() != GoldCountsPolicyPayloadBytes) return {};
-    if (payload.front() != GoldCountsPolicyVersion) return {};
-    return GoldCountsPolicy{payload.front()};
+    if (payload[0] != GoldCountsPolicyVersion) return {};
+    if (payload[1] != 0) return {};
+    return GoldCountsPolicy{payload[0]};
 }
 
 // Reads the policy from the chain's own genesis coinbase. `std::nullopt` means

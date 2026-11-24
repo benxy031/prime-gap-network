@@ -119,15 +119,14 @@ struct GoldCountsBlockRead {
 
 // The declaration lives in the coinbase, and the coinbase is the only output set
 // a miner authors without spending anything. Any other location would need a
-// spend, which is what the redesign removes.
-inline GoldCountsBlockRead ReadGoldCountsFromBlock(const CBlock& block, uint64_t maximum_script_bytes)
+// spend, which is what the redesign removes. History replay only has the
+// coinbase transaction, so that is the primitive.
+inline GoldCountsBlockRead ReadGoldCountsFromCoinbase(const CTransaction& coinbase,
+                                                      uint64_t maximum_script_bytes)
 {
-    if (block.vtx.empty() || !block.vtx.front() || !block.vtx.front()->IsCoinBase()) {
-        return {GoldCountsBlockVerdict::Absent, {}};
-    }
     unsigned envelopes{};
     GoldCountsBlockRead read{GoldCountsBlockVerdict::Absent, {}};
-    for (const auto& output : block.vtx.front()->vout) {
+    for (const auto& output : coinbase.vout) {
         if (!IsGoldCountsScript(output.scriptPubKey)) continue;
         // A gold declaration is a commitment, never a payment.
         if (output.nValue != 0) return {GoldCountsBlockVerdict::Invalid, {}};
@@ -138,6 +137,14 @@ inline GoldCountsBlockRead ReadGoldCountsFromBlock(const CBlock& block, uint64_t
         read = {GoldCountsBlockVerdict::Present, *record};
     }
     return read;
+}
+
+inline GoldCountsBlockRead ReadGoldCountsFromBlock(const CBlock& block, uint64_t maximum_script_bytes)
+{
+    if (block.vtx.empty() || !block.vtx.front() || !block.vtx.front()->IsCoinBase()) {
+        return {GoldCountsBlockVerdict::Absent, {}};
+    }
+    return ReadGoldCountsFromCoinbase(*block.vtx.front(), maximum_script_bytes);
 }
 
 enum class GoldCountsVerdict {

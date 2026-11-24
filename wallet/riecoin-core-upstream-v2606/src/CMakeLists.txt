@@ -498,6 +498,13 @@ if(BUILD_TESTS)
   add_test(NAME gold-counts-envelope COMMAND pgn-gold-counts-envelope-test)
 endif()
 
+# Pay-once over authenticated history: closed fixture, real archive replay.
+add_executable(pgn-gold-counts-history-test EXCLUDE_FROM_ALL pgn/gold_counts_history_test.cpp)
+target_link_libraries(pgn-gold-counts-history-test PRIVATE core_interface riecoin_common riecoin_node riecoin_util univalue)
+if(BUILD_TESTS)
+  add_test(NAME gold-counts-history COMMAND pgn-gold-counts-history-test)
+endif()
+
 # Routing regression linked to the real native verifier and body primitives.
 add_executable(pgn-native-bootstrap-dispatch-test EXCLUDE_FROM_ALL pgn/bootstrap_block_dispatch_test.cpp)
 target_link_libraries(pgn-native-bootstrap-dispatch-test PRIVATE core_interface riecoin_node univalue)
