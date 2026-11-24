@@ -484,6 +484,13 @@ if(BUILD_TESTS)
   add_test(NAME local-chain-definition COMMAND pgn-local-chain-definition-test)
 endif()
 
+# Phase 1 coverage proof: range number, scan counts and the counts audit root.
+add_executable(pgn-gold-partition-counts-test EXCLUDE_FROM_ALL pgn/gold_partition_counts_test.cpp)
+target_link_libraries(pgn-gold-partition-counts-test PRIVATE core_interface riecoin_common riecoin_util univalue)
+if(BUILD_TESTS)
+  add_test(NAME gold-partition-counts COMMAND pgn-gold-partition-counts-test)
+endif()
+
 # Routing regression linked to the real native verifier and body primitives.
 add_executable(pgn-native-bootstrap-dispatch-test EXCLUDE_FROM_ALL pgn/bootstrap_block_dispatch_test.cpp)
 target_link_libraries(pgn-native-bootstrap-dispatch-test PRIVATE core_interface riecoin_node univalue)

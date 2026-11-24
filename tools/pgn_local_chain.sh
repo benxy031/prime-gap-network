@@ -11,6 +11,7 @@
 #   tools/pgn_local_chain.sh start            # nodes A and B, B connected to A
 #   tools/pgn_local_chain.sh status
 #   tools/pgn_local_chain.sh info             # heights, genesis, peer counts
+#   tools/pgn_local_chain.sh mine 20          # bootstrap blocks on A, no GPU
 #   tools/pgn_local_chain.sh cli A getblockhash 0
 #   tools/pgn_local_chain.sh stop
 #
@@ -113,11 +114,17 @@ cmd_info() {
     done
 }
 
+cmd_mine() {
+    python3 "$(dirname "$0")/pgn_local_blocks.py" \
+        --datadir="$(datadir A)" --rpcport="$(rpc_port A)" --count="$1"
+}
+
 case ${1:-} in
     start)  cmd_start ;;
     stop)   cmd_stop ;;
     status) cmd_status ;;
     info)   cmd_info ;;
+    mine)   cmd_mine "${2:-1}" ;;
     cli)    shift; cli "$@" ;;
-    *)      sed -n '2,22p' "$0"; exit 2 ;;
+    *)      sed -n '2,21p' "$0"; exit 2 ;;
 esac

@@ -7,6 +7,7 @@
 #include <pgn/audit_operator_policy.h>
 #include <tuple>
 #include <pgn/native_report_commitment.h>
+#include <pgn/gold_partition_counts.h>
 #include <pgn/audit_lease_clock.h>
 #include <pgn/testnet_service_activation.h>
 #include <crypto/sha256.h>
@@ -29,7 +30,7 @@ struct NativeAuditEvent {
     uint8_t slot{};uint32_t attempt{};
     CScript actor;Bytes body,signature;
 };
-inline Digest AuditSha(std::span<const uint8_t> bytes){Digest out;CSHA256{}.Write(bytes.data(),bytes.size()).Finalize(out.data());return out;}
+inline Digest AuditSha(std::span<const uint8_t> bytes){return AuditPartitionSha256(bytes);}
 inline void RequireAudit(bool condition,const char* message){if(!condition)throw std::invalid_argument(message);}
 inline bool IsNativeAuditScript(const CScript& script){
     auto cursor=script.begin();opcodetype op;Bytes tag;
@@ -69,19 +70,10 @@ inline uint256 NativeAuditWorkIdentity(const uint256& chain,const uint256& repor
     HashWriter hash{TaggedHash("PGN/AUDIT-EVENT/1")};hash<<chain<<report_root<<event.request<<uint8_t(event.action)<<event.slot<<event.attempt<<event.actor<<event.body;
     return hash.GetHash();
 }
+// The legacy report root and the phase 1 counts root differ only in these 32
+// bytes; both select through SelectNativeAuditPartitions().
 inline std::array<std::array<uint32_t,5>,2> NativeAuditPartitions(const uint256& root,const uint256& seed){
-    const std::string prefix="PGN/audit-partitions/1";Bytes input{prefix.begin(),prefix.end()};input.push_back(0);
-    const auto root_bytes=ParseHex(root.GetHex()),seed_bytes=ParseHex(seed.GetHex());input.insert(input.end(),root_bytes.begin(),root_bytes.end());input.insert(input.end(),seed_bytes.begin(),seed_bytes.end());
-    std::vector<uint32_t> remaining(100);for(uint32_t i=0;i<100;++i)remaining[i]=i;
-    std::array<std::array<uint32_t,5>,2> result;uint64_t counter{};unsigned selected{};
-    const Integer space=Integer{1}<<256;
-    while(selected<10){
-        auto bytes=input;for(int i=7;i>=0;--i)bytes.push_back(uint8_t(counter>>(8*i)));++counter;
-        const auto raw=AuditSha(bytes);Integer value;import_bits(value,raw.begin(),raw.end(),8,true);
-        const Integer bound=space-space%remaining.size();if(value>=bound)continue;
-        const auto position=(value%remaining.size()).convert_to<size_t>();result[selected/5][selected%5]=remaining[position];remaining.erase(remaining.begin()+position);++selected;
-    }
-    for(auto& group:result)std::sort(group.begin(),group.end());return result;
+    return SelectNativeAuditPartitions(Uint256Digest(root),Uint256Digest(seed));
 }
 inline uint64_t AuditCount(const UniValue& value){
     RequireAudit(value.isStr(),"Count must be a decimal string");const auto& text=value.get_str();
