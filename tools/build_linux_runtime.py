@@ -134,6 +134,11 @@ def assemble(output,inputs,app,core,host,updater,cpu):
     output.mkdir(parents=True)
     shutil.copy2(app/'PGN-Horizon',output/'PGN-Horizon')
     shutil.copy2(app/'pgn-gap-evidence',output/'pgn-native-gap-evidence')
+    # The worker and the component manifest both expect the helper at
+    # EngineRuntime/bin/pgn-gap-evidence. Ship that path as well: the root copy
+    # alone made every Linux Gold publication fail to find it.
+    (output/'EngineRuntime/bin').mkdir(parents=True,exist_ok=True)
+    shutil.copy2(app/'pgn-gap-evidence',output/'EngineRuntime/bin/pgn-gap-evidence')
     assets=app/'assets/audit-animation.rcc'
     if assets.exists():
         (output/'assets').mkdir();shutil.copy2(assets,output/'assets/audit-animation.rcc')

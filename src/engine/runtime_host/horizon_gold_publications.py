@@ -185,7 +185,13 @@ def publish(worker, request, sealed, details_root, save, build, assemble):
     lower = record['lower_prime']
     save(cursor_file, dict(binding, schema='PGN_HORIZON_GOLD_PUBLICATION_V3',
                            lower_prime=lower, gap=int(record['gap'])))
-    evidence = build(worker.args.proof_builder, work, computed, lower)
+    builder = worker.args.proof_builder
+    if builder is None or not Path(builder).is_file():
+        # A missing helper must not surface as a stack trace inside a
+        # maintenance visit: it costs every Gold block and repeats forever.
+        raise RuntimeError('Gold evidence builder unavailable (' + str(builder) + '); '
+                           'gold publication is disabled for this runtime')
+    evidence = build(builder, work, computed, lower)
     if evidence['details_root'] != details_root:
         raise ValueError('Gold evidence does not match audited report details')
     signature = worker.rpc.call('signmessage', [worker.address(), work['challenge']], wallet=True)

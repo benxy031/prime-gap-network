@@ -693,8 +693,18 @@ def main():
         parser.error('GPU mining requires --gpu and --architecture')
     if args.cpu_only and (args.gpu or args.architecture is not None or args.import_work or args.legacy_lease):
         parser.error('CPU-only work uses its own normal-cycle state and no GPU identity or legacy checkpoint')
-    if args.proof_builder is None:
-        args.proof_builder = args.bundle / "bin" / ("pgn-gap-evidence.exe" if os.name == "nt" else "pgn-gap-evidence")
+    # Probe every shipped layout instead of assuming bin/: the Linux packager
+    # puts the helper at the runtime root under its native name, and a wrong
+    # guess silently cost every Gold publication.
+    from horizon_gold_builder import GoldBuilderMissing, resolve as resolve_gold_builder
+    try:
+        args.proof_builder = resolve_gold_builder(args.bundle, args.proof_builder)
+    except GoldBuilderMissing as error:
+        # Never fatal: a node that cannot publish Gold still audits and reports.
+        # Say so once, loudly, and at the point of use.
+        args.proof_builder = None
+        print(json.dumps(dict(schema="PGN_GOLD_EVIDENCE_BUILDER_MISSING_V1",
+                              gold_publications="disabled", detail=str(error)[:800])), flush=True)
     try:
         NetworkWorker(args).run()
     except SessionControllerBusy as error:
