@@ -16,6 +16,7 @@
 #include <QToolTip>
 #include <QHelpEvent>
 #include <QRegularExpression>
+#include <QStringList>
 #include <cmath>
 
 namespace pgn::ui {
@@ -461,11 +462,18 @@ void MiningTicketProgress::applyFrame(const QJsonObject& frame){
  const bool attention=frame.value("phase")=="Needs attention";
  const auto reason=frame.value("message").toString().trimmed().left(4096);
  const auto auditCompletion=auditCompletionStatus(frame);
+ QStringList auditDetails;
+ if(!auditCompletion.isEmpty())auditDetails.append(auditCompletion);
+ const auto cycle=frame.value("audit_service").toObject().value("cycle").toObject();
+ const auto regular=cycle.value("audits").toArray();
+ if(!frame.value("source_stale").toBool()&&cycle.value("schema")=="PGN_MINING_CYCLE_VIEW_V1"&&regular.size()==2)
+  for(int slot=0;slot<2;++slot)if(regular[slot].toObject().value("state")=="unavailable")
+   auditDetails.append(QString("Audit %1/2 skipped because no eligible independent work was available.").arg(slot+1));
  setToolTip(attention?QString("<qt><b>Mining stopped</b><br>%1</qt>").arg(
      (reason.isEmpty()?QString("Open Diagnostics for the failure details"):reason).toHtmlEscaped().replace("\n","<br>")):
-     auditCompletion.isEmpty()?QString{}:QString("<qt>%1</qt>").arg(auditCompletion.toHtmlEscaped()));
+     auditDetails.isEmpty()?QString{}:QString("<qt>%1</qt>").arg(auditDetails.join('\n').toHtmlEscaped().replace("\n","<br>")));
  setAccessibleDescription(attention?miningAttentionStatus(reason):
-     frame.value("phase")=="Synchronizing"?chainSyncCaption:auditCompletion);
+     frame.value("phase")=="Synchronizing"?chainSyncCaption:auditDetails.join(' '));
  setProperty("pgn_ticket_flow_received",QVariant::fromValue(flow_.received()));setProperty("pgn_ticket_flow_coalesced",QVariant::fromValue(flow_.coalesced()));
  ensureOverlay();update();if(overlay_){overlay_->synchronize();overlay_->update();}
 }
@@ -544,7 +552,7 @@ void MiningTicketProgress::paintEvent(QPaintEvent*){
  const auto frameForCycle=legacyBound?withLegacyAuditRefs(frame_,legacyAuditSnapshot_):frame_;
  const auto cycle=miningCycleProgress(frameForCycle,cycleHistory_.audits(),cycleHistory_.search());
  const auto fraction=total>0?std::optional<double>(std::clamp(done/total,0.,1.)):std::nullopt;
- const auto trackFraction=cycle.known&&!cycle.preparing?std::optional<double>(cycle.fraction):fraction;
+ const auto trackFraction=cycle.known?cycle.markerFraction:fraction;
  if(cycle.known&&(active||phase=="Auditing"))displayPhase=cycle.phase;
  const auto field=bar();const double seconds=flow_.moving()?clock_.elapsed()/1000.:0.;
  double pressure=0.;

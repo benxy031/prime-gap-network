@@ -96,7 +96,7 @@ inline QString confirmedProgressAuditState(const QJsonArray& audits,const QJsonO
 
 struct CycleProgress {
  bool known{},preparing{};double fraction{};QString title,phase;QVector<CycleSlice> slices;
- std::optional<double> taskEta,cycleEta;
+ std::optional<double> markerFraction,taskEta,cycleEta;
 };
 inline bool coherentMiningCycleFrame(const QJsonObject& frame){
  const auto cycle=frame.value("audit_service").toObject().value("cycle").toObject();
@@ -197,15 +197,20 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
  }else for(const auto& item:observed)if(item.toObject().value("catch_up").toBool())catchups.append(item);
  const bool referenced=validProgressAuditRef(audits[0].toObject().value("audit_ref").toObject())||
                        validProgressAuditRef(audits[1].toObject().value("audit_ref").toObject());
- if(referenced){
-  // Observations can start on the second audit. The cycle has the ordered
-  // slot identities; use sampled progress only for the same exact attempt.
+ const auto unavailable=[](const QJsonValue& task){return task.toObject().value("state")=="unavailable";};
+ const bool hasUnavailable=unavailable(audits[0])||unavailable(audits[1]);
+ // Legacy lab frames without an execution journal retain their substitution.
+ const bool orderedByCycle=referenced||cycle.value("physical_audits")==true||
+                           (cycle.contains("extra_audit_ids")&&hasUnavailable);
+ if(orderedByCycle){
+  // Keep the two regular slots even when a waiver has no physical sample.
+  // A sampled fraction belongs only to the exact audit attempt in that slot.
   QJsonArray ordered;
   for(const auto& raw:audits){
    const auto task=raw.toObject(),ref=task.value("audit_ref").toObject();
    const auto id=ref.value("audit_id").toString();
    QJsonObject item;
-   if(validProgressAuditRef(ref)){
+   if(!unavailable(raw)&&validProgressAuditRef(ref)){
     for(const auto& sample:observed)
      if(sample.toObject().value("identity")==id){item=sample.toObject();break;}
     item.insert("identity",id);item.insert("audit_ref",ref);
@@ -225,11 +230,15 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
   // On attachment mid-cycle, only confirmed completed work is reconstructible.
   for(int i=0;i<2;++i){const auto a=audits[i].toObject();if(a.value("state")=="committed")observed.append(QJsonObject{{"fraction",1.},{"remaining",0.}});else break;}
  }
- if(auditing){
-  for(int i=0;i<observed.size();++i)if(observed[i].toObject().value("identity")==identity){active=i;break;}
-  if(active<0&&referenced&&!cycle.value("catch_up").toBool()&&index<2&&
-     observed[index].toObject().value("identity").toString().isEmpty())active=index;
-  if(active<0&&!referenced){active=observed.size();observed.append(QJsonObject{{"identity",identity},{"fraction",local},{"remaining",total-done}});}
+ if(auditing&&coherentMiningCycleFrame(frame)&&!identity.isEmpty()){
+  if(orderedByCycle&&!cycle.value("catch_up").toBool()&&index<2){
+   const auto expected=observed[index].toObject().value("identity").toString();
+   if(!unavailable(audits[index])&&(expected.isEmpty()||expected==identity))active=index;
+  }else{
+   const int first=orderedByCycle?2:0;
+   for(int i=first;i<observed.size();++i)if(observed[i].toObject().value("identity")==identity){active=i;break;}
+   if(active<0&&!orderedByCycle){active=observed.size();observed.append(QJsonObject{{"identity",identity},{"fraction",local},{"remaining",total-done}});}
+  }
  }
  const int count=auditing?std::max(2,int(observed.size())):int(observed.size());
  const double scale=.9+.05*count;double remaining=0;bool etaKnown=true;
@@ -238,9 +247,14 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
                          QString("Catch-up audit %1").arg(active-1)):QString("Searching");
  for(int i=0;i<count;++i){
   const auto item=i<observed.size()?observed[i].toObject():QJsonObject{};
+  const bool regular=orderedByCycle&&i<2;
+  const auto state=regular?audits[i].toObject().value("state").toString():QString{};
+  const bool skipped=regular&&state=="unavailable";
+  const bool pending=regular&&i!=active&&(state.isEmpty()||state=="pending");
   const double fraction=i==active?local:std::clamp(item.value("fraction").toDouble(),0.,1.);
-  out.slices.append({.05/scale,fraction,i<2?"audit":"catch_up",false,false,i==active,
+  out.slices.append({.05/scale,fraction,i<2?"audit":"catch_up",skipped,pending,i==active,
                      item.value("audit_ref").toObject()});
+  if(skipped)continue;
   if(i==active)remaining+=total-done;else if(item.value("remaining").isDouble())remaining+=item.value("remaining").toDouble();
   else if(i<audits.size()&&audits[i].toObject().value("positions").isString())remaining+=audits[i].toObject().value("positions").toString().toDouble();else etaKnown=false;
  }
@@ -252,7 +266,16 @@ inline CycleProgress miningCycleProgress(const QJsonObject& frame,QJsonArray obs
  else if(retainedSearch)remaining+=observedSearch.value("remaining").toDouble();
  else if(search>0&&active<2)remaining+=search;
  else etaKnown=false; // A mid-search attachment cannot reconstruct its prefix.
- for(const auto& slice:out.slices)out.fraction+=slice.weight*slice.fraction;
+ // The marker is measured within its own section. Earlier slots keep
+ // their geometry regardless of how much work they contain.
+ const int marker=auditing?active:count;
+ double offset=0.;
+ for(int i=0;i<out.slices.size();++i){
+  const auto& slice=out.slices[i];
+  if(i==marker)out.markerFraction=offset+slice.weight*slice.fraction;
+  out.fraction+=slice.weight*slice.fraction;
+  offset+=slice.weight;
+ }
  if(rate>0&&std::isfinite(rate)){out.taskEta=(total-done)/rate;if(etaKnown)out.cycleEta=remaining/rate;}
  return out;
 }
