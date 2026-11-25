@@ -18,7 +18,13 @@
 
 #include <pgn/gold_counts_envelope.h>
 #include <pgn/gold_partition_counts.h>
+#include <pgn/candidate_range_schedule.h>
 #include <chain.h>
+#include <coins.h>
+#include <kernel/cs_main.h>
+#include <pgn/request_history_archive.h>
+#include <memory>
+#include <vector>
 #include <map>
 #include <optional>
 #include <string_view>
@@ -214,31 +220,40 @@ enum class GoldAuditAdmission {
 class GoldAuditLedger
 {
 public:
+    // What the chain actually proves is that this block carried this answer.
+    // Who gets paid for it is the pay layer's problem (the coinbase payee), not
+    // something an envelope can assert about itself.
     struct Slot {
-        CScript actor;
+        uint256 block;
         int32_t height{};
         GoldAuditAnswer answer;
         bool operator==(const Slot&) const = default;
     };
 
-    GoldAuditAdmission Add(int32_t height, const GoldAuditTarget& target, const CScript& actor,
+    GoldAuditAdmission Add(int32_t height, const uint256& block, const GoldAuditTarget& target,
                            const GoldAuditAnswer& answer)
     {
         if (height <= m_height) {
-            const auto& entry = m_answers[target.record.range_number];
-            const auto& slot = entry[answer.slot];
-            if (slot && slot->height == height && slot->actor == actor && slot->answer == answer) {
-                return GoldAuditAdmission::Replay;
+            // Replay lookup only; a refused answer must never create an entry.
+            const auto known = m_answers.find(target.record.range_number);
+            if (known != m_answers.end()) {
+                const auto& slot = known->second[answer.slot];
+                if (slot && slot->height == height && slot->block == block && slot->answer == answer) {
+                    return GoldAuditAdmission::Replay;
+                }
             }
             return GoldAuditAdmission::OutOfOrder;
         }
         if (answer.slot >= GoldAuditSlots) return GoldAuditAdmission::NotVerified;
-        auto& entry = m_answers[target.record.range_number];
-        if (entry[answer.slot]) return GoldAuditAdmission::SlotTaken;
+        if (m_answers.contains(target.record.range_number) &&
+            m_answers.at(target.record.range_number)[answer.slot]) {
+            return GoldAuditAdmission::SlotTaken;
+        }
         if (VerifyGoldAuditAnswer(target, answer) != GoldAuditVerdict::Verified) {
             return GoldAuditAdmission::NotVerified;
         }
-        entry[answer.slot] = Slot{actor, height, answer};
+        // Only a verified answer creates or extends the entry.
+        m_answers[target.record.range_number][answer.slot] = Slot{block, height, answer};
         m_height = height;
         return GoldAuditAdmission::Accepted;
     }
@@ -271,5 +286,97 @@ private:
     std::map<uint64_t, std::array<std::optional<Slot>, GoldAuditSlots>> m_answers;
     int32_t m_height{-1};
 };
+
+// Replay of every counts audit on the current branch, read from the same
+// authenticated archive the report and audit replay use. Audits live in coinbase
+// outputs, so unlike the pay-once ledger this one needs the block bodies: the
+// index carries a header, not a body.
+//
+// A bad answer does not invalidate the block that carried it - the block already
+// paid for its work - it simply does not take a slot, so the range stays
+// auditable for everyone else. That is the same rule GoldAuditLedger applies to
+// a live submission.
+inline std::shared_ptr<const GoldAuditLedger> ReadGoldAuditLedger(
+    const CCoinsView& view, const CBlockIndex& parent, const NativeRequestHistoryArchive& history,
+    const RangeScheduleBudget& budget, const GoldCountsLedger& claims, uint64_t maximum_script_bytes)
+{
+    AssertLockHeld(cs_main);
+    const auto head = view.GetPgnFactHead();
+    if (!head || !head->Valid() || !parent.phashBlock || parent.nHeight < 0 ||
+        !parent.IsValid(BLOCK_VALID_SCRIPTS) || head->tip != parent.GetBlockHash() ||
+        view.GetBestBlock() != parent.GetBlockHash() || !budget.maximum_blocks) return {};
+    struct Snapshot {
+        uint256 chain, tip;
+        int32_t height{-1};
+        std::shared_ptr<GoldAuditLedger> audits;
+    };
+    static Snapshot cached;
+    const auto* anchor = cached.height >= 0 && cached.height <= parent.nHeight
+                             ? parent.GetAncestor(cached.height) : nullptr;
+    if (cached.chain != head->chain ||
+        (cached.height >= 0 && (!anchor || !anchor->phashBlock ||
+                                !anchor->IsValid(BLOCK_VALID_SCRIPTS) ||
+                                anchor->GetBlockHash() != cached.tip))) {
+        cached = Snapshot{};
+    }
+    cached.chain = head->chain;
+    const auto reject = [&]() -> std::shared_ptr<const GoldAuditLedger> {
+        cached = Snapshot{};
+        return {};
+    };
+    try {
+        if (!cached.audits) cached.audits = std::make_shared<GoldAuditLedger>();
+        while (cached.height < parent.nHeight) {
+            const int64_t first = int64_t(cached.height) + 1;
+            const int64_t last = std::min<int64_t>(parent.nHeight, first + budget.maximum_blocks - 1);
+            std::vector<const CBlockIndex*> ancestry(size_t(last - first + 1));
+            auto* index = parent.GetAncestor(int32_t(last));
+            for (int64_t height = last; height >= first; --height) {
+                if (!index || !index->phashBlock || index->nHeight != height ||
+                    !index->IsValid(BLOCK_VALID_SCRIPTS)) return reject();
+                ancestry[size_t(height - first)] = index;
+                index = index->pprev;
+            }
+            if (first && (!index || !index->phashBlock || index->GetBlockHash() != cached.tip)) return reject();
+            for (const auto* block : ancestry) {
+                const auto loaded = history.Load(view, parent, block->nHeight, budget.archive);
+                if (!loaded.block || !loaded.block->Coinbase()) return reject();
+                unsigned envelopes{};
+                bool changed{};
+                for (const auto& output : loaded.block->Coinbase()->vout) {
+                    if (!IsGoldAuditScript(output.scriptPubKey)) continue;
+                    // A declaration is never a payment, and one block answers at
+                    // most one slot: two answers in one coinbase would let a single
+                    // block fill both halves of the audit.
+                    if (output.nValue != 0 || ++envelopes > 1) return reject();
+                    const auto envelope = DecodeGoldAuditEnvelope(output.scriptPubKey);
+                    if (!envelope) return reject();
+                    const auto owner = claims.Owner(envelope->range_number);
+                    // An answer to a range that was never paid is not an audit.
+                    if (!owner) return reject();
+                    // The seed is the block after the gold block; answering in that
+                    // same block would let the miner answer against a seed it chose.
+                    if (block->nHeight <= owner->first + 1) continue;
+                    const auto target = ReadGoldAuditTarget(parent, claims, envelope->range_number);
+                    if (!target) return reject();
+                    const auto admission = cached.audits->Add(block->nHeight, block->GetBlockHash(),
+                                                              *target, envelope->answer);
+                    if (admission == GoldAuditAdmission::Accepted) changed = true;
+                    if (admission == GoldAuditAdmission::OutOfOrder) return reject();
+                }
+                // Publish only after the whole prefix is authenticated.
+                if (changed && cached.audits.use_count() != 1) {
+                    cached.audits = std::make_shared<GoldAuditLedger>(*cached.audits);
+                }
+                cached.height = block->nHeight;
+                cached.tip = block->GetBlockHash();
+            }
+        }
+        return cached.audits;
+    } catch (...) {
+        cached = Snapshot{};
+        throw;
+    }
+}
 
 } // namespace pgn::core

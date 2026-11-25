@@ -246,18 +246,18 @@ static void CheckLedger()
     const auto target = ReadGoldAuditTarget(chain.tip(), ledger_claims, 31);
     need(target.has_value(), "Fixture target missing");
 
-    const CScript first{CScript{} << OP_1}, second{CScript{} << OP_2};
+    const auto first = chain.hashes[6], second = chain.hashes[7];
     GoldAuditLedger audits;
     need(!audits.Audited(31), "A fresh range is reported as audited");
 
     // One verified answer per slot, one answer per slot ever.
     const auto zero = GoldAuditExpectedAnswer(*target, 0);
-    need(audits.Add(5, *target, first, zero) == GoldAuditAdmission::Accepted,
+    need(audits.Add(5, first, *target, zero) == GoldAuditAdmission::Accepted,
          "A verified answer was refused");
     need(!audits.Audited(31), "One slot is reported as a completed audit");
-    need(audits.Add(5, *target, first, zero) == GoldAuditAdmission::Replay,
+    need(audits.Add(5, first, *target, zero) == GoldAuditAdmission::Replay,
          "The identical answer was treated as a new claim");
-    need(audits.Add(6, *target, second, zero) == GoldAuditAdmission::SlotTaken,
+    need(audits.Add(6, second, *target, zero) == GoldAuditAdmission::SlotTaken,
          "A second actor overwrote an answered slot");
 
     // A wrong answer never consumes a slot: otherwise anyone could burn the range
@@ -265,9 +265,9 @@ static void CheckLedger()
     const auto one = GoldAuditExpectedAnswer(*target, 1);
     auto wrong = one;
     wrong.counts[0] = static_cast<uint8_t>(wrong.counts[0] + 1);
-    need(audits.Add(7, *target, second, wrong) == GoldAuditAdmission::NotVerified,
+    need(audits.Add(7, second, *target, wrong) == GoldAuditAdmission::NotVerified,
          "A wrong answer was accepted");
-    need(audits.Add(7, *target, second, one) == GoldAuditAdmission::Accepted,
+    need(audits.Add(7, second, *target, one) == GoldAuditAdmission::Accepted,
          "A wrong answer consumed the slot");
     need(audits.Audited(31), "Two verified slots did not complete the audit");
     need(audits.AuditedRanges() == 1, "Audited range count is wrong");
@@ -277,20 +277,23 @@ static void CheckLedger()
     GoldAuditLedger other_rules;
     auto crossed_answer = GoldAuditExpectedAnswer(*target, 1);
     crossed_answer.slot = 0;
-    need(other_rules.Add(5, *target, first, crossed_answer) == GoldAuditAdmission::NotVerified,
+    need(other_rules.Add(5, first, *target, crossed_answer) == GoldAuditAdmission::NotVerified,
          "A crossed assignment was recorded");
-    need(other_rules.Add(5, *target, first, zero) == GoldAuditAdmission::Accepted,
+    // A refused answer must not leave a trace, or every reader would see the range
+    // as answered by a block that answered nothing.
+    need(other_rules.Answers(31) == nullptr, "A refused answer created a ledger entry");
+    need(other_rules.Add(5, first, *target, zero) == GoldAuditAdmission::Accepted,
          "The correct slot 0 answer was refused after a crossed one");
-    need(other_rules.Add(4, *target, second, GoldAuditExpectedAnswer(*target, 1)) ==
+    need(other_rules.Add(4, second, *target, GoldAuditExpectedAnswer(*target, 1)) ==
              GoldAuditAdmission::OutOfOrder,
          "An older answer was accepted");
 
-    // The answers are kept as submitted, so a reader can see who audited what.
+    // The answers are kept as submitted, so a reader can see which block answered.
     const auto* answers = audits.Answers(31);
-    need(answers && (*answers)[0] && (*answers)[0]->actor == first && (*answers)[0]->height == 5,
-         "The recorded slot lost its actor or height");
-    need(answers && (*answers)[1] && (*answers)[1]->actor == second && (*answers)[1]->height == 7,
-         "The second slot recorded the wrong actor");
+    need(answers && (*answers)[0] && (*answers)[0]->block == first && (*answers)[0]->height == 5,
+         "The recorded slot lost its block or height");
+    need(answers && (*answers)[1] && (*answers)[1]->block == second && (*answers)[1]->height == 7,
+         "The second slot recorded the wrong block");
     need(audits.Answers(32) == nullptr, "An unanswered range has answers");
 }
 

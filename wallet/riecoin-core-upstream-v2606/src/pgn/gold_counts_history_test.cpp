@@ -7,6 +7,7 @@
 // Closed fixture: synthetic blocks, an in-memory coins view and a temporary
 // archive. No process, wallet, transport or GPU.
 #include <pgn/candidate_block_science.h>
+#include <pgn/gold_audit.h>
 #include <pgn/gold_counts_history.h>
 #include <pgn/native_bootstrap_hash.h>
 #include <pgn/native_test_bip322.h>
@@ -55,7 +56,8 @@ struct Fixture {
     std::unique_ptr<CCoinsViewCache> view;
     std::unique_ptr<NativeRequestHistoryArchive> history;
 
-    Fixture(const fs::path& path, bool activate, const std::vector<std::optional<GoldCountsRecord>>& claims)
+    Fixture(const fs::path& path, bool activate, const std::vector<std::optional<GoldCountsRecord>>& claims,
+            const std::vector<std::vector<CScript>>& audits = {}, const std::string& name = {})
     {
         chain.begin()[0] = activate ? 21 : 22;
         // A deliberately narrow ticket width: each of the 100 partitions then
@@ -88,6 +90,9 @@ struct Fixture {
             coinbase.vin[0].prevout.SetNull();
             coinbase.vin[0].scriptSig = CScript{} << int64_t(height) << OP_0;
             coinbase.vout.emplace_back(0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'});
+            if (height - 1 < audits.size()) {
+                for (const auto& script : audits[height - 1]) coinbase.vout.emplace_back(0, script);
+            }
             blocks[height].nTime = 200 + int64_t(height);
             blocks[height].hashPrevBlock = hashes[height - 1];
             blocks[height].nVersion = 4;
@@ -112,13 +117,15 @@ struct Fixture {
             index->BuildSkip();
             indices.push_back(std::move(index));
         }
+        const auto stem = fs::PathFromString((activate ? "coins-on" : "coins-off") + name);
         coins = std::make_unique<CCoinsViewDB>(
-            DBParams{.path = path / (activate ? "coins-on" : "coins-off"), .cache_bytes = 1 << 20,
+            DBParams{.path = path / stem, .cache_bytes = 1 << 20,
                      .memory_only = true, .wipe_data = false}, CoinsViewOptions{});
         view = std::make_unique<CCoinsViewCache>(coins.get());
         view->SetBestBlock(hashes[claims.size()]);
         view->StagePgnFactCommit({{}, FactHead{chain, hashes[claims.size()]}, {}});
-        history = std::make_unique<NativeRequestHistoryArchive>(path / (activate ? "history-on" : "history-off"), 1 << 20);
+        history = std::make_unique<NativeRequestHistoryArchive>(
+            path / fs::PathFromString((activate ? "history-on" : "history-off") + name), 1 << 20);
         const RequestHistoryArchiveBudget archive_budget{16384, 16384};
         for (size_t height = 0; height <= claims.size(); ++height) {
             need(history->StoreBlock(*view, *indices.back(), int32_t(height), blocks[height], archive_budget) ==
@@ -278,6 +285,69 @@ int main(int argc, char** argv)
         // And it does not build a ledger it would never use.
         const auto dormant_ledger = ReadGoldCountsLedger(*dormant.view, dormant.tip(), schedule);
         need(dormant_ledger != nullptr, "Inactive chain ledger replay was held");
+
+        // The audit ledger replays from coinbase outputs against the same
+        // authenticated archive. A wrong answer is ignored rather than fatal: the
+        // block already paid for its work, and the range must stay auditable.
+        {
+            const GoldCountsRecord audited{41, Counts(5)};
+            // gold at 1, seed at 2, both answers after the seed.
+            Fixture audited_chain{path, true, {audited, std::nullopt, std::nullopt}, {}, "-audit"};
+            const auto audited_claims = ReadGoldCountsLedger(*audited_chain.view, audited_chain.at(3), schedule);
+            need(audited_claims != nullptr, "Audited chain claims were held");
+            const auto audited_target = ReadGoldAuditTarget(audited_chain.at(3), *audited_claims, 41);
+            need(audited_target.has_value(), "Audited chain has no target");
+
+            const auto answer = GoldAuditExpectedAnswer(*audited_target, 0);
+            const auto envelope = BuildGoldAuditEnvelope(answer, 41);
+            need(envelope.has_value(), "Audit envelope rejected");
+            // Replaying the chain without the answer shows an unaudited range.
+            const auto empty = ReadGoldAuditLedger(*audited_chain.view, audited_chain.at(3),
+                                                  *audited_chain.history, schedule, *audited_claims,
+                                                  kMaximumScriptBytes);
+            need(empty != nullptr && !empty->Audited(41),
+                 "A range with no answer is reported as audited");
+
+            // The same chain with the answer in block 3 does count.
+            Fixture with_answer{path, true, {audited, std::nullopt, std::nullopt},
+                                {{}, {}, {*envelope}}, "-audit-answer"};
+            const auto answer_claims = ReadGoldCountsLedger(*with_answer.view, with_answer.at(3), schedule);
+            need(answer_claims != nullptr, "Answered chain claims were held");
+            const auto audits = ReadGoldAuditLedger(*with_answer.view, with_answer.at(3),
+                                                   *with_answer.history, schedule, *answer_claims,
+                                                   kMaximumScriptBytes);
+            need(audits != nullptr, "Audit replay was held");
+            const auto* recorded = audits->Answers(41);
+            need(recorded && (*recorded)[0], "The replayed audit lost its answer");
+            need((*recorded)[0]->block == with_answer.hashes[3], "The answer is attributed to the wrong block");
+            need(!audits->Audited(41), "One replayed answer completed the audit");
+
+            // A wrong answer does not become an audit, and does not invalidate the
+            // chain either.
+            auto wrong = answer;
+            wrong.counts[0] = static_cast<uint8_t>(wrong.counts[0] + 1);
+            const auto wrong_envelope = BuildGoldAuditEnvelope(wrong, 41);
+            need(wrong_envelope.has_value(), "Wrong audit envelope rejected");
+            Fixture with_wrong{path, true, {audited, std::nullopt, std::nullopt},
+                              {{}, {}, {*wrong_envelope}}, "-audit-wrong"};
+            const auto wrong_claims = ReadGoldCountsLedger(*with_wrong.view, with_wrong.at(3), schedule);
+            const auto wrong_audits = ReadGoldAuditLedger(*with_wrong.view, with_wrong.at(3),
+                                                         *with_wrong.history, schedule, *wrong_claims,
+                                                         kMaximumScriptBytes);
+            need(wrong_audits != nullptr, "A wrong answer made the replay fail");
+            need(wrong_audits->Answers(41) == nullptr, "A wrong answer was recorded");
+
+            // An answer to a range that was never paid is not an audit at all.
+            const auto orphan = BuildGoldAuditEnvelope(answer, 42);
+            need(orphan.has_value(), "Orphan audit envelope rejected");
+            Fixture with_orphan{path, true, {audited, std::nullopt, std::nullopt},
+                               {{}, {}, {*orphan}}, "-audit-orphan"};
+            const auto orphan_claims = ReadGoldCountsLedger(*with_orphan.view, with_orphan.at(3), schedule);
+            const auto orphan_audits = ReadGoldAuditLedger(*with_orphan.view, with_orphan.at(3),
+                                                          *with_orphan.history, schedule, *orphan_claims,
+                                                          kMaximumScriptBytes);
+            need(orphan_audits == nullptr, "An answer to an unpaid range was accepted");
+        }
 
         // The science path verifies real gold blocks, so it must refuse a paid
         // range before it spends anything on the proof. A block with a science
