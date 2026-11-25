@@ -80,9 +80,26 @@ def main(argv=None):
     if overlap:
         failures.append({"case": "slot overlap", "shared": sorted(overlap)})
 
+    # The recorded state comes from the same replay admission will use, so it has to
+    # agree with itself: a slot is answered exactly when it carries a block, and the
+    # range is audited exactly when both slots are answered. An answer the replay
+    # refused must be invisible here, not counted.
+    answers = [declared["slot{}_answer".format(slot)] for slot in (0, 1)]
+    recorded = sum(1 for answer in answers if answer)
+    if recorded != declared["answered_slots"]:
+        failures.append({"case": "answered slots", "declared": declared["answered_slots"],
+                         "recorded": recorded})
+    if declared["audited"] != (recorded == 2):
+        failures.append({"case": "audited flag", "declared": declared["audited"],
+                         "recorded": recorded})
+    for slot, answer in enumerate(answers):
+        if answer and (len(answer.get("block", "")) != 64 or answer.get("height", 0) <= 0):
+            failures.append({"case": "slot " + str(slot) + " answer record", "answer": answer})
+
     result = {"schema": "PGN_GOLD_AUDIT_CHECK_V1", "range_number": arguments.range,
               "gold_height": declared["gold_height"], "seed": declared["seed"],
-              "cases": len(cases), "failures": failures, "PASS": not failures}
+              "answered_slots": declared["answered_slots"], "audited": declared["audited"],
+              "cases": len(cases) + 2, "failures": failures, "PASS": not failures}
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0 if result["PASS"] else 1
 

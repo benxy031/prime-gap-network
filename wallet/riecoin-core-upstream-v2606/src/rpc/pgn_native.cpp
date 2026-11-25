@@ -786,8 +786,9 @@ static uint64_t ParseRangeNumber(const UniValue& value){
 RPCMethod getpgngoldaudit(){
  return RPCMethod{"getpgngoldaudit","Read the counts audit target for a paid gold range number.",{
   {"range_number",RPCArg::Type::STR,RPCArg::Optional::NO,"Range number as a decimal string"}},
- // Fields: active, auditable, range_number, gold_height, gold_block, seed,
- // slot0_partitions, slot0_counts, slot1_partitions, slot1_counts.
+ // Fields: active, range_number, auditable, audited, answered_slots, gold_height,
+ // gold_block, seed, slot0_partitions, slot0_counts, slot1_partitions, slot1_counts,
+ // slot0_answer, slot1_answer.
  RPCResults{},
   RPCExamples{""},
  [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
@@ -798,6 +799,23 @@ RPCMethod getpgngoldaudit(){
   const auto& budget=*manager.m_options.pgn_candidate_science_budget;
   const auto ledger=ReadGoldCountsLedger(active.CoinsTip(),tip,budget.schedule);
   if(!ledger)throw JSONRPCError(RPC_MISC_ERROR,"Gold counts history held; no empty claim set is assumed");
+  // The same replay admission will use, so the tool can see what the chain already
+  // recorded rather than only what an answer should look like. This walks the archive
+  // up to the tip, so it is a diagnostic call, not a hot path.
+  const auto history=ReadOwnHistory(manager);
+  const auto audits=ReadGoldAuditLedger(active.CoinsTip(),tip,history.archive,budget.schedule,*ledger,
+                                        budget.maximum_script_bytes);
+  if(!audits)throw JSONRPCError(RPC_MISC_ERROR,"Gold counts audit history held; recorded answers are not guessed");
+  out.pushKV("audited",audits->Audited(number));
+  const auto* recorded=audits->Answers(number);
+  uint64_t answered=0;
+  for(size_t slot=0;slot<GoldAuditSlots;++slot){
+   UniValue entry{UniValue::VOBJ};
+   if(recorded&&(*recorded)[slot]){
+    const auto& answer=*(*recorded)[slot];
+    entry.pushKV("block",answer.block.GetHex());entry.pushKV("height",answer.height);++answered;}
+   out.pushKV("slot"+std::to_string(slot)+"_answer",entry);}
+  out.pushKV("answered_slots",answered);
   // A gold block whose seed block does not exist yet is not auditable: the miner
   // would otherwise know the selection in advance. Absence is reported, never guessed.
   const auto target=ReadGoldAuditTarget(tip,*ledger,number);
