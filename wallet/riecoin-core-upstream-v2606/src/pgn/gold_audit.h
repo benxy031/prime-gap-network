@@ -113,19 +113,28 @@ enum class GoldAuditVerdict {
     WrongCount,        // a count differs from the header
 };
 
-inline bool GoldAuditAnswerWellFormed(const GoldAuditAnswer& answer)
+// The assignment alone: a slot and five partitions that could have been handed
+// out. Whether the answer is CORRECT depends only on this, never on who is paid.
+inline bool GoldAuditAssignmentWellFormed(const GoldAuditAnswer& answer)
 {
     return answer.slot < GoldAuditSlots &&
            std::is_sorted(answer.partitions.begin(), answer.partitions.end()) &&
            std::all_of(answer.partitions.begin(), answer.partitions.end(),
-                       [](uint32_t index) { return index < GoldPartitionCount; }) &&
-           !answer.reward.empty() && answer.reward.size() <= GoldRewardMaximumScriptBytes;
+                       [](uint32_t index) { return index < GoldPartitionCount; });
+}
+
+// The whole thing as it travels: an assignment plus a payee. Only the codec needs
+// this, because only the codec decides what may be written into a block.
+inline bool GoldAuditAnswerWellFormed(const GoldAuditAnswer& answer)
+{
+    return GoldAuditAssignmentWellFormed(answer) && !answer.reward.empty() &&
+           answer.reward.size() <= GoldRewardMaximumScriptBytes;
 }
 
 inline GoldAuditVerdict VerifyGoldAuditAnswer(const GoldAuditTarget& target,
                                              const GoldAuditAnswer& answer)
 {
-    if (!GoldAuditAnswerWellFormed(answer)) {
+    if (!GoldAuditAssignmentWellFormed(answer)) {
         return answer.slot < GoldAuditSlots ? GoldAuditVerdict::WrongPartitions
                                            : GoldAuditVerdict::InvalidSlot;
     }

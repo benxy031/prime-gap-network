@@ -18,6 +18,7 @@
 #include <pgn/ticket_atlas_projection.h>
 #include <pgn/proposed_ticket_requests.h>
 #include <pgn/gold_audit.h>
+#include <pgn/gold_payout.h>
 #include <pgn/gold_counts_history.h>
 #include <pgn/native_work_duty_admission.h>
 #include <pgn/native_science_monetary_plan.h>
@@ -843,6 +844,24 @@ RPCMethod getpgngoldaudit(){
   if(miner.verdict!=GoldRewardBlockVerdict::Present||!miner.miner)
    throw JSONRPCError(RPC_MISC_ERROR,"Gold block commits no payee");
   out.pushKV("miner_reward",HexStr(*miner.miner));
+  // The exact payout the committed data implies, so the numbers a settlement page
+  // will be held to are visible before any page exists.
+  const auto cash=ReadChainMonetaryPolicy(active.CoinsTip(),tip,history.archive,budget.schedule.archive,budget.policy);
+  if(!cash.policy||!cash.policy->Epochs())
+   throw JSONRPCError(RPC_MISC_ERROR,"Chain commits no epoch rewards; the payout is not guessed");
+  const auto quote=QuoteGoldRangePayout(*cash.policy->Epochs(),ledger->GoldsBefore(target->gold_height),
+                                        *miner.miner,*audits,*target);
+  if(!quote)throw JSONRPCError(RPC_MISC_ERROR,"The committed rewards do not express the auditor's quarter");
+  UniValue payout{UniValue::VOBJ};
+  payout.pushKV("gross",quote->gross);payout.pushKV("miner_amount",quote->miner);
+  payout.pushKV("audit_pot",quote->audit_pot);payout.pushKV("payable",quote->payable);
+  for(size_t slot=0;slot<GoldAuditSlots;++slot){
+   UniValue share{UniValue::VOBJ};
+   if(quote->auditors[slot]){
+    share.pushKV("script",HexStr(quote->auditors[slot]->script));
+    share.pushKV("amount",quote->auditors[slot]->amount);}
+   payout.pushKV("slot"+std::to_string(slot),share);}
+  out.pushKV("payout",payout);
   const auto state=GoldAuditRangeState(*audits,*target,tip.nHeight);
   out.pushKV("audit_deadline",state.deadline);out.pushKV("audit_answered",uint64_t(state.answered));
   out.pushKV("audit_status",state.status==GoldAuditStatus::Audited?"audited":

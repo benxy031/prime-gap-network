@@ -96,10 +96,28 @@ def main(argv=None):
         if answer and (len(answer.get("block", "")) != 64 or answer.get("height", 0) <= 0):
             failures.append({"case": "slot " + str(slot) + " answer record", "answer": answer})
 
+    # The payout is arithmetic on committed data, so it is checked against itself:
+    # the pot is a quarter of the miner's share, the two slots divide it exactly, and
+    # nothing is payable until both of them answer.
+    payout = declared.get("payout")
+    if not payout:
+        failures.append({"case": "payout missing"})
+    else:
+        if payout["audit_pot"] * 4 != payout["miner_amount"]:
+            failures.append({"case": "auditor quarter", "miner": payout["miner_amount"],
+                             "pot": payout["audit_pot"]})
+        amounts = [payout["slot0"].get("amount", 0), payout["slot1"].get("amount", 0)]
+        if recorded and sum(amounts) != payout["audit_pot"]:
+            failures.append({"case": "slot split", "amounts": amounts,
+                             "pot": payout["audit_pot"]})
+        if payout["payable"] != declared["audited"]:
+            failures.append({"case": "payable flag", "payable": payout["payable"],
+                             "audited": declared["audited"]})
+
     result = {"schema": "PGN_GOLD_AUDIT_CHECK_V1", "range_number": arguments.range,
               "gold_height": declared["gold_height"], "seed": declared["seed"],
               "answered_slots": declared["answered_slots"], "audited": declared["audited"],
-              "cases": len(cases) + 2, "failures": failures, "PASS": not failures}
+              "cases": len(cases) + 4, "failures": failures, "PASS": not failures}
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0 if result["PASS"] else 1
 

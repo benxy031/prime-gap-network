@@ -216,6 +216,19 @@ public:
     size_t size() const { return m_owner.size(); }
     int32_t Height() const { return m_height; }
 
+    // How many golds were paid before `height`. The epoch grant and the audit
+    // accrual are both indexed by this ordinal, so a payout cannot be quoted from a
+    // range number alone. The map is keyed by range number, so this is a walk; it
+    // is a query path, never a per-block one.
+    size_t GoldsBefore(int32_t height) const
+    {
+        size_t count{};
+        for (const auto& [range, owner] : m_owner) {
+            if (owner.first < height) ++count;
+        }
+        return count;
+    }
+
 private:
     std::map<uint64_t, std::pair<int32_t, uint256>> m_owner;
     int32_t m_height{-1};

@@ -5,6 +5,7 @@
 // the whole obligation: the right partitions, the right counts, and a selection
 // the miner could not have known when it chose the header.
 #include <pgn/gold_audit.h>
+#include <pgn/gold_payout.h>
 
 #include <iostream>
 #include <memory>
@@ -346,6 +347,86 @@ static void CheckWindow()
     need(complete.deadline == deadline, "The reported deadline is wrong");
 }
 
+static void CheckPayout()
+{
+    // The local chain's committed rewards: the miner's share and a pot that is
+    // exactly a quarter of it, inside the same 247.5 per gold.
+    const CAmount coin = PGN_ATOMIC_UNITS_PER_COIN;
+    GoldEpochDefinition epochs{200000, 10, coin * 1468 / 10, 32 * coin, 24 * coin, 8 * coin,
+                               coin * 367, 1000 * coin, 40U * 65536U};
+    need(GoldEpochDefinitionValid(epochs), "The payout fixture policy is invalid");
+
+    const GoldCountsRecord record{17, Counts(3)};
+    Chain chain{8, {{3, record}}};
+    const auto claims = LedgerWith(chain, {{3, record}});
+    const auto target = ReadGoldAuditTarget(chain.tip(), claims, 17);
+    need(target.has_value(), "Payout target missing");
+
+    const CScript miner = CScript{} << OP_1, first = CScript{} << OP_2, second = CScript{} << OP_3;
+    GoldAuditLedger audits;
+    const auto answer = [&](uint8_t slot, const CScript& payee) {
+        auto value = GoldAuditExpectedAnswer(*target, slot, payee);
+        need(audits.Add(6 + slot, chain.hashes[6 + slot], *target, value) ==
+                 GoldAuditAdmission::Accepted,
+             "The payout fixture lost its answer");
+    };
+
+    // Nothing answered: the pot is known, the miner is known, nobody is paid.
+    const auto open = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    need(open.has_value(), "An open range has no payout quote");
+    need(open->miner == coin * 1468 / 10, "The miner's share is wrong");
+    need(open->audit_pot * 4 == open->miner, "The auditor's pot is not a quarter of the miner");
+    need(open->gross == coin * 2475 / 10, "The grant total is wrong");
+    need(!open->payable && !open->auditors[0] && !open->auditors[1],
+         "An unanswered range reported a payout");
+
+    // One slot is still not a completed audit, and the answered slot's payee is
+    // already visible so a page can be checked against it.
+    answer(0, first);
+    const auto half = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    need(half.has_value() && !half->payable, "A half-answered range reported payable");
+    need(half->auditors[0] && half->auditors[0]->script == first,
+         "The first slot lost its payee");
+    need(!half->auditors[1], "The unanswered slot reported a share");
+
+    // Both slots: the pot divides exactly, with no atomic unit lost.
+    answer(1, second);
+    const auto complete = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    need(complete.has_value() && complete->payable, "A completed audit is not payable");
+    need(complete->auditors[0] && complete->auditors[1], "A completed audit lost a slot");
+    need(complete->auditors[0]->script == first && complete->auditors[1]->script == second,
+         "The auditors' payees are crossed");
+    const auto paid = complete->auditors[0]->amount + complete->auditors[1]->amount;
+    need(paid == complete->audit_pot, "The slots did not divide the pot exactly");
+    need(paid * 4 == complete->miner, "The auditors together did not get a quarter");
+
+    // The rule holds in every era, because halving applies to both sides.
+    const auto later = QuoteGoldRangePayout(epochs, epochs.era_golds, miner, audits, *target);
+    need(later.has_value(), "An era one quote failed");
+    need(later->audit_pot * 4 == later->miner, "The quarter drifted in a later era");
+
+    // A chain whose committed split is not a quarter is refused rather than paid
+    // something else.
+    auto wrong = epochs;
+    wrong.audit_period_amount = coin * 125;
+    need(GoldEpochDefinitionValid(wrong), "The negative fixture policy is invalid");
+    need(!QuoteGoldRangePayout(wrong, 0, miner, audits, *target).has_value(),
+         "A chain that does not commit the quarter produced a payout");
+
+    // And a range with no payee for its miner cannot be quoted at all.
+    need(!QuoteGoldRangePayout(epochs, 0, CScript{}, audits, *target).has_value(),
+         "A range with no miner payee produced a payout");
+
+    // Correctness must never depend on the payee: the verifier answers "are these
+    // counts right", while only the codec decides what may enter a block. Getting
+    // this wrong made every honest answer look forged once the payee was added.
+    const auto anonymous = GoldAuditExpectedAnswer(*target, 0, CScript{});
+    need(VerifyGoldAuditAnswer(*target, anonymous) == GoldAuditVerdict::Verified,
+         "Correctness was made to depend on the payee");
+    need(!BuildGoldAuditEnvelope(anonymous, 17).has_value(),
+         "An answer with no payee was encoded");
+}
+
 int main()
 {
 
@@ -356,6 +437,7 @@ int main()
         CheckEnvelope();
         CheckLedger();
         CheckWindow();
+        CheckPayout();
         std::cout << "gold audit ok" << std::endl;
         return 0;
     } catch (const std::exception& failure) {
