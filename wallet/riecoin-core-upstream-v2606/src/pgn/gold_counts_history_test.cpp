@@ -349,6 +349,69 @@ int main(int argc, char** argv)
             need(orphan_audits == nullptr, "An answer to an unpaid range was accepted");
         }
 
+        // Admission asks the same ledger, so a candidate is accepted only on the
+        // verdict the replay would give it afterwards. This is the gate that makes
+        // an answer consensus instead of a comment.
+        {
+            const GoldCountsRecord audited{41, Counts(5)};
+            Fixture gate{path, true, {audited, std::nullopt, std::nullopt}, {}, "-audit-gate"};
+            const auto claims = ReadGoldCountsLedger(*gate.view, gate.tip(), schedule);
+            need(claims != nullptr, "Gate claims were held");
+            const auto t = ReadGoldAuditTarget(gate.tip(), *claims, 41);
+            need(t.has_value(), "Gate target missing");
+            const auto honest = GoldAuditExpectedAnswer(*t, 0);
+            const auto honest_script = BuildGoldAuditEnvelope(honest, 41);
+            need(honest_script.has_value(), "Gate envelope rejected");
+            const auto check = [&](const Fixture& fixture, const CBlock& block) {
+                return VerifyProposedGoldAudit(*fixture.view, fixture.tip(), *fixture.history, block,
+                                               schedule, kPolicyBudget, kMaximumScriptBytes);
+            };
+
+            // A block with no answer is unaffected and skips the replay entirely.
+            need(check(gate, Proposed(gate.tip())) == GoldAuditProposedVerdict::Absent,
+                 "A plain block was treated as an answer");
+
+            // The seed is the block after the gold block, so the block that carries
+            // the seed cannot answer: the miner would pick the seed it answers to.
+            Fixture early{path, true, {audited}, {}, "-audit-gate-early"};
+            need(check(early, Proposed(early.tip(), std::nullopt, {*honest_script})) ==
+                     GoldAuditProposedVerdict::SeedMissing,
+                 "An answer was accepted before its seed existed");
+
+            // The first honest answer takes the slot, and only once.
+            const CBlock accepted = Proposed(gate.tip(), std::nullopt, {*honest_script});
+            need(check(gate, accepted) == GoldAuditProposedVerdict::Verified,
+                 "An honest answer was refused at admission");
+            auto stolen = honest;
+            stolen.counts[0] = static_cast<uint8_t>(stolen.counts[0] + 1);
+            need(check(gate, Proposed(gate.tip(), std::nullopt,
+                                      {*BuildGoldAuditEnvelope(stolen, 41)})) ==
+                     GoldAuditProposedVerdict::Invalid,
+                 "A wrong answer reached admission");
+
+            // An answer to a range number nobody paid is not an audit.
+            need(check(gate, Proposed(gate.tip(), std::nullopt,
+                                      {*BuildGoldAuditEnvelope(honest, 42)})) ==
+                     GoldAuditProposedVerdict::UnpaidRange,
+                 "An answer to an unpaid range reached admission");
+
+            // Two answers in one coinbase would fill both halves of an audit at
+            // once, so they are refused rather than resolved.
+            need(check(gate, Proposed(gate.tip(), std::nullopt,
+                                      {*honest_script, *honest_script})) ==
+                     GoldAuditProposedVerdict::Duplicate,
+                 "Two answers in one coinbase were accepted");
+
+            // On a chain without the rule the envelope is an ordinary zero-value
+            // OP_RETURN, which is what the published testnet accepts today.
+            Fixture dormant_gate{path, false, {std::nullopt}, {}, "-audit-gate-dormant"};
+            const CBlock harmless = Proposed(dormant_gate.tip(), std::nullopt, {*honest_script});
+            need(VerifyProposedGoldAudit(*dormant_gate.view, dormant_gate.tip(), *dormant_gate.history,
+                                         harmless, schedule, kPolicyBudget, kMaximumScriptBytes) ==
+                     GoldAuditProposedVerdict::Inactive,
+                 "An inactive chain refused a harmless envelope");
+        }
+
         // The science path verifies real gold blocks, so it must refuse a paid
         // range before it spends anything on the proof. A block with a science
         // envelope tag and a duplicate counts header never reaches the proof.

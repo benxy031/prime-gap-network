@@ -21,7 +21,10 @@ enum class NativeBlockScienceVerdict {VerifiedCandidate,InvalidBlock,MissingProo
     InvalidEncoding,BudgetExceeded,NativeHistoryHeld,ScienceRejected,
     // A declared gold range number is already paid, or the declaration itself is
     // invalid. Separate from InvalidBlock so the reason survives in logs.
-    GoldCountsRejected};
+    GoldCountsRejected,
+    // An audit answer was refused: a wrong answer, a taken slot, an unpaid range,
+    // or a seed that does not exist yet.
+    GoldAuditRejected};
 struct NativeBlockScienceCheck;
 class VerifiedNativeBlockScience {
     uint256 m_block,m_parent,m_source;size_t m_transactions;

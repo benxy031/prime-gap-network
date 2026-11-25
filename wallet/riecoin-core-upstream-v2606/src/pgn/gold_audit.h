@@ -230,8 +230,10 @@ public:
         bool operator==(const Slot&) const = default;
     };
 
-    GoldAuditAdmission Add(int32_t height, const uint256& block, const GoldAuditTarget& target,
-                           const GoldAuditAnswer& answer)
+    // The verdict without the entry, so an admission path can ask a read-only
+    // ledger whether a candidate's answer would be accepted.
+    GoldAuditAdmission Check(int32_t height, const uint256& block, const GoldAuditTarget& target,
+                             const GoldAuditAnswer& answer) const
     {
         if (height <= m_height) {
             // Replay lookup only; a refused answer must never create an entry.
@@ -252,10 +254,18 @@ public:
         if (VerifyGoldAuditAnswer(target, answer) != GoldAuditVerdict::Verified) {
             return GoldAuditAdmission::NotVerified;
         }
+        return GoldAuditAdmission::Accepted;
+    }
+
+    GoldAuditAdmission Add(int32_t height, const uint256& block, const GoldAuditTarget& target,
+                           const GoldAuditAnswer& answer)
+    {
+        const auto verdict = Check(height, block, target, answer);
         // Only a verified answer creates or extends the entry.
+        if (verdict != GoldAuditAdmission::Accepted) return verdict;
         m_answers[target.record.range_number][answer.slot] = Slot{block, height, answer};
         m_height = height;
-        return GoldAuditAdmission::Accepted;
+        return verdict;
     }
 
     bool Audited(uint64_t range_number) const

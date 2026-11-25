@@ -133,6 +133,37 @@ def search(block, target, limit, nonce_offset=COUNTER_OFFSET, header_bytes=HEADE
     return None
 
 
+def mine(rpc, requests=(), gold_section=None, max_counter=MAX_COUNTER, dry_run=False):
+    """Mine one block from the current tip and, unless dry_run, submit it.
+
+    A refusal comes back as RuntimeError carrying the node's own verdict, which is
+    how a caller proves the chain rejected something rather than assuming it.
+    """
+    template = rpc("getpgnbootstraptemplate", [list(requests)] if requests else [])
+    block, target = checked_template(template)
+    nonce_offset, header_bytes = COUNTER_OFFSET, HEADER_BYTES
+    if gold_section is not None:
+        block = with_gold_section(block, gold_section)
+        nonce_offset, header_bytes = COUNTER_OFFSET + GOLD_SECTION_BYTES, HEADER_BYTES + GOLD_SECTION_BYTES
+    found = search(block, target, max_counter, nonce_offset, header_bytes)
+    if found is None:
+        raise RuntimeError("counter family exhausted at height " + str(template["height"]))
+    counter, digest = found
+    record = {"height": template["height"], "parent": template["parent"],
+              "counter": counter, "block": digest[::-1].hex(),
+              "bytes": len(block), "header_bytes": header_bytes,
+              "submitted": not dry_run}
+    if not dry_run:
+        rejection = rpc("submitblock", [block.hex()])
+        key = digest[::-1].hex()
+        if rejection is not None:
+            raise RuntimeError("block " + key + " rejected: " + str(rejection)[:200])
+        if rpc("getblockhash", [template["height"]]) != key:
+            raise RuntimeError("block " + key + " was not connected at height "
+                               + str(template["height"]))
+    return record
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Mine bootstrap blocks on a local PGN chain.")
     parser.add_argument("--datadir", required=True, help="node data directory")
@@ -154,31 +185,10 @@ def main(argv=None):
     if not 1 <= arguments.max_counter <= MAX_COUNTER:
         raise ValueError("--max-counter must be 1..2^32")
     rpc = Rpc(arguments.rpcport, cookie_for(arguments.datadir, arguments.cookie))
-    requests = list(arguments.request)
-
-    for index in range(1, arguments.count + 1):
-        template = rpc("getpgnbootstraptemplate", [requests] if requests else [])
-        block, target = checked_template(template)
-        nonce_offset, header_bytes = COUNTER_OFFSET, HEADER_BYTES
-        if arguments.gold_section is not None:
-            block = with_gold_section(block, bytes.fromhex(arguments.gold_section))
-            nonce_offset, header_bytes = COUNTER_OFFSET + GOLD_SECTION_BYTES, HEADER_BYTES + GOLD_SECTION_BYTES
-        found = search(block, target, arguments.max_counter, nonce_offset, header_bytes)
-        if found is None:
-            raise RuntimeError("counter family exhausted at height " + str(template["height"]))
-        counter, digest = found
-        record = {"height": template["height"], "parent": template["parent"],
-                  "counter": counter, "block": digest[::-1].hex(),
-                  "bytes": len(block), "header_bytes": header_bytes,
-                  "submitted": not arguments.dry_run}
-        if not arguments.dry_run:
-            rejection = rpc("submitblock", [block.hex()])
-            key = digest[::-1].hex()
-            if rejection is not None:
-                raise RuntimeError("block " + key + " rejected: " + str(rejection)[:200])
-            if rpc("getblockhash", [template["height"]]) != key:
-                raise RuntimeError("block " + key + " was not connected at height "
-                                   + str(template["height"]))
+    for _ in range(arguments.count):
+        record = mine(rpc, requests=arguments.request,
+                      gold_section=arguments.gold_section and bytes.fromhex(arguments.gold_section),
+                      max_counter=arguments.max_counter, dry_run=arguments.dry_run)
         print(json.dumps(record, sort_keys=True, separators=(",", ":")), flush=True)
     return 0
 

@@ -34,7 +34,7 @@ inline std::optional<uint32_t> ReadPinnedGenesisBootstrapBits(const CBlock& gene
     }
     return found;
 }
-enum class NativeBootstrapBlockVerdict {VerifiedCandidate,InvalidBlock,ScientificPhase,HistoryHeld,BudgetExceeded,InvalidRequest,InvalidWork};
+enum class NativeBootstrapBlockVerdict {VerifiedCandidate,InvalidBlock,ScientificPhase,HistoryHeld,BudgetExceeded,InvalidRequest,InvalidWork,GoldAuditRejected};
 struct NativeBootstrapBlockCheck;
 class VerifiedNativeBootstrapBlock {
     uint256 m_block,m_parent;ChainBootstrapHashPolicy m_policy;
@@ -108,6 +108,16 @@ inline NativeBootstrapBlockCheck VerifyNativeBootstrapBlock(const CCoinsView& vi
         if(gold.verdict!=GoldCountsProposedVerdict::Verified&&gold.verdict!=GoldCountsProposedVerdict::Inactive)
             return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
     }
+    // An audit answer is consensus, not advice: a wrong answer or a slot already
+    // filled refuses the block instead of being recorded and ignored later.
+    if(!science_budget)return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
+    const auto gold_audit=VerifyProposedGoldAudit(view,parent,history,block,science_budget->schedule,
+        science_budget->policy,science_budget->maximum_script_bytes);
+    if(gold_audit==GoldAuditProposedVerdict::HistoryHeld)return {NativeBootstrapBlockVerdict::HistoryHeld,{}};
+    // Inactive is the published testnet, where the envelope is an ordinary OP_RETURN.
+    if(gold_audit!=GoldAuditProposedVerdict::Absent&&gold_audit!=GoldAuditProposedVerdict::Verified&&
+       gold_audit!=GoldAuditProposedVerdict::Inactive)
+        return {NativeBootstrapBlockVerdict::GoldAuditRejected,{}};
     bool has_report{};for(const auto& out:block.vtx.front()->vout)has_report|=IsNativeReportScript(out.scriptPubKey);
     if(has_report&&(!science_budget||!VerifyProposedNativeReportCommitments(view,parent,history,block,science_budget->policy,science_budget->schedule,science_budget->signature)))
         return {NativeBootstrapBlockVerdict::InvalidRequest,{}};

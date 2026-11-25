@@ -75,6 +75,14 @@ NativeBlockScienceCheck VerifyNativeCandidateBlockScience(const CCoinsView& view
     if(gold.verdict!=GoldCountsProposedVerdict::Verified&&gold.verdict!=GoldCountsProposedVerdict::Absent&&
        gold.verdict!=GoldCountsProposedVerdict::Inactive)
         return {NativeBlockScienceVerdict::GoldCountsRejected,{},{}};
+    // Audit answers ride in the coinbase, so they are checked on this path too and
+    // not only on the coordination one.
+    const auto audit=VerifyProposedGoldAudit(view,parent,history,block,budget.schedule,budget.policy,
+                                             budget.maximum_script_bytes);
+    if(audit==GoldAuditProposedVerdict::HistoryHeld)return {NativeBlockScienceVerdict::NativeHistoryHeld,{},{}};
+    if(audit!=GoldAuditProposedVerdict::Absent&&audit!=GoldAuditProposedVerdict::Verified&&
+       audit!=GoldAuditProposedVerdict::Inactive)
+        return {NativeBlockScienceVerdict::GoldAuditRejected,{},{}};
     if(!VerifyProposedNativeReportCommitments(view,parent,history,block,budget.policy,budget.schedule,budget.signature)||
        !VerifyProposedNativeAuditEvents(view,parent,history,block,budget.policy,budget.schedule,budget.signature))
         return {NativeBlockScienceVerdict::InvalidBlock,{},{}};
