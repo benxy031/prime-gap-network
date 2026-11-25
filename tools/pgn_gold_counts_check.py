@@ -82,6 +82,41 @@ def decode(script_hex, value):
     return number, list(payload[7:])
 
 
+def declare(block):
+    """(range_number, counts) from the header section or the coinbase envelope.
+
+    Both must agree when both are present: the header commits the declaration to
+    the block id, the envelope is what history replay can authenticate.
+    """
+    header = decode_header(block)
+    coinbase = None
+    for output in block["tx"][0]["vout"]:
+        decoded = decode(output["scriptPubKey"]["hex"], output["value"])
+        if decoded is None:
+            continue
+        if coinbase is not None:
+            raise ValueError("more than one gold declaration in the coinbase")
+        coinbase = decoded
+    if header is None:
+        return coinbase
+    if coinbase is not None and list(coinbase[1]) != list(header[1]):
+        raise ValueError("header counts differ from the coinbase envelope")
+    if coinbase is None:
+        raise ValueError("counts header without the coinbase envelope")
+    return header
+
+
+def decode_header(block):
+    version = int.from_bytes(bytes.fromhex(block["versionHex"]), "little")
+    if not version & 0x40000000:
+        return None
+    raw = bytes.fromhex(block["hex"])
+    if len(raw) < 218:
+        raise ValueError("counts header truncated")
+    section = raw[80:80 + 106]
+    return int.from_bytes(section[0:6], "little"), list(section[6:])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Verify gold range numbers appear at most once.")
     parser.add_argument("--datadir", required=True, help="node data directory")
@@ -101,23 +136,15 @@ def main(argv=None):
     owners, gold, malformed, duplicates = {}, 0, [], []
     for height in range(first, last + 1):
         block = rpc("getblock", [rpc("getblockhash", [height]), 2])
-        coinbase = block["tx"][0]
-        found = []
-        for output in coinbase["vout"]:
-            try:
-                decoded = decode(output["scriptPubKey"]["hex"], output["value"])
-            except ValueError as failure:
-                malformed.append({"height": height, "reason": str(failure)})
-                continue
-            if decoded is not None:
-                found.append(decoded)
-        if len(found) > 1:
-            malformed.append({"height": height, "reason": "more than one gold declaration"})
+        try:
+            declared = declare(block)
+        except ValueError as failure:
+            malformed.append({"height": height, "reason": str(failure)})
             continue
-        if not found:
+        if declared is None:
             continue
         gold += 1
-        number, counts = found[0]
+        number, counts = declared
         if number in owners:
             duplicates.append({"range_number": number, "height": height,
                                "first_height": owners[number]["height"],

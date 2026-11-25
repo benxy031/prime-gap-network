@@ -4159,6 +4159,12 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
+    // The counts-carrying header exists only on a chain whose genesis commits the
+    // rule. Without that, a 218-byte header is a layout change, not a variant.
+    if (block.HasGoldCounts() && !consensusParams.pgn_gold_counts_header)
+        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-version-gold-counts", "counts header is not active on this chain");
+    if (block.HasGoldCounts() && !pgn::core::CanonicalGoldCountsSection(block.gold_counts))
+        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-gold-counts-section", "non-canonical counts section");
     // Check proof of work matches claimed amount
     if (fCheckPOW && !CheckProofOfWork(block.GetHashForPoW(), block.nBits, ArithToUint256(block.nNonce), consensusParams))
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "short-constellation", "proof of work failed");

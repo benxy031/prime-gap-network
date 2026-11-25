@@ -37,6 +37,8 @@ COUNTER_OFFSET = 82          # 4 version + 32 prev + 32 merkle + 8 time + 4 bits
 COUNTER_BYTES = 8
 NONCE_TAG = 2                # (nonce & 0xffff) == 2 selects the canonical hash branch
 MAX_COUNTER = 1 << 32        # ~2^-32 exhaustion probability against a 0x7fffff... target
+GOLD_COUNTS_BIT = 0x40000000 # nVersion bit selecting the 218-byte header
+GOLD_SECTION_BYTES = 106     # 6 range-number bytes + 100 partition counts
 
 
 def cookie_for(datadir, explicit):
@@ -78,7 +80,7 @@ class Rpc:
 
 
 def checked_template(template):
-    """Reject anything that is not the fixed 112-byte counter-zero family."""
+    """Reject anything that is not the fixed counter-zero bootstrap family."""
     if not isinstance(template, dict) or template.get("schema") != SCHEMA:
         raise ValueError("unexpected bootstrap template schema")
     header = bytes.fromhex(template["header"])
@@ -97,16 +99,33 @@ def checked_template(template):
     return block, target
 
 
-def block_hash(block):
-    """Non-legacy rule: the id is SHA256d of the 112 serialized header bytes."""
-    return hashlib.sha256(hashlib.sha256(bytes(block[:HEADER_BYTES])).digest()).digest()
+def with_gold_section(block, section):
+    """Rebuild the block with a 218-byte counts header.
+
+    The section goes between nBits and nNonce, so the counter keeps its family and
+    only its offset moves. Nothing else in the block changes: the merkle root
+    covers transactions, not the header.
+    """
+    if len(section) != GOLD_SECTION_BYTES:
+        raise ValueError("--gold-section must be exactly " + str(GOLD_SECTION_BYTES) + " bytes")
+    if len(block) < HEADER_BYTES:
+        raise ValueError("template block is shorter than its header")
+    version = int.from_bytes(block[0:4], "little") | GOLD_COUNTS_BIT
+    header = (version.to_bytes(4, "little") + bytes(block[4:80]) +
+              bytes(section) + bytes(block[80:HEADER_BYTES]))
+    return bytearray(header + bytes(block[HEADER_BYTES:]))
 
 
-def search(block, target, limit):
+def block_hash(block, header_bytes=HEADER_BYTES):
+    """A gold header hashes from its 218 serialized bytes, everything else from 112."""
+    return hashlib.sha256(hashlib.sha256(bytes(block[:header_bytes])).digest()).digest()
+
+
+def search(block, target, limit, nonce_offset=COUNTER_OFFSET, header_bytes=HEADER_BYTES):
     for counter in range(limit):
-        block[COUNTER_OFFSET:COUNTER_OFFSET + COUNTER_BYTES] = (
+        block[nonce_offset:nonce_offset + COUNTER_BYTES] = (
             (counter << 16 | NONCE_TAG).to_bytes(COUNTER_BYTES, "little"))
-        digest = block_hash(block)
+        digest = block_hash(block, header_bytes)
         if int.from_bytes(digest, "little") <= target:
             return counter, digest
     return None
@@ -120,6 +139,10 @@ def main(argv=None):
     parser.add_argument("--count", type=int, default=1, help="blocks to mine, default 1")
     parser.add_argument("--request", action="append", default=[], metavar="SCRIPT_HEX",
                         help="canonical signed request script, repeatable")
+    parser.add_argument("--gold-section", metavar="HEX",
+                        help="106-byte counts section (12 hex range number + 200 hex counts); "
+                             "builds the 218-byte header and also needs --request with the "
+                             "matching coinbase envelope")
     parser.add_argument("--dry-run", action="store_true", help="find the nonce, do not submit")
     parser.add_argument("--max-counter", type=int, default=MAX_COUNTER,
                         help="counter search bound, default 2^32")
@@ -135,13 +158,18 @@ def main(argv=None):
     for index in range(1, arguments.count + 1):
         template = rpc("getpgnbootstraptemplate", [requests] if requests else [])
         block, target = checked_template(template)
-        found = search(block, target, arguments.max_counter)
+        nonce_offset, header_bytes = COUNTER_OFFSET, HEADER_BYTES
+        if arguments.gold_section is not None:
+            block = with_gold_section(block, bytes.fromhex(arguments.gold_section))
+            nonce_offset, header_bytes = COUNTER_OFFSET + GOLD_SECTION_BYTES, HEADER_BYTES + GOLD_SECTION_BYTES
+        found = search(block, target, arguments.max_counter, nonce_offset, header_bytes)
         if found is None:
             raise RuntimeError("counter family exhausted at height " + str(template["height"]))
         counter, digest = found
         record = {"height": template["height"], "parent": template["parent"],
                   "counter": counter, "block": digest[::-1].hex(),
-                  "bytes": len(block), "submitted": not arguments.dry_run}
+                  "bytes": len(block), "header_bytes": header_bytes,
+                  "submitted": not arguments.dry_run}
         if not arguments.dry_run:
             rejection = rpc("submitblock", [block.hex()])
             key = digest[::-1].hex()

@@ -144,6 +144,10 @@ public:
     uint256 hashMerkleRoot{};
     int64_t nTime{0};
     uint32_t nBits{0};
+    //! Counts section of a PGN_GOLD_COUNTS_VERSION_BIT header. Empty on every
+    //! other block, including the whole published chain, so the in-memory cost
+    //! is one vector header per index entry rather than 106 bytes.
+    std::vector<uint8_t> gold_counts{};
     arith_uint256 nNonce{0};
 
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
@@ -159,6 +163,8 @@ public:
           hashMerkleRoot{block.hashMerkleRoot},
           nTime{block.nTime},
           nBits{block.nBits},
+          gold_counts{block.HasGoldCounts() ? std::vector<uint8_t>{block.gold_counts.begin(), block.gold_counts.end()}
+                                                         : std::vector<uint8_t>{}},
           nNonce{block.nNonce}
     {
     }
@@ -194,6 +200,12 @@ public:
         block.hashMerkleRoot = hashMerkleRoot;
         block.nTime = nTime;
         block.nBits = nBits;
+        // Serving a header without its section would give the peer a different
+        // block id than the one this index entry actually commits to.
+        if (block.HasGoldCounts()) {
+            assert(gold_counts.size() == PGN_GOLD_COUNTS_SECTION_BYTES);
+            std::copy(gold_counts.begin(), gold_counts.end(), block.gold_counts.begin());
+        }
         block.nNonce = nNonce;
         return block;
     }
@@ -202,6 +214,11 @@ public:
     {
         assert(phashBlock != nullptr);
         return *phashBlock;
+    }
+
+    bool HasGoldCounts() const
+    {
+        return (static_cast<uint32_t>(nVersion) & static_cast<uint32_t>(PGN_GOLD_COUNTS_VERSION_BIT)) != 0;
     }
 
     /**
@@ -351,6 +368,9 @@ public:
         READWRITE(obj.hashMerkleRoot);
         READWRITE(obj.nTime);
         READWRITE(obj.nBits);
+        // Conditional on the version just read, so every entry written before
+        // the section existed decodes exactly as it did.
+        if (obj.HasGoldCounts()) READWRITE(obj.gold_counts);
         READWRITE(obj.nNonce);
     }
 
@@ -362,6 +382,7 @@ public:
         block.hashMerkleRoot = hashMerkleRoot;
         block.nTime = nTime;
         block.nBits = nBits;
+        if (block.HasGoldCounts()) std::copy(gold_counts.begin(), gold_counts.end(), block.gold_counts.begin());
         block.nNonce = nNonce;
         return block.GetHash();
     }

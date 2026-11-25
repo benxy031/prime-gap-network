@@ -95,7 +95,10 @@ inline NativeBootstrapBlockCheck VerifyNativeBootstrapBlock(const CCoinsView& vi
         return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
     // Pay-once: a gold range number already claimed on this branch is refused
     // before any accepted block can reuse it.
-    bool has_gold{};for(const auto& out:block.vtx.front()->vout)has_gold|=IsGoldCountsScript(out.scriptPubKey);
+    // A counts header is a declaration too: checking only the coinbase would let a
+    // header-only block carry an unvalidated range number and bypass pay-once.
+    bool has_gold=block.HasGoldCounts();
+    for(const auto& out:block.vtx.front()->vout)has_gold|=IsGoldCountsScript(out.scriptPubKey);
     if(has_gold){
         if(!science_budget)return {NativeBootstrapBlockVerdict::InvalidRequest,{}};
         const auto gold=VerifyProposedGoldCounts(view,parent,history,block,science_budget->schedule,science_budget->policy);

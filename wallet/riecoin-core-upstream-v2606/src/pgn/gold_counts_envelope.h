@@ -139,12 +139,31 @@ inline GoldCountsBlockRead ReadGoldCountsFromCoinbase(const CTransaction& coinba
     return read;
 }
 
+// A block may carry its declaration twice: the header section commits it to the
+// block id, and the coinbase envelope is what the history archive can replay
+// (the archive authenticates a coinbase, not a header). While both exist they
+// must agree byte for byte - otherwise one of them is a lie - and a header
+// without the envelope is refused, because nothing could then prove later that
+// the range was already paid. Phase 2 drops the envelope once the block index
+// carries the section.
 inline GoldCountsBlockRead ReadGoldCountsFromBlock(const CBlock& block, uint64_t maximum_script_bytes)
 {
     if (block.vtx.empty() || !block.vtx.front() || !block.vtx.front()->IsCoinBase()) {
         return {GoldCountsBlockVerdict::Absent, {}};
     }
-    return ReadGoldCountsFromCoinbase(*block.vtx.front(), maximum_script_bytes);
+    const auto coinbase = ReadGoldCountsFromCoinbase(*block.vtx.front(), maximum_script_bytes);
+    if (!block.HasGoldCounts()) return coinbase;
+    const auto section = DecodeGoldCountsHeader(block.gold_counts);
+    if (!section) return {GoldCountsBlockVerdict::Invalid, {}};
+    const GoldCountsRecord header{section->first, section->second};
+    if (coinbase.verdict == GoldCountsBlockVerdict::Invalid ||
+        coinbase.verdict == GoldCountsBlockVerdict::Duplicate) {
+        return {GoldCountsBlockVerdict::Invalid, {}};
+    }
+    if (coinbase.verdict != GoldCountsBlockVerdict::Present || *coinbase.record != header) {
+        return {GoldCountsBlockVerdict::Invalid, {}};
+    }
+    return {GoldCountsBlockVerdict::Present, header};
 }
 
 enum class GoldCountsVerdict {

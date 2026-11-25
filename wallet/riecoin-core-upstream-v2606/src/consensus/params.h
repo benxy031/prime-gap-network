@@ -93,6 +93,9 @@ struct Params {
     std::chrono::seconds PowTargetSpacing() const {return std::chrono::seconds{nPowTargetSpacing};}
     /** The best chain should have at least this much work */
     uint256 nMinimumChainWork;
+    /** Accept the counts-carrying 218-byte header. Set only when the pinned
+     * genesis commits the gold counts rule, so no existing chain can reach it. */
+    bool pgn_gold_counts_header{false};
 };
 
 } // namespace Consensus

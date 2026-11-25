@@ -13,6 +13,7 @@
 #include <uint256.h>
 #include <util/time.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -25,6 +26,19 @@
  * in the block is a special one that creates a new coin owned by the creator
  * of the block.
  */
+// Version bit selecting the counts-carrying header (the phase 1 gold block).
+// Serialization and hashing are self-describing because the bit travels in
+// nVersion: a 112-byte header always hashes exactly as it always did, and only
+// a 218-byte header carries the section. The bit is never set on the published
+// testnet, and validation refuses it on any chain whose genesis does not commit
+// the rule.
+//
+// It sits in the top mask BIP9 reserves for version bits, which is deliberate:
+// a header that carries consensus data is not a BIP9 signalling block, and this
+// chain has no deployments.
+static constexpr int32_t PGN_GOLD_COUNTS_VERSION_BIT = 0x40000000;
+static constexpr size_t PGN_GOLD_COUNTS_SECTION_BYTES = 106;
+
 class CBlockHeader
 {
 public:
@@ -34,6 +48,10 @@ public:
     uint256 hashMerkleRoot;
     int64_t nTime;
     uint32_t nBits;
+    // Six little-endian bytes of range number then 100 preimage counts.
+    // Untouched and unhashed unless nVersion selects it, so every existing
+    // header keeps its exact bytes and its exact hash.
+    std::array<uint8_t, PGN_GOLD_COUNTS_SECTION_BYTES> gold_counts{};
     arith_uint256 nNonce;
 
     CBlockHeader()
@@ -41,7 +59,13 @@ public:
         SetNull();
     }
 
-    SERIALIZE_METHODS(CBlockHeader, obj) { READWRITE(obj.nVersion, obj.hashPrevBlock, obj.hashMerkleRoot, obj.nTime, obj.nBits, obj.nNonce); }
+    bool HasGoldCounts() const { return (static_cast<uint32_t>(nVersion) & static_cast<uint32_t>(PGN_GOLD_COUNTS_VERSION_BIT)) != 0; }
+
+    SERIALIZE_METHODS(CBlockHeader, obj) {
+        READWRITE(obj.nVersion, obj.hashPrevBlock, obj.hashMerkleRoot, obj.nTime, obj.nBits);
+        if (obj.HasGoldCounts()) READWRITE(obj.gold_counts);
+        READWRITE(obj.nNonce);
+    }
 
     void SetNull()
     {
@@ -50,6 +74,7 @@ public:
         hashMerkleRoot.SetNull();
         nTime = 0;
         nBits = 0;
+        gold_counts = {};
         nNonce = 0;
     }
 

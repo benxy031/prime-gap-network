@@ -498,6 +498,13 @@ if(BUILD_TESTS)
   add_test(NAME gold-counts-envelope COMMAND pgn-gold-counts-envelope-test)
 endif()
 
+
+# The counts-carrying header: 112 bytes unchanged, 218 bytes when selected.
+add_executable(pgn-gold-header-layout-test EXCLUDE_FROM_ALL pgn/gold_header_layout_test.cpp)
+target_link_libraries(pgn-gold-header-layout-test PRIVATE core_interface riecoin_common riecoin_util univalue)
+if(BUILD_TESTS)
+  add_test(NAME gold-header-layout COMMAND pgn-gold-header-layout-test)
+endif()
 # Pay-once over authenticated history: closed fixture, real archive replay.
 add_executable(pgn-gold-counts-history-test EXCLUDE_FROM_ALL pgn/gold_counts_history_test.cpp)
 target_link_libraries(pgn-gold-counts-history-test PRIVATE core_interface riecoin_common riecoin_node riecoin_util univalue)

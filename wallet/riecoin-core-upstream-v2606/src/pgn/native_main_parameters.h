@@ -3,6 +3,7 @@
 #include <kernel/chainparams.h>
 #include <pgn/approved_currency.h>
 #include <pgn/candidate_block_bootstrap.h>
+#include <pgn/gold_counts_activation.h>
 #include <pgn/chain_monetary_policy.h>
 #include <pgn/native_retarget_policy.h>
 #include <array>
@@ -88,6 +89,10 @@ inline std::unique_ptr<const CChainParams> CreateNativeParameters(const NativeMa
                 target.spacing_seconds,target.half_life_seconds,genesis.nBits,ArithToUint256(work.scientific)};
             consensus.nBitsMin=target.minimum_q16;consensus.nPowTargetSpacing=target.spacing_seconds;
             consensus.fPowNoRetargeting=false;consensus.nMinimumChainWork.SetNull();
+            // Self-describing header layout: set from the same genesis this
+            // definition has just authenticated, never from a compile-time default.
+            const auto gold=ReadGoldCountsPolicyFromGenesis(genesis,d.policy);
+            consensus.pgn_gold_counts_header=gold.has_value()&&gold->has_value();
             consensus.vDeployments={};
             m_pgn_monetary=ApprovedPgnMonetaryContext(d.text);m_pgn_atomic_fee=d.fees;m_pgn_native_address=d.addresses;
             pchMessageStart=d.magic;nDefaultPort=d.peer_port;nPruneAfterHeight=100000;

@@ -163,6 +163,16 @@ inline std::optional<std::pair<uint64_t, GoldPartitionCounts>> DecodeGoldCountsH
     return std::pair{number, counts};
 }
 
+// The section is 106 arbitrary bytes in the primitive header; this is the one
+// place that decides whether they mean anything. A range number below 2^48 always
+// re-encodes to itself, so only the counts can make the section non-canonical -
+// and they cannot, so today the check is structural. It stays explicit so a future
+// section version is refused rather than silently reinterpreted.
+inline bool CanonicalGoldCountsSection(std::span<const uint8_t, GoldCountsHeaderBytes> bytes)
+{
+    return DecodeGoldCountsHeader(bytes).has_value();
+}
+
 // Scan-time accumulator. A partition that would overflow stops the range; the
 // caller discards it rather than publishing a clamped count.
 class GoldCountsAccumulator
