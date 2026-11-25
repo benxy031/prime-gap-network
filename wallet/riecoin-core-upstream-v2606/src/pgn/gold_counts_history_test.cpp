@@ -9,6 +9,7 @@
 #include <pgn/candidate_block_science.h>
 #include <pgn/gold_audit.h>
 #include <pgn/gold_counts_history.h>
+#include <pgn/gold_reward.h>
 #include <pgn/native_bootstrap_hash.h>
 #include <pgn/native_test_bip322.h>
 #include <consensus/merkle.h>
@@ -103,6 +104,10 @@ struct Fixture {
             blocks[height].hashPrevBlock = hashes[height - 1];
             blocks[height].nVersion = 4;
             if (height - 1 < claims.size() && claims[height - 1]) {
+                // A declaration has to say who it pays, or it could never settle.
+                const auto reward = BuildGoldRewardEnvelope(CScript{} << OP_1);
+                need(reward.has_value(), "Fixture reward envelope rejected");
+                coinbase.vout.emplace_back(0, *reward);
                 blocks[height].nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
                 const auto& claim = *claims[height - 1];
                 const auto section = EncodeGoldCountsHeader(claim.range_number, claim.counts);
@@ -167,8 +172,14 @@ CScript Envelope(uint64_t number, const GoldPartitionCounts& counts)
 // A proposed block. `header` selects the counts section; `envelope` adds a
 // coinbase copy, which an activated chain does not want unless it agrees.
 CBlock Proposed(const CBlockIndex& parent, std::optional<GoldCountsRecord> header = {},
-                std::vector<CScript> extra_outputs = {})
+                std::vector<CScript> extra_outputs = {}, bool commit_reward = true)
 {
+    // A counted declaration has to commit its payee, so every proposed block that
+    // carries a header carries one unless a test is specifically about its absence.
+    if (header && commit_reward) {
+        const auto reward = BuildGoldRewardEnvelope(CScript{} << OP_1);
+        if (reward) extra_outputs.insert(extra_outputs.begin(), *reward);
+    }
     CMutableTransaction coinbase;
     coinbase.vin.resize(1);
     coinbase.vin[0].prevout.SetNull();
@@ -227,6 +238,14 @@ int main(int argc, char** argv)
                                                         Proposed(fixture.tip(), seven), schedule, kPolicyBudget);
         need(duplicate.verdict == GoldCountsProposedVerdict::DuplicateRangeNumber,
              "A reused range number was not refused");
+
+        // A range whose block never names a payee could never settle, so the
+        // declaration is refused for that reason and not merely tolerated.
+        const auto unpaid = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
+                                                     Proposed(fixture.tip(), seven, {}, false),
+                                                     schedule, kPolicyBudget);
+        need(unpaid.verdict == GoldCountsProposedVerdict::MissingReward,
+             "A counted block with no payee was accepted");
         need(duplicate.record && duplicate.record->range_number == 7, "The refusal lost its record");
         need(duplicate.record->counts == Counts(0), "The refusal lost the counts");
 

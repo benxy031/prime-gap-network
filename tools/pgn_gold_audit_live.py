@@ -24,14 +24,29 @@ from pgn_gold_audit import target  # noqa: E402
 from pgn_local_blocks import Rpc, cookie_for, mine  # noqa: E402
 
 GOLD_SECTION_COUNTS = bytes([1]) * 100
+# The chain pays a script, not a claim, so both ends commit one. A bare OP_1 is a
+# valid payee and keeps the envelope readable in a log.
+MINER_REWARD = bytes([0x51])
+AUDITOR_REWARD = bytes([0x51])
 
 
-def audit_script(number, slot, partitions, counts):
-    payload = (bytes([1]) + number.to_bytes(6, "little") + bytes([slot]) +
-               bytes(partitions) + bytes(counts))
-    assert len(payload) == 18
-    script = bytes([0x6A, 0x0E]) + b"PGNGOLDAUDIT-1" + bytes([0x12]) + payload
-    return script.hex()
+def push(data):
+    """The canonical minimal push the C++ codec rebuilds and compares against."""
+    if not 1 <= len(data) <= 75:
+        raise ValueError("push length outside the direct range")
+    return bytes([len(data)]) + data
+
+
+def reward_script(payee):
+    return (bytes([0x6A]) + push(b"PGNGOLDREWARD-1") +
+            push(bytes([1]) + payee)).hex()
+
+
+def audit_script(number, slot, partitions, counts, payee=AUDITOR_REWARD):
+    # Version two appends the auditor's payee behind a length byte.
+    payload = (bytes([2]) + number.to_bytes(6, "little") + bytes([slot]) +
+               bytes(partitions) + bytes(counts) + bytes([len(payee)]) + payee)
+    return (bytes([0x6A]) + push(b"PGNGOLDAUDIT-1") + push(payload)).hex()
 
 
 def gold_section(number):
@@ -79,8 +94,10 @@ def main(argv=None):
         raise ValueError("range " + str(number) + " or " + str(number + 100)
                          + " is already paid on this chain; pick another")
 
-    # The gold block and one successor, so the target exists at all.
-    gold = mine(rpc, gold_section=gold_section(number))["block"]
+    # The gold block and one successor, so the target exists at all. The payee rides
+    # in the coinbase as a zero-value declaration, exactly like every other rule.
+    gold = mine(rpc, gold_section=gold_section(number),
+                requests=[reward_script(MINER_REWARD)])["block"]
     mine(rpc)
     declared = target(rpc, number)
     if not declared.get("auditable"):
@@ -106,7 +123,7 @@ def main(argv=None):
     # answerable at all, so "no audit" becomes a final state a payment rule can read
     # instead of a gap that stays open forever.
     quiet = number + 100
-    mine(rpc, gold_section=gold_section(quiet))
+    mine(rpc, gold_section=gold_section(quiet), requests=[reward_script(MINER_REWARD)])
     mine(rpc)
     window = target(rpc, quiet)
     if window["audit_status"] != "open":

@@ -205,14 +205,15 @@ static void CheckAnswers()
 
 static void CheckEnvelope()
 {
-    const GoldAuditAnswer answer{1, {12, 40, 41, 77, 99}, {0, 1, 2, 3, 4}};
+    const CScript auditor = CScript{} << OP_1;
+    const GoldAuditAnswer answer{1, {12, 40, 41, 77, 99}, {0, 1, 2, 3, 4}, auditor};
     const auto script = BuildGoldAuditEnvelope(answer, 4242);
     need(script.has_value(), "Canonical audit envelope was rejected");
     need(IsGoldAuditScript(*script), "The envelope is not recognised as a counts audit");
-    // OP_RETURN, the tag push, then the payload push: a direct push while the
-    // payload stays under 76 bytes, one length byte more above it.
     need(GoldAuditPayloadBytes == 18, "The payload size changed");
-    need(script->size() == 1 + 1 + GoldAuditTag.size() + 1 + GoldAuditPayloadBytes,
+    // The version two payload adds a length byte and the payee script.
+    need(script->size() == 1 + 1 + GoldAuditTag.size() + 1 + GoldAuditPayloadBytes +
+                              GoldRewardLengthBytes + auditor.size(),
          "The envelope is not the canonical size");
 
     const auto decoded = DecodeGoldAuditEnvelope(*script);
@@ -221,12 +222,18 @@ static void CheckEnvelope()
 
     // An unsorted or out-of-domain assignment is not an answer that could have
     // been handed out, so it is refused at the codec rather than at the ledger.
-    GoldAuditAnswer unsorted{0, {40, 12, 41, 77, 99}, {0, 0, 0, 0, 0}};
+    GoldAuditAnswer unsorted{0, {40, 12, 41, 77, 99}, {0, 0, 0, 0, 0}, auditor};
     need(!BuildGoldAuditEnvelope(unsorted, 1).has_value(), "An unsorted assignment was encoded");
-    GoldAuditAnswer out_of_range{0, {0, 1, 2, 3, 100}, {0, 0, 0, 0, 0}};
+    GoldAuditAnswer out_of_range{0, {0, 1, 2, 3, 100}, {0, 0, 0, 0, 0}, auditor};
     need(!BuildGoldAuditEnvelope(out_of_range, 1).has_value(), "Partition 100 was encoded");
-    GoldAuditAnswer bad_slot{2, {0, 1, 2, 3, 99}, {0, 0, 0, 0, 0}};
+    GoldAuditAnswer bad_slot{2, {0, 1, 2, 3, 99}, {0, 0, 0, 0, 0}, auditor};
     need(!BuildGoldAuditEnvelope(bad_slot, 1).has_value(), "Slot 2 was encoded");
+    // An answer with no payee could never be settled, so it is not an answer.
+    GoldAuditAnswer unpaid{0, {0, 1, 2, 3, 99}, {0, 0, 0, 0, 0}, CScript{}};
+    need(!BuildGoldAuditEnvelope(unpaid, 1).has_value(), "An answer with no payee was encoded");
+    GoldAuditAnswer overdrawn{0, {0, 1, 2, 3, 99}, {0, 0, 0, 0, 0}, CScript{}};
+    for (size_t i = 0; i < GoldRewardMaximumScriptBytes + 1; ++i) overdrawn.reward << OP_0;
+    need(!BuildGoldAuditEnvelope(overdrawn, 1).has_value(), "An oversized payee was encoded");
     need(!BuildGoldAuditEnvelope(answer, uint64_t{1} << 48).has_value(), "An out-of-domain range was encoded");
 
     // Trailing bytes and foreign scripts.

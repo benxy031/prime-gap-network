@@ -17,6 +17,7 @@
 #pragma once
 
 #include <pgn/gold_counts_envelope.h>
+#include <pgn/gold_reward.h>
 #include <pgn/gold_partition_counts.h>
 #include <pgn/candidate_range_schedule.h>
 #include <chain.h>
@@ -99,6 +100,9 @@ struct GoldAuditAnswer {
     uint8_t slot{};
     std::array<uint32_t, GoldAuditPartitionsPerSlot> partitions{};
     std::array<uint8_t, GoldAuditPartitionsPerSlot> counts{};
+    // Who the auditor wants to be paid. The chain pays scripts, not claims, so the
+    // envelope has to carry one; it plays no part in whether the answer is correct.
+    CScript reward;
     bool operator==(const GoldAuditAnswer&) const = default;
 };
 
@@ -114,7 +118,8 @@ inline bool GoldAuditAnswerWellFormed(const GoldAuditAnswer& answer)
     return answer.slot < GoldAuditSlots &&
            std::is_sorted(answer.partitions.begin(), answer.partitions.end()) &&
            std::all_of(answer.partitions.begin(), answer.partitions.end(),
-                       [](uint32_t index) { return index < GoldPartitionCount; });
+                       [](uint32_t index) { return index < GoldPartitionCount; }) &&
+           !answer.reward.empty() && answer.reward.size() <= GoldRewardMaximumScriptBytes;
 }
 
 inline GoldAuditVerdict VerifyGoldAuditAnswer(const GoldAuditTarget& target,
@@ -149,10 +154,12 @@ inline bool GoldAuditSlotsDisjoint(const GoldAuditTarget& target)
 // The correct answer for a target, which is what an auditor running the scan
 // produces. Kept beside the verifier so a test can prove the two agree without
 // duplicating the selection.
-inline GoldAuditAnswer GoldAuditExpectedAnswer(const GoldAuditTarget& target, uint8_t slot)
+inline GoldAuditAnswer GoldAuditExpectedAnswer(const GoldAuditTarget& target, uint8_t slot,
+                                               CScript reward = CScript{} << OP_1)
 {
     GoldAuditAnswer answer;
     answer.slot = slot;
+    answer.reward = std::move(reward);
     const auto& assigned = target.partitions[slot];
     for (size_t i = 0; i < GoldAuditPartitionsPerSlot; ++i) {
         answer.partitions[i] = assigned[i];
@@ -165,9 +172,13 @@ inline GoldAuditAnswer GoldAuditExpectedAnswer(const GoldAuditTarget& target, ui
 // actor is whoever the containing transaction spends from, so it is not encoded
 // here - an envelope cannot claim an identity by writing one down.
 inline constexpr std::string_view GoldAuditTag{"PGNGOLDAUDIT-1"};
-inline constexpr uint8_t GoldAuditVersion = 1;
+// Version two appends the auditor's payee. Version one had no payee at all, so an
+// answer in that form could never be settled and is not accepted on a chain that
+// commits the counts rule.
+inline constexpr uint8_t GoldAuditVersion = 2;
 inline constexpr size_t GoldAuditPayloadBytes =
     1 + GoldRangeNumberBytes + 1 + GoldAuditPartitionsPerSlot + GoldAuditPartitionsPerSlot;
+inline constexpr size_t GoldRewardLengthBytes = 1;
 
 inline std::optional<CScript> BuildGoldAuditEnvelope(const GoldAuditAnswer& answer, uint64_t range_number)
 {
@@ -178,6 +189,8 @@ inline std::optional<CScript> BuildGoldAuditEnvelope(const GoldAuditAnswer& answ
     payload.push_back(answer.slot);
     for (const auto partition : answer.partitions) payload.push_back(uint8_t(partition));
     for (const auto count : answer.counts) payload.push_back(count);
+    payload.push_back(uint8_t(answer.reward.size()));
+    payload.insert(payload.end(), answer.reward.begin(), answer.reward.end());
     CScript script = CScript{} << OP_RETURN << Bytes{GoldAuditTag.begin(), GoldAuditTag.end()} << payload;
     if (script.size() > GoldCountsMaximumScriptBytes) return {};
     return script;
@@ -206,13 +219,19 @@ inline std::optional<GoldAuditEnvelope> DecodeGoldAuditEnvelope(const CScript& s
     Bytes tag, payload;
     if (!script.GetOp(cursor, op) || !script.GetOp(cursor, op, tag) ||
         !script.GetOp(cursor, op, payload) || cursor != script.end()) return {};
-    if (payload.size() != GoldAuditPayloadBytes || payload.front() != GoldAuditVersion) return {};
+    if (payload.size() < GoldAuditPayloadBytes + GoldRewardLengthBytes ||
+        payload.front() != GoldAuditVersion) {
+        return {};
+    }
     GoldAuditEnvelope envelope;
     size_t at = 1;
     for (size_t i = 0; i < GoldRangeNumberBytes; ++i) envelope.range_number |= uint64_t{payload[at++]} << (8 * i);
     envelope.answer.slot = payload[at++];
     for (auto& partition : envelope.answer.partitions) partition = payload[at++];
     for (auto& count : envelope.answer.counts) count = payload[at++];
+    const size_t reward_bytes = payload[at++];
+    if (payload.size() != at + reward_bytes) return {};
+    envelope.answer.reward = CScript{payload.begin() + at, payload.end()};
     // Both directions must agree, which rejects every non-canonical encoding and
     // every answer that could not have been assigned.
     if (!GoldAuditAnswerWellFormed(envelope.answer)) return {};

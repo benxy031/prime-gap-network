@@ -820,7 +820,8 @@ RPCMethod getpgngoldaudit(){
    UniValue entry{UniValue::VOBJ};
    if(recorded&&(*recorded)[slot]){
     const auto& answer=*(*recorded)[slot];
-    entry.pushKV("block",answer.block.GetHex());entry.pushKV("height",answer.height);++answered;}
+    entry.pushKV("block",answer.block.GetHex());entry.pushKV("height",answer.height);
+    entry.pushKV("auditor_reward",HexStr(answer.answer.reward));++answered;}
    out.pushKV("slot"+std::to_string(slot)+"_answer",entry);}
   out.pushKV("answered_slots",answered);
   // A gold block whose seed block does not exist yet is not auditable: the miner
@@ -832,6 +833,16 @@ RPCMethod getpgngoldaudit(){
   // An audit that can be answered forever is one nobody has to answer, so the
   // window is reported: past the deadline the range is decided, and a payment rule
   // can read Expired as "nobody audited this in time" rather than as a missing value.
+  // Both ends of the payout, read back from what the chain already committed:
+  // the miner's script from the gold block's own body, the auditor's from the
+  // answer. An empty field is a range that can never settle.
+  const auto gold_body=history.archive.Load(active.CoinsTip(),tip,target->gold_height,budget.schedule.archive);
+  if(!gold_body.block||!gold_body.block->Coinbase())
+   throw JSONRPCError(RPC_MISC_ERROR,"Gold block body unavailable; the payee is not guessed");
+  const auto miner=ReadGoldRewardFromCoinbase(*gold_body.block->Coinbase(),budget.maximum_script_bytes);
+  if(miner.verdict!=GoldRewardBlockVerdict::Present||!miner.miner)
+   throw JSONRPCError(RPC_MISC_ERROR,"Gold block commits no payee");
+  out.pushKV("miner_reward",HexStr(*miner.miner));
   const auto state=GoldAuditRangeState(*audits,*target,tip.nHeight);
   out.pushKV("audit_deadline",state.deadline);out.pushKV("audit_answered",uint64_t(state.answered));
   out.pushKV("audit_status",state.status==GoldAuditStatus::Audited?"audited":

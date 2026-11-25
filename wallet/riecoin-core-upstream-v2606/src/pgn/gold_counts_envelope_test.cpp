@@ -6,6 +6,7 @@
 // payout, so each is pinned here.
 #include <pgn/gold_counts_activation.h>
 #include <pgn/gold_counts_envelope.h>
+#include <pgn/gold_reward.h>
 #include <pgn/testnet_definition.h>
 #include <util/translation.h>
 
@@ -128,6 +129,61 @@ static void CheckBounds()
     const auto range = GoldCountsRange(outside, kOrigin, kWidth);
     need(range.has_value(), "Top range number has no interval");
     need(range->first == kOrigin + Integer{outside.range_number} * kWidth, "Range start is wrong");
+}
+
+static void CheckReward()
+{
+    const CScript miner = CScript{} << OP_1;
+    const auto script = BuildGoldRewardEnvelope(miner);
+    need(script.has_value(), "Canonical reward envelope was rejected");
+    need(IsGoldRewardScript(*script), "The envelope is not recognised as a reward commitment");
+    need(DecodeGoldRewardEnvelope(*script) == std::optional<CScript>{miner},
+         "The reward envelope does not round-trip");
+
+    // An empty payee is nothing to pay, and an oversized one is outside the budget.
+    need(!BuildGoldRewardEnvelope(CScript{}).has_value(), "An empty payee was encoded");
+    CScript huge;
+    for (size_t i = 0; i < GoldRewardMaximumScriptBytes + 1; ++i) huge << OP_0;
+    need(!BuildGoldRewardEnvelope(huge).has_value(), "An oversized payee was encoded");
+
+    // Only the canonical encoding decodes, including the version byte.
+    CScript trailing = *script;
+    trailing << OP_0;
+    need(!DecodeGoldRewardEnvelope(trailing).has_value(), "Trailing bytes were decoded");
+    const auto payload = CScript{} << OP_RETURN
+                                   << Bytes{GoldRewardTag.begin(), GoldRewardTag.end()}
+                                   << Bytes{2, 0x51};
+    need(!DecodeGoldRewardEnvelope(payload).has_value(), "An unknown version was decoded");
+
+    // Exactly one zero-value commitment per coinbase, and the read says which.
+    CMutableTransaction mutable_coinbase;
+    mutable_coinbase.vin.resize(1);
+    mutable_coinbase.vin[0].prevout.SetNull();
+    mutable_coinbase.vin[0].scriptSig = CScript{} << OP_1;
+    mutable_coinbase.vout = {CTxOut{0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'}}};
+    need(ReadGoldRewardFromCoinbase(CTransaction{mutable_coinbase},
+                                   GoldCountsMaximumScriptBytes).verdict ==
+             GoldRewardBlockVerdict::Absent,
+         "A coinbase without a commitment reported one");
+    mutable_coinbase.vout.emplace_back(0, *script);
+    const auto present = ReadGoldRewardFromCoinbase(CTransaction{mutable_coinbase},
+                                                   GoldCountsMaximumScriptBytes);
+    need(present.verdict == GoldRewardBlockVerdict::Present && present.miner &&
+             *present.miner == miner,
+         "A canonical commitment was not read back");
+    mutable_coinbase.vout.emplace_back(0, *script);
+    need(ReadGoldRewardFromCoinbase(CTransaction{mutable_coinbase},
+                                   GoldCountsMaximumScriptBytes).verdict ==
+             GoldRewardBlockVerdict::Invalid,
+         "Two commitments in one coinbase were accepted");
+
+    // A declaration is never a payment.
+    mutable_coinbase.vout.pop_back();
+    mutable_coinbase.vout.back().nValue = 1;
+    need(ReadGoldRewardFromCoinbase(CTransaction{mutable_coinbase},
+                                   GoldCountsMaximumScriptBytes).verdict ==
+             GoldRewardBlockVerdict::Invalid,
+         "A paid reward declaration was accepted");
 }
 
 static void CheckBlockRead()
@@ -286,6 +342,7 @@ int main()
 {
     try {
         CheckEnvelope();
+        CheckReward();
         CheckBounds();
         CheckBlockRead();
         CheckPayOnce();

@@ -15,6 +15,7 @@
 #include <pgn/chain_range_policy.h>
 #include <pgn/gold_counts_activation.h>
 #include <pgn/gold_audit.h>
+#include <pgn/gold_reward.h>
 #include <pgn/gold_counts_envelope.h>
 #include <pgn/candidate_range_schedule.h>
 #include <chain.h>
@@ -132,6 +133,7 @@ enum class GoldCountsProposedVerdict {
     Inactive,             // declared, but this chain does not commit the rule
     Verified,             // declared, bounded, and the range number is unclaimed
     DuplicateRangeNumber, // the number is already paid to another block
+    MissingReward,        // the declaration commits no payee, so the range could never pay out
     InvalidDeclaration,   // not canonical, paid, duplicated in one block, or over capacity
     OutOfDomain,          // no usable range policy, so the declaration cannot be checked
     HistoryHeld,          // the branch could not be authenticated within the budget
@@ -185,6 +187,12 @@ inline GoldCountsProposedCheck VerifyProposedGoldCounts(
         !GoldCountsRecordBounded(*read.record, ranges.policy->Definition().origin,
                                  ranges.policy->Definition().width)) {
         return {GoldCountsProposedVerdict::InvalidDeclaration, read.record};
+    }
+    // A range is only worth declaring if the chain knows who to pay for it, so the
+    // payee is part of the declaration rather than an afterthought at payout time.
+    const auto reward = ReadGoldRewardFromBlock(block, GoldCountsMaximumScriptBytes);
+    if (reward.verdict != GoldRewardBlockVerdict::Present) {
+        return {GoldCountsProposedVerdict::MissingReward, read.record};
     }
     const auto ledger = ReadGoldCountsLedger(view, parent, schedule_budget);
     if (!ledger) return {GoldCountsProposedVerdict::HistoryHeld, read.record};
