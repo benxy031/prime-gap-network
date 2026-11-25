@@ -17,6 +17,8 @@
 #include <pgn/audit_activity_selection.h>
 #include <pgn/ticket_atlas_projection.h>
 #include <pgn/proposed_ticket_requests.h>
+#include <pgn/gold_audit.h>
+#include <pgn/gold_counts_history.h>
 #include <pgn/native_work_duty_admission.h>
 #include <pgn/native_science_monetary_plan.h>
 #include <consensus/consensus.h>
@@ -768,6 +770,79 @@ RPCMethod getpgncoverage(){
 }
 
 
+// A 48-bit range number travels as a decimal string: JSON numbers are doubles,
+// and the CLI sends positional arguments as strings anyway.
+static uint64_t ParseRangeNumber(const UniValue& value){
+ if(!value.isStr())throw JSONRPCError(RPC_INVALID_PARAMETER,"Range number must be a decimal string");
+ const auto& text=value.get_str();
+ if(text.empty()||text.size()>15||(text.size()>1&&text[0]=='0'))throw JSONRPCError(RPC_INVALID_PARAMETER,"Noncanonical range number");
+ uint64_t result{};for(char c:text){if(c<'0'||c>'9'||result>(std::numeric_limits<uint64_t>::max()-(c-'0'))/10)throw JSONRPCError(RPC_INVALID_PARAMETER,"Range number out of domain");result=result*10+uint64_t(c-'0');}
+ if(result>=(uint64_t{1}<<48))throw JSONRPCError(RPC_INVALID_PARAMETER,"Range number out of domain");
+ return result;}
+// Read-only view of the counts-based audit target, and a pure check of one
+// answer. Neither changes consensus: the verifier in pgn/gold_audit.h is what
+// phase 2 will call from admission, and this exposes exactly it so it can be
+// exercised against a live chain.
+RPCMethod getpgngoldaudit(){
+ return RPCMethod{"getpgngoldaudit","Read the counts audit target for a paid gold range number.",{
+  {"range_number",RPCArg::Type::STR,RPCArg::Optional::NO,"Range number as a decimal string"}},
+ // Fields: active, auditable, range_number, gold_height, gold_block, seed,
+ // slot0_partitions, slot0_counts, slot1_partitions, slot1_counts.
+ RPCResults{},
+  RPCExamples{""},
+ [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
+  auto& manager=EnsureAnyChainman(request.context);LOCK(cs_main);RequireNative(manager);auto& active=manager.ActiveChainstate();auto& tip=Tip(manager);
+  const auto number=ParseRangeNumber(request.params[0]);const auto& consensus=manager.GetConsensus();
+  UniValue out{UniValue::VOBJ};out.pushKV("active",consensus.pgn_gold_counts_header);out.pushKV("range_number",number);out.pushKV("auditable",false);
+  if(!consensus.pgn_gold_counts_header)return out;
+  const auto& budget=*manager.m_options.pgn_candidate_science_budget;
+  const auto ledger=ReadGoldCountsLedger(active.CoinsTip(),tip,budget.schedule);
+  if(!ledger)throw JSONRPCError(RPC_MISC_ERROR,"Gold counts history held; no empty claim set is assumed");
+  // A gold block whose seed block does not exist yet is not auditable: the miner
+  // would otherwise know the selection in advance. Absence is reported, never guessed.
+  const auto target=ReadGoldAuditTarget(tip,*ledger,number);
+  if(!target)return out;
+  out.pushKV("auditable",true);out.pushKV("gold_height",target->gold_height);
+  out.pushKV("gold_block",target->gold_block.GetHex());out.pushKV("seed",target->seed.GetHex());
+  for(size_t slot=0;slot<GoldAuditSlots;++slot){
+   UniValue parts{UniValue::VARR},counts{UniValue::VARR};
+   for(size_t i=0;i<GoldAuditPartitionsPerSlot;++i){parts.push_back(uint64_t(target->partitions[slot][i]));counts.push_back(uint64_t(target->record.counts[target->partitions[slot][i]]));}
+   out.pushKV("slot"+std::to_string(slot)+"_partitions",parts);
+   out.pushKV("slot"+std::to_string(slot)+"_counts",counts);}
+  return out;}};
+}
+RPCMethod verifypgngoldaudit(){
+ return RPCMethod{"verifypgngoldaudit","Check one audit answer against the counts in the gold header.",{
+  {"range_number",RPCArg::Type::STR,RPCArg::Optional::NO,"Range number as a decimal string"},
+  {"slot",RPCArg::Type::NUM,RPCArg::Optional::NO,"Slot 0 or 1"},
+  {"partitions",RPCArg::Type::ARR,RPCArg::Optional::NO,"Five ascending partition indices",{{"index",RPCArg::Type::NUM,RPCArg::Optional::NO,"Partition"}}},
+  {"counts",RPCArg::Type::ARR,RPCArg::Optional::NO,"Five declared counts at those partitions",{{"count",RPCArg::Type::NUM,RPCArg::Optional::NO,"Count"}}}},
+ // One field: verdict.
+ RPCResults{},
+  RPCExamples{""},
+ [](const RPCMethod&,const JSONRPCRequest& request)->UniValue{
+  auto& manager=EnsureAnyChainman(request.context);LOCK(cs_main);RequireNative(manager);auto& active=manager.ActiveChainstate();auto& tip=Tip(manager);
+  const auto number=ParseRangeNumber(request.params[0]);
+  GoldAuditAnswer answer;const auto slot=request.params[1].getInt<int64_t>();
+  if(slot<0||slot>=int64_t(GoldAuditSlots))throw JSONRPCError(RPC_INVALID_PARAMETER,"Slot must be 0 or 1");
+  answer.slot=uint8_t(slot);
+  const auto readSet=[&](const UniValue& value,uint32_t maximum,auto&& store){
+   if(!value.isArray()||value.size()!=GoldAuditPartitionsPerSlot)throw JSONRPCError(RPC_INVALID_PARAMETER,"Exactly five values required");
+   for(size_t i=0;i<GoldAuditPartitionsPerSlot;++i){const auto v=value[i].getInt<int64_t>();if(v<0||uint64_t(v)>maximum)throw JSONRPCError(RPC_INVALID_PARAMETER,"Value out of domain");store(i,uint32_t(v));}};
+  readSet(request.params[2],GoldPartitionCount-1,[&](size_t i,uint32_t v){answer.partitions[i]=v;});
+  readSet(request.params[3],255,[&](size_t i,uint32_t v){answer.counts[i]=uint8_t(v);});
+  const auto& consensus=manager.GetConsensus();if(!consensus.pgn_gold_counts_header)throw JSONRPCError(RPC_MISC_ERROR,"Gold counts audit is not active on this chain");
+  const auto& budget=*manager.m_options.pgn_candidate_science_budget;
+  const auto ledger=ReadGoldCountsLedger(active.CoinsTip(),tip,budget.schedule);
+  if(!ledger)throw JSONRPCError(RPC_MISC_ERROR,"Gold counts history held; no empty claim set is assumed");
+  const auto target=ReadGoldAuditTarget(tip,*ledger,number);
+  UniValue out{UniValue::VOBJ};
+  if(!target){out.pushKV("verdict","no_target");return out;}
+  const auto verdict=VerifyGoldAuditAnswer(*target,answer);
+  const char* name=verdict==GoldAuditVerdict::Verified?"verified":verdict==GoldAuditVerdict::InvalidSlot?"invalid_slot":
+      verdict==GoldAuditVerdict::WrongPartitions?"wrong_partitions":"wrong_count";
+  out.pushKV("verdict",name);return out;}};
+}
 RPCMethod getpgnauditactivity(){
  return RPCMethod{"getpgnauditactivity","Read a bounded global audit activity projection from the authenticated current branch. No expected answers, private keys, or inferred GPU progress.",{
   {"after_height",RPCArg::Type::NUM,RPCArg::Default{0},"Last observed accepted height; zero establishes a current snapshot"},
@@ -938,6 +1013,6 @@ RPCMethod getpgnnetworkmetrics(){
 std::shared_ptr<const pgn::core::NativeLeaderboardSnapshot>
 pgn::core::ReadNativeSocialIdentitySnapshot(ChainstateManager& manager){return ReadLeaderboardSnapshot(manager,std::nullopt);}
 void RegisterPgnNativeRPCCommands(CRPCTable& table){
- static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
+ static const CRPCCommand commands[]{{"mining",&getpgnstate},{"mining",&getpgncoverage},{"mining",&getpgnticketrequest},{"mining",&getpgnbootstraptemplate},{"mining",&getpgnscientificwork},{"mining",&getpgnscientifictemplate},{"mining",&getpgnreportcommit},{"mining",&getpgnreports},{"mining",&getpgnauditevent},{"mining",&getpgnauditstate},{"mining",&getpgngoldaudit},{"mining",&verifypgngoldaudit},{"mining",&getpgnauditactivity},{"mining",&getpgnparticipants},{"mining",&getpgnleaderboard},{"mining",&getpgnworkdutystatus},{"mining",&getpgnnetworkmetrics},{"mining",&getpgnworkview},{"mining",&getpgnticketatlas}};
  for(const auto& command:commands)table.appendCommand(command.name,&command);
 }
