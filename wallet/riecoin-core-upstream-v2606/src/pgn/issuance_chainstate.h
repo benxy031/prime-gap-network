@@ -61,40 +61,48 @@ struct IssuanceSnapshot {
 
     std::optional<AuditSettlementBalances> audit_settlement{}; // Explicit v5, genesis-opted V1 only.
 
+    std::optional<GoldRangeSettlementBalances> gold_settlement{}; // Explicit v7: the counted-range release cursor.
+
     bool Valid() const
     {
         return !tip.IsNull() && cap == PGN_MAX_SUPPLY_ATOMIC &&
             IssuanceBudgetState::Create(cap, minted, promised).has_value()&&(!partition||partition->Valid(minted,promised))&&
             (!pools||(partition&&pools->Valid(partition->ordinary_promised)))&&
             (!epochs||(pools&&epochs->Valid(pools->near_miss)))&&
-            (!audit_settlement||(epochs&&audit_settlement->Valid(pools->audit)));
+            (!audit_settlement||(epochs&&audit_settlement->Valid(pools->audit)))&&
+            // v7 builds on the grouped settlement representation, so a snapshot that
+            // carries the release cursor must say so or it would decode differently.
+            (!gold_settlement||(epochs&&audit_settlement&&audit_settlement->grouped&&
+                                gold_settlement->Valid()));
     }
     bool operator==(const IssuanceSnapshot&) const = default;
     template <typename Stream> void Serialize(Stream& stream) const
     {
         if (!Valid()) throw std::ios_base::failure("Invalid PGN issuance snapshot");
-        stream << uint8_t(audit_settlement?(audit_settlement->grouped?6:5):epochs?4:pools?3:partition?2:1) << tip << cap << minted << promised;
+        stream << uint8_t(gold_settlement?7:audit_settlement?(audit_settlement->grouped?6:5):epochs?4:pools?3:partition?2:1) << tip << cap << minted << promised;
         if(partition)stream<<*partition;
         if(pools)stream<<*pools;
         if(epochs)stream<<*epochs;
         if(audit_settlement){stream<<*audit_settlement;
             if(audit_settlement->grouped&&audit_settlement->active)stream<<audit_settlement->active->grouped_remaining;
         }
+        if(gold_settlement)stream<<*gold_settlement;
     }
     template <typename Stream> void Unserialize(Stream& stream)
     {
         uint8_t version{};
         IssuanceSnapshot next;
         stream >> version >> next.tip >> next.cap >> next.minted >> next.promised;
-        if(version==2||version==3||version==4||version==5||version==6){IssuanceBudgetPartition value;stream>>value;next.partition=value;}
-        if(version==3||version==4||version==5||version==6){OrdinaryRewardPools value;stream>>value;next.pools=value;}
-        if(version==4||version==5||version==6){GoldEpochBalances value;stream>>value;next.epochs=value;}
-        if(version==5||version==6){AuditSettlementBalances value;stream>>value;
-            value.grouped=version==6;
+        if(version>=2&&version<=7){IssuanceBudgetPartition value;stream>>value;next.partition=value;}
+        if(version>=3&&version<=7){OrdinaryRewardPools value;stream>>value;next.pools=value;}
+        if(version>=4&&version<=7){GoldEpochBalances value;stream>>value;next.epochs=value;}
+        if(version>=5&&version<=7){AuditSettlementBalances value;stream>>value;
+            value.grouped=version>=6;
             if(value.grouped&&value.active)stream>>value.active->grouped_remaining;
             next.audit_settlement=value;
         }
-        if ((version != 1&&version != 2&&version != 3&&version != 4&&version != 5&&version != 6) || !next.Valid())
+        if(version==7){GoldRangeSettlementBalances value;stream>>value;next.gold_settlement=value;}
+        if ((version<1||version>7) || !next.Valid())
             throw std::ios_base::failure("Invalid PGN issuance snapshot");
         *this = next;
     }

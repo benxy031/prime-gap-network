@@ -213,6 +213,10 @@ public:
         return known->second;
     }
 
+    // Range number -> (height, block). Read-only, for callers that have to walk the
+    // whole set - ordering a settlement, for instance - rather than probe one claim.
+    const std::map<uint64_t, std::pair<int32_t, uint256>>& Claims() const { return m_owner; }
+
     size_t size() const { return m_owner.size(); }
     int32_t Height() const { return m_height; }
 

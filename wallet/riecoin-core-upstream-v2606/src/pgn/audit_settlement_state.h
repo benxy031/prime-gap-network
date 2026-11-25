@@ -47,6 +47,21 @@ struct AuditSettlementBalances {
         *this=std::move(next);
     }
 };
+// v7. How much of the counted ranges' audit money has been released. The cursor is
+// a count over completed audits in chain order, so the state stays bounded no matter
+// how many ranges the chain pays: no per-range list is kept, and a range cannot be
+// paid twice because the cursor only moves forward.
+struct GoldRangeSettlementBalances {
+    uint64_t released{};
+    int32_t height{};
+    CAmount total{};
+    bool Valid() const {
+        return height >= 0 && total >= 0 && total <= PGN_MAX_SUPPLY_ATOMIC;
+    }
+    bool operator==(const GoldRangeSettlementBalances&)const=default;
+    SERIALIZE_METHODS(GoldRangeSettlementBalances,obj){READWRITE(obj.released,obj.height,obj.total);}
+};
+
 // Integral cumulative reservation, including partial periods and era halvings.
 inline std::optional<CAmount> QuoteCumulativeAuditAccrual(const GoldEpochDefinition& d,uint64_t golds){
     if(!GoldEpochDefinitionValid(d))return {};

@@ -191,6 +191,17 @@ int main(int argc,char** argv){
         const auto expected=ParseHex("056e00000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000f401000000000000000000000000000000000000000000000000000000000000000064a7b3b6e00dabc6440361000000558d8906c2000000000000000000000000000000000000000000000000000000558d8906c20000000a000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000abc6440361000000010a00000000000000030000000000000001000000000000000a0000006e00000000000000000000000000000000000000000000000000000000000000bd020000000000000000000000000000000000000000000000000000000000000054ce0923010000");
         assert(HexStr(encoded)==HexStr(expected));
         DataStream legacy{expected};IssuanceSnapshot decoded;legacy>>decoded;assert(decoded==snapshot&&legacy.empty());}
+        { // v7: the counted-range release cursor. Absence is still a v6 snapshot, so an
+          // older database reads exactly as before.
+        auto snapshot=Initial(definition);
+        snapshot.audit_settlement->grouped=true;
+        snapshot.gold_settlement=GoldRangeSettlementBalances{3,42,1100};
+        assert(snapshot.Valid());DataStream encoded;encoded<<snapshot;
+        assert(uint8_t(encoded[0])==7);
+        DataStream legacy{encoded};IssuanceSnapshot decoded;legacy>>decoded;
+        assert(decoded==snapshot&&legacy.empty());
+        auto older=snapshot;older.gold_settlement.reset();
+        DataStream six;six<<older;assert(uint8_t(six[0])==6);}
     }
     auto before=Initial(definition);auto after=before;after.tip=Id(900);
     unsigned reads{};

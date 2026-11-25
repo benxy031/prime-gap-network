@@ -43,10 +43,10 @@ struct GoldRangePayout {
 // from the range number.
 inline std::optional<GoldRangePayout> QuoteGoldRangePayout(
     const GoldEpochDefinition& epochs, uint64_t gold_ordinal, const CScript& miner_script,
-    const GoldAuditLedger& audits, const GoldAuditTarget& target)
+    const GoldAuditLedger& audits, uint64_t range_number)
 {
     if (miner_script.empty() || miner_script.size() > GoldRewardMaximumScriptBytes) return {};
-    if (!target.record.range_number || target.gold_height < 0) return {};
+    if (!range_number) return {};
     const auto grant = QuoteGoldEpoch(epochs, gold_ordinal);
     if (!grant) return {};
 
@@ -64,7 +64,7 @@ inline std::optional<GoldRangePayout> QuoteGoldRangePayout(
     const auto shares = SplitAuditPot(payout.audit_pot, GoldAuditSlots);
     if (!shares || shares->size() != GoldAuditSlots) return {};
 
-    const auto* answers = audits.Answers(target.record.range_number);
+    const auto* answers = audits.Answers(range_number);
     if (!answers) return payout;
     for (size_t slot = 0; slot < GoldAuditSlots; ++slot) {
         if (!(*answers)[slot]) continue;

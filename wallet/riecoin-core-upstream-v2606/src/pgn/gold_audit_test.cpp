@@ -6,6 +6,7 @@
 // the miner could not have known when it chose the header.
 #include <pgn/gold_audit.h>
 #include <pgn/gold_payout.h>
+#include <pgn/gold_settlement.h>
 
 #include <iostream>
 #include <memory>
@@ -372,7 +373,7 @@ static void CheckPayout()
     };
 
     // Nothing answered: the pot is known, the miner is known, nobody is paid.
-    const auto open = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    const auto open = QuoteGoldRangePayout(epochs, 0, miner, audits, 17);
     need(open.has_value(), "An open range has no payout quote");
     need(open->miner == coin * 1468 / 10, "The miner's share is wrong");
     need(open->audit_pot * 4 == open->miner, "The auditor's pot is not a quarter of the miner");
@@ -383,7 +384,7 @@ static void CheckPayout()
     // One slot is still not a completed audit, and the answered slot's payee is
     // already visible so a page can be checked against it.
     answer(0, first);
-    const auto half = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    const auto half = QuoteGoldRangePayout(epochs, 0, miner, audits, 17);
     need(half.has_value() && !half->payable, "A half-answered range reported payable");
     need(half->auditors[0] && half->auditors[0]->script == first,
          "The first slot lost its payee");
@@ -391,7 +392,7 @@ static void CheckPayout()
 
     // Both slots: the pot divides exactly, with no atomic unit lost.
     answer(1, second);
-    const auto complete = QuoteGoldRangePayout(epochs, 0, miner, audits, *target);
+    const auto complete = QuoteGoldRangePayout(epochs, 0, miner, audits, 17);
     need(complete.has_value() && complete->payable, "A completed audit is not payable");
     need(complete->auditors[0] && complete->auditors[1], "A completed audit lost a slot");
     need(complete->auditors[0]->script == first && complete->auditors[1]->script == second,
@@ -401,7 +402,7 @@ static void CheckPayout()
     need(paid * 4 == complete->miner, "The auditors together did not get a quarter");
 
     // The rule holds in every era, because halving applies to both sides.
-    const auto later = QuoteGoldRangePayout(epochs, epochs.era_golds, miner, audits, *target);
+    const auto later = QuoteGoldRangePayout(epochs, epochs.era_golds, miner, audits, 17);
     need(later.has_value(), "An era one quote failed");
     need(later->audit_pot * 4 == later->miner, "The quarter drifted in a later era");
 
@@ -410,11 +411,11 @@ static void CheckPayout()
     auto wrong = epochs;
     wrong.audit_period_amount = coin * 125;
     need(GoldEpochDefinitionValid(wrong), "The negative fixture policy is invalid");
-    need(!QuoteGoldRangePayout(wrong, 0, miner, audits, *target).has_value(),
+    need(!QuoteGoldRangePayout(wrong, 0, miner, audits, 17).has_value(),
          "A chain that does not commit the quarter produced a payout");
 
     // And a range with no payee for its miner cannot be quoted at all.
-    need(!QuoteGoldRangePayout(epochs, 0, CScript{}, audits, *target).has_value(),
+    need(!QuoteGoldRangePayout(epochs, 0, CScript{}, audits, 17).has_value(),
          "A range with no miner payee produced a payout");
 
     // Correctness must never depend on the payee: the verifier answers "are these
@@ -425,6 +426,97 @@ static void CheckPayout()
          "Correctness was made to depend on the payee");
     need(!BuildGoldAuditEnvelope(anonymous, 17).has_value(),
          "An answer with no payee was encoded");
+}
+
+static void CheckRelease()
+{
+    const CAmount coin = PGN_ATOMIC_UNITS_PER_COIN;
+    const GoldEpochDefinition epochs{200000, 10, coin * 1468 / 10, 32 * coin, 24 * coin, 8 * coin,
+                                     coin * 367, 1000 * coin, 40U * 65536U};
+
+    // Two ranges paid at heights 1 and 2, both audited, but the second one completes
+    // first. The release order has to follow completion and not mining.
+    const GoldCountsRecord early{17, Counts(3)}, late{18, Counts(4)};
+    Chain chain{8, {{3, early}}};
+    GoldCountsLedger claims;
+    need(claims.Add(1, chain.hashes[1], early).verdict == GoldCountsVerdict::Accepted,
+         "Release fixture claim one");
+    need(claims.Add(2, chain.hashes[2], late).verdict == GoldCountsVerdict::Accepted,
+         "Release fixture claim two");
+    need(claims.GoldsBefore(2) == 1, "The gold ordinal is wrong");
+
+    GoldAuditLedger audits;
+    const auto target_for = [&](const GoldCountsRecord& record) {
+        GoldAuditTarget built;
+        built.record = record;
+        built.gold_height = 1;
+        built.seed = chain.hashes[2];
+        for (size_t slot = 0; slot < GoldAuditSlots; ++slot) {
+            for (size_t i = 0; i < GoldAuditPartitionsPerSlot; ++i) {
+                built.partitions[slot][i] = uint32_t(14 * slot + i);
+            }
+        }
+        return built;
+    };
+    const auto sign = [&](const GoldCountsRecord& record, uint8_t slot, int32_t height,
+                          const CScript& payee) {
+        // One answer per height: the ledger only grows forward, exactly as the
+        // replay enforces.
+        const auto target = target_for(record);
+        need(audits.Add(height, chain.hashes[size_t(height)], target,
+                        GoldAuditExpectedAnswer(target, slot, payee)) ==
+                 GoldAuditAdmission::Accepted,
+             "Release fixture answer");
+    };
+    sign(late, 0, 3, CScript{} << OP_4);
+    sign(late, 1, 4, CScript{} << OP_5);
+    sign(early, 0, 5, CScript{} << OP_2);
+    sign(early, 1, 6, CScript{} << OP_3);
+
+    const auto complete = GoldCompletedAudits(claims, audits);
+    need(complete.size() == 2, "Both audited ranges were not complete");
+    // Range 18 finished at height 4, range 17 at height 5, so 18 is released first.
+    need(complete[0].range_number == 18 && complete[0].completion_height == 4,
+         "The release order does not follow completion");
+    need(complete[1].range_number == 17 && complete[1].completion_height == 6,
+         "The release order does not follow completion");
+
+    const auto script_at = [](int32_t) { return std::optional<CScript>{CScript{} << OP_1}; };
+
+    // The cursor starts at zero and nothing is released before the answers are behind
+    // the parent.
+    need(PlanGoldRangeReleases(epochs, claims, audits, 0, 3, script_at)->empty(),
+         "A release happened in the block carrying the answer");
+    const auto first = PlanGoldRangeReleases(epochs, claims, audits, 0, 4, script_at);
+    need(first && first->size() == 1 && (*first)[0].range_number == 18,
+         "The first release is wrong");
+    // The whole pot for one gold: 367 coin accumulated over an audit period of ten.
+    need((*first)[0].total == coin * 367 / 10, "The released amount is not the pot");
+    need((*first)[0].total * 4 == coin * 1468 / 10, "The released pot is not a quarter of the miner");
+    need((*first)[0].shares[0] && (*first)[0].shares[1], "A release lost a share");
+
+    // One block may release everything that is ready, and the cursor then holds.
+    const auto both = PlanGoldRangeReleases(epochs, claims, audits, 0, 6, script_at);
+    need(both && both->size() == 2, "A block did not release both ready ranges");
+    need((*both)[0].range_number == 18 && (*both)[1].range_number == 17,
+         "The batch is out of order");
+    const auto after = PlanGoldRangeReleases(epochs, claims, audits, 2, 6, script_at);
+    need(after && after->empty(), "The cursor released a range twice");
+
+    // An unreadable gold body refuses the plan rather than skipping the range and
+    // paying the ones behind it.
+    const auto missing = PlanGoldRangeReleases(epochs, claims, audits, 0, 6,
+                                               [](int32_t) { return std::optional<CScript>{}; });
+    need(!missing.has_value(), "An unreadable body skipped a release");
+
+    // A range nobody audited never enters the order at all, so it cannot stall the
+    // ranges that were audited.
+    GoldCountsLedger one_more = claims;
+    need(one_more.Add(3, chain.hashes[3], GoldCountsRecord{19, Counts(1)}).verdict ==
+             GoldCountsVerdict::Accepted,
+         "The un-audited fixture claim failed");
+    const auto unaffected = PlanGoldRangeReleases(epochs, one_more, audits, 0, 6, script_at);
+    need(unaffected && unaffected->size() == 2, "An unaudited range entered the release order");
 }
 
 int main()
@@ -438,6 +530,7 @@ int main()
         CheckLedger();
         CheckWindow();
         CheckPayout();
+        CheckRelease();
         std::cout << "gold audit ok" << std::endl;
         return 0;
     } catch (const std::exception& failure) {

@@ -850,7 +850,7 @@ RPCMethod getpgngoldaudit(){
   if(!cash.policy||!cash.policy->Epochs())
    throw JSONRPCError(RPC_MISC_ERROR,"Chain commits no epoch rewards; the payout is not guessed");
   const auto quote=QuoteGoldRangePayout(*cash.policy->Epochs(),ledger->GoldsBefore(target->gold_height),
-                                        *miner.miner,*audits,*target);
+                                        *miner.miner,*audits,number);
   if(!quote)throw JSONRPCError(RPC_MISC_ERROR,"The committed rewards do not express the auditor's quarter");
   UniValue payout{UniValue::VOBJ};
   payout.pushKV("gross",quote->gross);payout.pushKV("miner_amount",quote->miner);
