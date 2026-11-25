@@ -17,8 +17,10 @@ Usage:
   tools/pgn_local_blocks.py --datadir ... --rpcport ... --dry-run
   tools/pgn_local_blocks.py --datadir ... --rpcport ... --request <canonical-script-hex>
 
-This tool mines coordination/bootstrap blocks only. It cannot produce a gold
-block, a report, an audit or a spend.
+This tool mines coordination/bootstrap blocks and, with --gold-section, the
+counts-carrying header that declares a gold range. It cannot produce a report,
+an audit or a spend. The declaration lives in the header only: the coinbase
+envelope is no longer needed, and on an activated chain it is refused.
 """
 
 import argparse
@@ -141,8 +143,7 @@ def main(argv=None):
                         help="canonical signed request script, repeatable")
     parser.add_argument("--gold-section", metavar="HEX",
                         help="106-byte counts section (12 hex range number + 200 hex counts); "
-                             "builds the 218-byte header and also needs --request with the "
-                             "matching coinbase envelope")
+                             "builds the 218-byte counts header")
     parser.add_argument("--dry-run", action="store_true", help="find the nonce, do not submit")
     parser.add_argument("--max-counter", type=int, default=MAX_COUNTER,
                         help="counter search bound, default 2^32")

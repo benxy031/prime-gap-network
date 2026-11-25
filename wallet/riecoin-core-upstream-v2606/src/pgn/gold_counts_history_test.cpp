@@ -42,7 +42,9 @@ GoldPartitionCounts Counts(uint8_t base)
     return counts;
 }
 
-// A chain fixture: genesis policies, then one block per supplied coinbase.
+// A chain fixture: genesis policies, then one block per supplied declaration.
+// The declaration lives in the header, so the index carries it and the replay
+// needs no block bodies.
 struct Fixture {
     uint256 chain;
     std::array<CBlock, 5> blocks;
@@ -52,7 +54,7 @@ struct Fixture {
     std::unique_ptr<CCoinsViewCache> view;
     std::unique_ptr<NativeRequestHistoryArchive> history;
 
-    Fixture(const fs::path& path, bool activate, const std::vector<std::vector<CScript>>& bodies)
+    Fixture(const fs::path& path, bool activate, const std::vector<std::optional<GoldCountsRecord>>& claims)
     {
         chain.begin()[0] = activate ? 21 : 22;
         // A deliberately narrow ticket width: each of the 100 partitions then
@@ -78,21 +80,28 @@ struct Fixture {
         blocks[0].hashMerkleRoot = BlockMerkleRoot(blocks[0]);
         hashes[0] = blocks[0].GetHash();
 
-        need(bodies.size() <= blocks.size() - 1, "Fixture body list too long");
-        for (size_t height = 1; height <= bodies.size(); ++height) {
+        need(claims.size() <= blocks.size() - 1, "Fixture claim list too long");
+        for (size_t height = 1; height <= claims.size(); ++height) {
             CMutableTransaction coinbase;
             coinbase.vin.resize(1);
             coinbase.vin[0].prevout.SetNull();
             coinbase.vin[0].scriptSig = CScript{} << int64_t(height) << OP_0;
-            for (const auto& script : bodies[height - 1]) coinbase.vout.emplace_back(0, script);
-            if (coinbase.vout.empty()) coinbase.vout.emplace_back(0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'});
+            coinbase.vout.emplace_back(0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'});
             blocks[height].nTime = 200 + int64_t(height);
             blocks[height].hashPrevBlock = hashes[height - 1];
+            blocks[height].nVersion = 4;
+            if (claims[height - 1]) {
+                blocks[height].nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
+                const auto section =
+                    EncodeGoldCountsHeader(claims[height - 1]->range_number, claims[height - 1]->counts);
+                need(section.has_value(), "Fixture section rejected");
+                blocks[height].gold_counts = *section;
+            }
             blocks[height].vtx = {MakeTransactionRef(coinbase)};
             blocks[height].hashMerkleRoot = BlockMerkleRoot(blocks[height]);
             hashes[height] = blocks[height].GetHash();
         }
-        for (size_t height = 0; height <= bodies.size(); ++height) {
+        for (size_t height = 0; height <= claims.size(); ++height) {
             auto index = std::make_unique<CBlockIndex>(blocks[height]);
             index->phashBlock = &hashes[height];
             index->nHeight = int32_t(height);
@@ -106,11 +115,11 @@ struct Fixture {
             DBParams{.path = path / (activate ? "coins-on" : "coins-off"), .cache_bytes = 1 << 20,
                      .memory_only = true, .wipe_data = false}, CoinsViewOptions{});
         view = std::make_unique<CCoinsViewCache>(coins.get());
-        view->SetBestBlock(hashes[bodies.size()]);
-        view->StagePgnFactCommit({{}, FactHead{chain, hashes[bodies.size()]}, {}});
+        view->SetBestBlock(hashes[claims.size()]);
+        view->StagePgnFactCommit({{}, FactHead{chain, hashes[claims.size()]}, {}});
         history = std::make_unique<NativeRequestHistoryArchive>(path / (activate ? "history-on" : "history-off"), 1 << 20);
         const RequestHistoryArchiveBudget archive_budget{16384, 16384};
-        for (size_t height = 0; height <= bodies.size(); ++height) {
+        for (size_t height = 0; height <= claims.size(); ++height) {
             need(history->StoreBlock(*view, *indices.back(), int32_t(height), blocks[height], archive_budget) ==
                      RequestArchiveVerdict::Stored,
                  "Whole native history was not stored");
@@ -136,17 +145,27 @@ CScript Envelope(uint64_t number, const GoldPartitionCounts& counts)
     return *script;
 }
 
-CBlock Proposed(const CBlockIndex& parent, const std::vector<CScript>& outputs)
+// A proposed block. `header` selects the counts section; `envelope` adds a
+// coinbase copy, which an activated chain does not want unless it agrees.
+CBlock Proposed(const CBlockIndex& parent, std::optional<GoldCountsRecord> header = {},
+                std::vector<CScript> extra_outputs = {})
 {
     CMutableTransaction coinbase;
     coinbase.vin.resize(1);
     coinbase.vin[0].prevout.SetNull();
     coinbase.vin[0].scriptSig = CScript{} << int64_t(parent.nHeight + 1) << OP_0;
-    for (const auto& script : outputs) coinbase.vout.emplace_back(0, script);
+    coinbase.vout.emplace_back(0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'});
+    for (const auto& script : extra_outputs) coinbase.vout.emplace_back(0, script);
     CBlock block;
     block.nTime = parent.GetBlockTime() + 60;
     block.hashPrevBlock = parent.GetBlockHash();
     block.nVersion = 4;
+    if (header) {
+        block.nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
+        const auto section = EncodeGoldCountsHeader(header->range_number, header->counts);
+        need(section.has_value(), "Proposed section rejected");
+        block.gold_counts = *section;
+    }
     block.nBits = 0x207fffff;
     block.nNonce = NativeBootstrapNonce(0);
     block.vtx = {MakeTransactionRef(coinbase)};
@@ -165,17 +184,20 @@ int main(int argc, char** argv)
         const auto schedule = Schedule();
 
         // 0: genesis with the rule, 1: range 7, 2: plain, 3: range 8.
-        Fixture fixture{path, true,
-                        {{Envelope(7, Counts(0))}, {}, {Envelope(8, Counts(1))}}};
+        const GoldCountsRecord seven{7, Counts(0)}, eight{8, Counts(1)};
+        Fixture fixture{path, true, {seven, std::nullopt, eight}};
         need(fixture.tip().nHeight == 3, "Fixture height is wrong");
+        need(fixture.at(1).HasGoldCounts() && fixture.at(1).gold_counts.size() == GoldCountsHeaderBytes,
+             "The fixture block did not keep its section in the index");
 
         const auto policy = ReadChainGoldCountsPolicy(*fixture.view, fixture.tip(), *fixture.history,
                                                      schedule.archive, kPolicyBudget);
         need(policy.verdict == ChainRangePolicyVerdict::Confirmed && policy.policy.has_value(),
              "Activated chain did not confirm the gold counts policy");
 
-        const auto ledger = ReadGoldCountsLedger(*fixture.view, fixture.tip(), *fixture.history, schedule,
-                                                 kMaximumScriptBytes);
+        // The replay reads the block index, not block bodies: no archive, no
+        // coinbase, and the claim is exactly the one the block id commits to.
+        const auto ledger = ReadGoldCountsLedger(*fixture.view, fixture.tip(), schedule);
         need(ledger != nullptr, "Ledger replay was held");
         need(ledger->size() == 2 && ledger->Contains(7) && ledger->Contains(8) && !ledger->Contains(9),
              "Ledger replay found the wrong claims");
@@ -183,69 +205,73 @@ int main(int argc, char** argv)
 
         // A claimed range number is refused, and the refusal names the record.
         const auto duplicate = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                        Proposed(fixture.tip(), {Envelope(7, Counts(0))}),
-                                                        schedule, kPolicyBudget);
+                                                        Proposed(fixture.tip(), seven), schedule, kPolicyBudget);
         need(duplicate.verdict == GoldCountsProposedVerdict::DuplicateRangeNumber,
              "A reused range number was not refused");
         need(duplicate.record && duplicate.record->range_number == 7, "The refusal lost its record");
         need(duplicate.record->counts == Counts(0), "The refusal lost the counts");
 
-        const auto twice = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                    Proposed(fixture.tip(), {Envelope(7, Counts(0)), Envelope(8, Counts(1))}),
-                                                    schedule, kPolicyBudget);
-        need(twice.verdict == GoldCountsProposedVerdict::InvalidDeclaration,
-             "Two declarations in one block were not refused");
+        // An envelope without a header has no committed home on an activated
+        // chain, so it is not a lesser form of the same claim.
+        const auto envelope_only = VerifyProposedGoldCounts(
+            *fixture.view, fixture.tip(), *fixture.history,
+            Proposed(fixture.tip(), std::nullopt, {Envelope(9, Counts(2))}), schedule, kPolicyBudget);
+        need(envelope_only.verdict == GoldCountsProposedVerdict::InvalidDeclaration,
+             "An envelope without a header was accepted on an activated chain");
+
+        // A header that disagrees with a coinbase copy is a lie in one of them.
+        const auto disagreeing = VerifyProposedGoldCounts(
+            *fixture.view, fixture.tip(), *fixture.history,
+            Proposed(fixture.tip(), GoldCountsRecord{9, Counts(2)}, {Envelope(10, Counts(3))}),
+            schedule, kPolicyBudget);
+        need(disagreeing.verdict == GoldCountsProposedVerdict::InvalidDeclaration,
+             "A header that disagrees with the envelope was accepted");
+        // Agreement is tolerated, so an older runtime's block is not reinterpreted.
+        const auto agreeing = VerifyProposedGoldCounts(
+            *fixture.view, fixture.tip(), *fixture.history,
+            Proposed(fixture.tip(), GoldCountsRecord{9, Counts(2)}, {Envelope(9, Counts(2))}),
+            schedule, kPolicyBudget);
+        need(agreeing.verdict == GoldCountsProposedVerdict::Verified,
+             "A header with a matching envelope was refused");
 
         // An unclaimed number is exactly what the rule is for.
         const auto fresh = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                    Proposed(fixture.tip(), {Envelope(9, Counts(2))}), schedule,
-                                                    kPolicyBudget);
+                                                    Proposed(fixture.tip(), GoldCountsRecord{9, Counts(2)}),
+                                                    schedule, kPolicyBudget);
         need(fresh.verdict == GoldCountsProposedVerdict::Verified, "An unclaimed range number was refused");
         need(fresh.record && fresh.record->range_number == 9, "The verified record is wrong");
 
         // No declaration at all is unaffected.
         const auto plain = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                    Proposed(fixture.tip(), {CScript{} << OP_RETURN << Bytes{'P'}}),
-                                                    schedule, kPolicyBudget);
+                                                    Proposed(fixture.tip()), schedule, kPolicyBudget);
         need(plain.verdict == GoldCountsProposedVerdict::Absent, "A plain block was treated as a declaration");
 
         // Counts above a partition's capacity cannot come from a real scan.
         GoldPartitionCounts impossible{};
         impossible[0] = 255; // partition 0 owns 50 odd positions in this fixture
         const auto huge = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                   Proposed(fixture.tip(), {Envelope(11, impossible)}), schedule,
-                                                   kPolicyBudget);
+                                                   Proposed(fixture.tip(), GoldCountsRecord{11, impossible}),
+                                                   schedule, kPolicyBudget);
         need(huge.verdict == GoldCountsProposedVerdict::InvalidDeclaration,
              "Counts above partition capacity were accepted");
 
         // The same declaration on a chain whose genesis does not commit the rule
-        // is an ordinary zero-value OP_RETURN, which is today's testnet.
-        Fixture dormant{path, false, {{Envelope(7, Counts(0))}}};
+        // is an ordinary zero-value OP_RETURN, which is today's testnet. A counts
+        // header there is refused earlier, by header validation.
+        Fixture dormant{path, false, {std::nullopt}};
         const auto dormant_policy = ReadChainGoldCountsPolicy(*dormant.view, dormant.tip(),
                                                               *dormant.history, schedule.archive, kPolicyBudget);
         need(dormant_policy.verdict == ChainRangePolicyVerdict::MissingConfiguration &&
                  !dormant_policy.policy.has_value(),
              "An inactive chain reported the rule");
-        const auto inactive = VerifyProposedGoldCounts(*dormant.view, dormant.tip(), *dormant.history,
-                                                       Proposed(dormant.tip(), {Envelope(7, Counts(0))}), schedule,
-                                                       kPolicyBudget);
+        const auto inactive = VerifyProposedGoldCounts(
+            *dormant.view, dormant.tip(), *dormant.history,
+            Proposed(dormant.tip(), std::nullopt, {Envelope(7, Counts(0))}), schedule, kPolicyBudget);
         need(inactive.verdict == GoldCountsProposedVerdict::Inactive,
              "An inactive chain rejected a harmless envelope");
         // And it does not build a ledger it would never use.
-        const auto dormant_ledger = ReadGoldCountsLedger(*dormant.view, dormant.tip(), *dormant.history,
-                                                         schedule, kMaximumScriptBytes);
+        const auto dormant_ledger = ReadGoldCountsLedger(*dormant.view, dormant.tip(), schedule);
         need(dormant_ledger != nullptr, "Inactive chain ledger replay was held");
-
-        // A non-canonical declaration is refused on an activated chain even when
-        // its range number is free.
-        const auto canonical = Envelope(12, Counts(0));
-        CScript noncanonical = canonical;
-        noncanonical << OP_0;
-        const auto malformed = VerifyProposedGoldCounts(*fixture.view, fixture.tip(), *fixture.history,
-                                                        Proposed(fixture.tip(), {noncanonical}), schedule,
-                                                        kPolicyBudget);
-        need(malformed.verdict == GoldCountsProposedVerdict::InvalidDeclaration,
-             "A trailing byte was accepted");
 
         std::cout << R"({"PASS":true,"scope":"gold counts pay-once over authenticated history"})"
                   << std::endl;

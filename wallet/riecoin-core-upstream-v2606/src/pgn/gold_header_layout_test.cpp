@@ -19,6 +19,7 @@
 #include <vector>
 
 extern const TranslateFn G_TRANSLATION_FUN = [](const char* text) { return std::string(text); };
+RecursiveMutex cs_main;
 
 using namespace pgn::core;
 
@@ -158,6 +159,64 @@ static void CheckMerkleAndBlock()
     need(serialized > 218, "Serialized block is shorter than its header");
 }
 
+// The block index keeps the header, including this section, because a served or
+// reconstructed header must hash to the same id as the block it describes. The
+// disk codec has to round-trip it or a restart turns every gold block into a
+// hash mismatch.
+static void CheckIndexRoundTrip()
+{
+    auto header = Plain();
+    // The index reconstructs the previous-block hash from its parent pointer, so
+    // a root-less fixture must be a root.
+    header.hashPrevBlock.SetNull();
+    header.nVersion = 4 | PGN_GOLD_COUNTS_VERSION_BIT;
+    const auto section = EncodeGoldCountsHeader(31337, [] {
+        GoldPartitionCounts counts{};
+        for (size_t i = 0; i < GoldPartitionCount; ++i) counts[i] = static_cast<uint8_t>(i % 9);
+        return counts;
+    }());
+    need(section.has_value(), "Fixture section rejected");
+    header.gold_counts = *section;
+
+    const CBlockIndex index{header};
+    need(index.HasGoldCounts(), "The index lost the version bit");
+    need(index.gold_counts.size() == PGN_GOLD_COUNTS_SECTION_BYTES, "The index did not keep the section");
+    need(index.GetBlockHeader().gold_counts == *section, "The index served a header without its section");
+    need(index.GetBlockHeader().GetHash() == header.GetHash(),
+         "The header rebuilt from the index has a different block id");
+
+    // Disk codec, both directions, with the section present.
+    const CDiskBlockIndex disk{&index};
+    DataStream stream;
+    stream << disk;
+    const auto counts_bytes = stream.size();
+    CDiskBlockIndex loaded;
+    stream >> loaded;
+    need(loaded.HasGoldCounts(), "The disk codec dropped the version bit");
+    need(loaded.gold_counts == index.gold_counts, "The disk codec dropped the section");
+    need(loaded.ConstructBlockHash() == index.GetBlockHeader().GetHash(),
+         "The disk codec reconstructs a different block id");
+
+    // And a plain entry still encodes exactly as before: 88 bytes of body, no
+    // section, and the same reconstructed hash.
+    auto plain_header = Plain();
+    plain_header.hashPrevBlock.SetNull();
+    const CBlockIndex plain_index{plain_header};
+    need(!plain_index.HasGoldCounts() && plain_index.gold_counts.empty(),
+         "A plain index entry carries a section");
+    const CDiskBlockIndex plain_disk{&plain_index};
+    DataStream plain_stream;
+    plain_stream << plain_disk;
+    const auto plain_bytes = plain_stream.size();
+    CDiskBlockIndex plain_loaded;
+    plain_stream >> plain_loaded;
+    need(plain_loaded.gold_counts.empty(), "A plain entry grew a section on disk");
+    need(plain_loaded.ConstructBlockHash() == plain_header.GetHash(),
+         "A plain entry reconstructs a different block id");
+    need(plain_bytes + PGN_GOLD_COUNTS_SECTION_BYTES + 1 == counts_bytes,
+         "The section costs more than itself plus its length prefix on disk");
+}
+
 int main()
 {
     try {
@@ -165,6 +224,7 @@ int main()
         CheckGoldLayout();
         CheckSectionDecoding();
         CheckMerkleAndBlock();
+        CheckIndexRoundTrip();
         std::cout << "gold header layout ok" << std::endl;
         return 0;
     } catch (const std::exception& failure) {

@@ -6,10 +6,10 @@ reads connected blocks over RPC, decodes every PGNGOLD-COUNTS-1 envelope in each
 coinbase, and fails if a range number appears twice, if an envelope is not
 canonical, or if a block declares more than one.
 
-The encoding is pinned to the C++ codec in pgn/gold_counts_envelope.h:
-OP_RETURN, one push of the tag, one push of 107 payload bytes (version 1, then a
-six-byte little-endian range number and 100 one-byte partition counts), nothing
-else, value zero.
+The declaration is the 218-byte counts header: nVersion with bit 0x40000000,
+then the usual 80 bytes, then a six-byte little-endian range number and 100
+one-byte partition counts, then nNonce. A coinbase envelope, when present, must
+agree with it byte for byte.
 
 Usage:
   tools/pgn_gold_counts_check.py --datadir /tmp/pgn-p1/A --rpcport 58952
@@ -82,13 +82,13 @@ def decode(script_hex, value):
     return number, list(payload[7:])
 
 
-def declare(block):
-    """(range_number, counts) from the header section or the coinbase envelope.
+def declare(block, raw):
+    """(range_number, counts) from the header section, or None.
 
-    Both must agree when both are present: the header commits the declaration to
-    the block id, the envelope is what history replay can authenticate.
+    `raw` is the serialized block; verbosity 2 does not return it, so the caller
+    fetches it only for blocks whose version selects the section.
     """
-    header = decode_header(block)
+    header = decode_header(block, raw)
     coinbase = None
     for output in block["tx"][0]["vout"]:
         decoded = decode(output["scriptPubKey"]["hex"], output["value"])
@@ -98,19 +98,24 @@ def declare(block):
             raise ValueError("more than one gold declaration in the coinbase")
         coinbase = decoded
     if header is None:
-        return coinbase
+        if coinbase is not None:
+            # On an activated chain a declaration without a header has no
+            # committed home; the node refuses it, so a chain that contains one
+            # was not mined by this rule.
+            raise ValueError("coinbase declaration without a counts header")
+        return None
     if coinbase is not None and list(coinbase[1]) != list(header[1]):
         raise ValueError("header counts differ from the coinbase envelope")
-    if coinbase is None:
-        raise ValueError("counts header without the coinbase envelope")
     return header
 
 
-def decode_header(block):
-    version = int.from_bytes(bytes.fromhex(block["versionHex"]), "little")
-    if not version & 0x40000000:
+def has_counts_header(block):
+    return bool(int(block["versionHex"], 16) & 0x40000000)
+
+
+def decode_header(block, raw):
+    if not has_counts_header(block):
         return None
-    raw = bytes.fromhex(block["hex"])
     if len(raw) < 218:
         raise ValueError("counts header truncated")
     section = raw[80:80 + 106]
@@ -137,7 +142,8 @@ def main(argv=None):
     for height in range(first, last + 1):
         block = rpc("getblock", [rpc("getblockhash", [height]), 2])
         try:
-            declared = declare(block)
+            raw = bytes.fromhex(rpc("getblock", [block["hash"], 0])) if has_counts_header(block) else b""
+            declared = declare(block, raw)
         except ValueError as failure:
             malformed.append({"height": height, "reason": str(failure)})
             continue

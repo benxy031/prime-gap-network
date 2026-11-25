@@ -134,47 +134,75 @@ static void CheckBlockRead()
 {
     const auto script = BuildGoldCountsEnvelope(99, Counts(3));
     need(script.has_value(), "Fixture envelope was rejected");
+    const GoldCountsRecord record{99, Counts(3)};
+    const auto section = EncodeGoldCountsHeader(record.range_number, record.counts);
+    need(section.has_value(), "Fixture section rejected");
 
-    // Absent: a coordination block carries no gold declaration.
+    // The header is the declaration; the coinbase alone is not.
     const auto plain = BlockWithOutputs({{0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N', 'B', 'O', 'O', 'T'}}});
-    const auto absent = ReadGoldCountsFromBlock(plain, GoldCountsMaximumScriptBytes);
-    need(absent.verdict == GoldCountsBlockVerdict::Absent && !absent.record.has_value(),
+    need(ReadGoldCountsFromBlock(plain, GoldCountsMaximumScriptBytes).verdict ==
+             GoldCountsBlockVerdict::Absent,
          "A coordination block reported a gold declaration");
+    const auto envelope_only = BlockWithOutputs({{0, *script}});
+    need(ReadGoldCountsFromBlock(envelope_only, GoldCountsMaximumScriptBytes).verdict ==
+             GoldCountsBlockVerdict::Absent,
+         "A coinbase envelope without a header was read as the declaration");
 
-    // Present: exactly one, alongside other outputs.
-    const auto with = BlockWithOutputs({{0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N', 'B', 'O', 'O', 'T'}},
-                                        {0, *script}});
-    const auto present = ReadGoldCountsFromBlock(with, GoldCountsMaximumScriptBytes);
+    auto with_header = BlockWithOutputs({{0, CScript{} << OP_RETURN << Bytes{'P', 'G', 'N'}}});
+    with_header.nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
+    with_header.gold_counts = *section;
+    const auto present = ReadGoldCountsFromBlock(with_header, GoldCountsMaximumScriptBytes);
     need(present.verdict == GoldCountsBlockVerdict::Present && present.record.has_value(),
-         "A single gold declaration was not found");
-    need(present.record->range_number == 99, "Wrong range number read from the block");
+         "A header declaration was not found");
+    need(*present.record == record, "Wrong record read from the header");
 
-    // A declaration is never a payment.
-    const auto paid = BlockWithOutputs({{1, *script}});
+    // An agreeing coinbase copy is tolerated, so an older runtime's block is not
+    // reinterpreted; a disagreeing one is a lie in one of the two.
+    auto agreeing = with_header;
+    CMutableTransaction agreeing_tx;
+    agreeing_tx.vin.resize(1);
+    agreeing_tx.vin[0].prevout.SetNull();
+    agreeing_tx.vin[0].scriptSig = CScript{} << OP_0 << int64_t{1};
+    agreeing_tx.vout = {CTxOut{0, *BuildGoldCountsEnvelope(99, Counts(3))}};
+    agreeing.vtx = {MakeTransactionRef(agreeing_tx)};
+    need(ReadGoldCountsFromBlock(agreeing, GoldCountsMaximumScriptBytes).verdict ==
+             GoldCountsBlockVerdict::Present,
+         "An agreeing envelope was refused");
+
+    auto disagreeing = agreeing;
+    auto other = CMutableTransaction{*agreeing.vtx.front()};
+    other.vout[0] = CTxOut{0, *BuildGoldCountsEnvelope(100, Counts(3))};
+    disagreeing.vtx = {MakeTransactionRef(other)};
+    need(ReadGoldCountsFromBlock(disagreeing, GoldCountsMaximumScriptBytes).verdict ==
+             GoldCountsBlockVerdict::Invalid,
+         "A header that disagrees with the envelope was accepted");
+
+    // A paid declaration output is not a declaration, and it cannot ride along
+    // with a header either.
+    auto paid = agreeing;
+    auto paid_tx = CMutableTransaction{*agreeing.vtx.front()};
+    paid_tx.vout[0] = CTxOut{1, *BuildGoldCountsEnvelope(99, Counts(3))};
+    paid.vtx = {MakeTransactionRef(paid_tx)};
     need(ReadGoldCountsFromBlock(paid, GoldCountsMaximumScriptBytes).verdict ==
              GoldCountsBlockVerdict::Invalid,
          "A paid gold output was accepted");
 
-    // Two declarations in one block: ambiguous, so refused rather than resolved.
-    const auto twice = BlockWithOutputs({{0, *script}, {0, *script}});
+    // Two envelopes in one coinbase remain ambiguous.
+    auto twice = with_header;
+    auto twice_tx = CMutableTransaction{*agreeing.vtx.front()};
+    twice_tx.vout.emplace_back(0, *BuildGoldCountsEnvelope(99, Counts(3)));
+    twice.vtx = {MakeTransactionRef(twice_tx)};
     need(ReadGoldCountsFromBlock(twice, GoldCountsMaximumScriptBytes).verdict ==
-             GoldCountsBlockVerdict::Duplicate,
-         "Two gold declarations were accepted");
-
-    // A gold envelope plus a malformed one fails closed.
-    const auto malformed = BlockWithOutputs({{0, *script},
-                                             {0, CScript{} << OP_RETURN
-                                                           << Bytes{GoldCountsTag.begin(), GoldCountsTag.end()}
-                                                           << Bytes{GoldCountsVersion}}});
-    need(ReadGoldCountsFromBlock(malformed, GoldCountsMaximumScriptBytes).verdict ==
              GoldCountsBlockVerdict::Invalid,
-         "A malformed declaration alongside a valid one was accepted");
+         "Two gold envelopes were accepted");
 
-    // A block with no coinbase cannot declare anything.
+    // A block with no coinbase cannot carry a declaration.
     CBlock empty;
+    empty.nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
+    empty.gold_counts = *section;
     need(ReadGoldCountsFromBlock(empty, GoldCountsMaximumScriptBytes).verdict ==
-             GoldCountsBlockVerdict::Absent,
-         "A coinbase-free block reported a declaration");
+             GoldCountsBlockVerdict::Invalid,
+         "A coinbase-free counts block reported a declaration");
 }
 
 static void CheckPayOnce()

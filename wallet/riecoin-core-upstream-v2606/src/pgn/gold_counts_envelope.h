@@ -139,28 +139,26 @@ inline GoldCountsBlockRead ReadGoldCountsFromCoinbase(const CTransaction& coinba
     return read;
 }
 
-// A block may carry its declaration twice: the header section commits it to the
-// block id, and the coinbase envelope is what the history archive can replay
-// (the archive authenticates a coinbase, not a header). While both exist they
-// must agree byte for byte - otherwise one of them is a lie - and a header
-// without the envelope is refused, because nothing could then prove later that
-// the range was already paid. Phase 2 drops the envelope once the block index
-// carries the section.
+// The header is the declaration. A coinbase envelope is not a lesser form of the
+// same claim: it has no committed home, and once the block index carries the
+// section the envelope is only a way to smuggle an unbacked range number past
+// the rule. A block that carries both must still agree byte for byte, so an
+// older runtime's block cannot be reinterpreted.
 inline GoldCountsBlockRead ReadGoldCountsFromBlock(const CBlock& block, uint64_t maximum_script_bytes)
 {
+    if (!block.HasGoldCounts()) return {GoldCountsBlockVerdict::Absent, {}};
     if (block.vtx.empty() || !block.vtx.front() || !block.vtx.front()->IsCoinBase()) {
-        return {GoldCountsBlockVerdict::Absent, {}};
+        return {GoldCountsBlockVerdict::Invalid, {}};
     }
-    const auto coinbase = ReadGoldCountsFromCoinbase(*block.vtx.front(), maximum_script_bytes);
-    if (!block.HasGoldCounts()) return coinbase;
     const auto section = DecodeGoldCountsHeader(block.gold_counts);
     if (!section) return {GoldCountsBlockVerdict::Invalid, {}};
     const GoldCountsRecord header{section->first, section->second};
+    const auto coinbase = ReadGoldCountsFromCoinbase(*block.vtx.front(), maximum_script_bytes);
     if (coinbase.verdict == GoldCountsBlockVerdict::Invalid ||
         coinbase.verdict == GoldCountsBlockVerdict::Duplicate) {
         return {GoldCountsBlockVerdict::Invalid, {}};
     }
-    if (coinbase.verdict != GoldCountsBlockVerdict::Present || *coinbase.record != header) {
+    if (coinbase.verdict == GoldCountsBlockVerdict::Present && *coinbase.record != header) {
         return {GoldCountsBlockVerdict::Invalid, {}};
     }
     return {GoldCountsBlockVerdict::Present, header};

@@ -147,6 +147,10 @@ bool BlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, s
                 pindexNew->hashMerkleRoot = diskindex.hashMerkleRoot;
                 pindexNew->nTime          = diskindex.nTime;
                 pindexNew->nBits          = diskindex.nBits;
+                // The counts section is part of the header this entry reconstructs.
+                // Dropping it here leaves the version bit set with no section, and
+                // every hash derived from the loaded index is then wrong.
+                pindexNew->gold_counts    = diskindex.gold_counts;
                 pindexNew->nNonce         = diskindex.nNonce;
                 pindexNew->nStatus        = diskindex.nStatus;
                 pindexNew->nTx            = diskindex.nTx;

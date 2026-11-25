@@ -56,9 +56,13 @@ inline ChainGoldCountsPolicyCheck ReadChainGoldCountsPolicy(
 // Every range number claimed on the current branch below `parent`. Null when the
 // branch cannot be authenticated inside the budget: a caller must then refuse
 // the block, never assume the set is empty.
+//
+// The declaration lives in the header, and the block index keeps the header, so
+// the replay reads the index instead of the block bodies. That is the whole
+// reason the section is stored there: no archive load, no body read, and the
+// claim is exactly the one the block's own id commits to.
 inline std::shared_ptr<const GoldCountsLedger> ReadGoldCountsLedger(
-    const CCoinsView& view, const CBlockIndex& parent, const NativeRequestHistoryArchive& history,
-    const RangeScheduleBudget& budget, uint64_t maximum_script_bytes)
+    const CCoinsView& view, const CBlockIndex& parent, const RangeScheduleBudget& budget)
 {
     AssertLockHeld(cs_main);
     const auto head = view.GetPgnFactHead();
@@ -99,17 +103,16 @@ inline std::shared_ptr<const GoldCountsLedger> ReadGoldCountsLedger(
             }
             if (first && (!index || !index->phashBlock || index->GetBlockHash() != cached.tip)) return reject();
             for (const auto* block : ancestry) {
-                const auto loaded = history.Load(view, parent, block->nHeight, budget.archive);
-                if (!loaded.block || !loaded.block->Coinbase()) return reject();
-                const auto read = ReadGoldCountsFromCoinbase(*loaded.block->Coinbase(), maximum_script_bytes);
-                if (read.verdict == GoldCountsBlockVerdict::Invalid ||
-                    read.verdict == GoldCountsBlockVerdict::Duplicate) return reject();
-                if (read.verdict == GoldCountsBlockVerdict::Present) {
+                if (block->HasGoldCounts()) {
+                    if (block->gold_counts.size() != GoldCountsHeaderBytes) return reject();
+                    const auto section = DecodeGoldCountsHeader(block->gold_counts);
+                    if (!section) return reject();
                     // Publish only after the whole prefix is authenticated.
                     if (cached.ledger.use_count() != 1) {
                         cached.ledger = std::make_shared<GoldCountsLedger>(*cached.ledger);
                     }
-                    if (cached.ledger->Add(block->nHeight, block->GetBlockHash(), *read.record).verdict !=
+                    const GoldCountsRecord record{section->first, section->second};
+                    if (cached.ledger->Add(block->nHeight, block->GetBlockHash(), record).verdict !=
                         GoldCountsVerdict::Accepted) return reject();
                 }
                 cached.height = block->nHeight;
@@ -146,19 +149,34 @@ inline GoldCountsProposedCheck VerifyProposedGoldCounts(
     const CBlock& block, const RangeScheduleBudget& schedule_budget, RangePolicyReadBudget policy_budget)
 {
     AssertLockHeld(cs_main);
-    const auto read = ReadGoldCountsFromBlock(block, GoldCountsMaximumScriptBytes);
-    if (read.verdict == GoldCountsBlockVerdict::Absent) return {GoldCountsProposedVerdict::Absent, {}};
-    if (read.verdict != GoldCountsBlockVerdict::Present || !read.record) {
-        return {GoldCountsProposedVerdict::InvalidDeclaration, {}};
+    const bool declares_header = block.HasGoldCounts();
+    bool declares_envelope{};
+    if (!block.vtx.empty() && block.vtx.front() && block.vtx.front()->IsCoinBase()) {
+        for (const auto& output : block.vtx.front()->vout) {
+            declares_envelope |= IsGoldCountsScript(output.scriptPubKey);
+        }
     }
+    if (!declares_header && !declares_envelope) return {GoldCountsProposedVerdict::Absent, {}};
+
     const auto activation =
         ReadChainGoldCountsPolicy(view, parent, archive, schedule_budget.archive, policy_budget);
     if (!activation.policy) {
-        // Only explicit absence is permissive; an unreadable genesis is not.
+        // Only explicit absence is permissive; an unreadable genesis is not. On
+        // such a chain the envelope is an ordinary zero-value OP_RETURN, which is
+        // what the published testnet accepts today. Header validation has already
+        // refused the version bit itself on this chain.
         return {activation.verdict == ChainRangePolicyVerdict::MissingConfiguration
                     ? GoldCountsProposedVerdict::Inactive
                     : GoldCountsProposedVerdict::OutOfDomain,
-                read.record};
+                {}};
+    }
+    // On an activated chain the header is the only declaration: a coinbase
+    // envelope has no committed home, so it is not a lesser form of the same
+    // claim, it is an unbacked one.
+    if (!declares_header) return {GoldCountsProposedVerdict::InvalidDeclaration, {}};
+    const auto read = ReadGoldCountsFromBlock(block, GoldCountsMaximumScriptBytes);
+    if (read.verdict != GoldCountsBlockVerdict::Present || !read.record) {
+        return {GoldCountsProposedVerdict::InvalidDeclaration, {}};
     }
     // The declaration is only meaningful against this chain's own address space.
     const auto ranges = ReadChainRangePolicy(view, parent, archive, schedule_budget.archive, policy_budget);
@@ -167,8 +185,7 @@ inline GoldCountsProposedCheck VerifyProposedGoldCounts(
                                  ranges.policy->Definition().width)) {
         return {GoldCountsProposedVerdict::InvalidDeclaration, read.record};
     }
-    const auto ledger =
-        ReadGoldCountsLedger(view, parent, archive, schedule_budget, GoldCountsMaximumScriptBytes);
+    const auto ledger = ReadGoldCountsLedger(view, parent, schedule_budget);
     if (!ledger) return {GoldCountsProposedVerdict::HistoryHeld, read.record};
     if (ledger->Contains(read.record->range_number)) {
         return {GoldCountsProposedVerdict::DuplicateRangeNumber, read.record};
