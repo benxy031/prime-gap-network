@@ -203,12 +203,106 @@ static void CheckAnswers()
          "The forged header's own answer did not verify");
 }
 
+static void CheckEnvelope()
+{
+    const GoldAuditAnswer answer{1, {12, 40, 41, 77, 99}, {0, 1, 2, 3, 4}};
+    const auto script = BuildGoldAuditEnvelope(answer, 4242);
+    need(script.has_value(), "Canonical audit envelope was rejected");
+    need(IsGoldAuditScript(*script), "The envelope is not recognised as a counts audit");
+    // OP_RETURN, the tag push, then the payload push: a direct push while the
+    // payload stays under 76 bytes, one length byte more above it.
+    need(GoldAuditPayloadBytes == 18, "The payload size changed");
+    need(script->size() == 1 + 1 + GoldAuditTag.size() + 1 + GoldAuditPayloadBytes,
+         "The envelope is not the canonical size");
+
+    const auto decoded = DecodeGoldAuditEnvelope(*script);
+    need(decoded.has_value() && decoded->range_number == 4242 && decoded->answer == answer,
+         "The envelope does not round-trip");
+
+    // An unsorted or out-of-domain assignment is not an answer that could have
+    // been handed out, so it is refused at the codec rather than at the ledger.
+    GoldAuditAnswer unsorted{0, {40, 12, 41, 77, 99}, {0, 0, 0, 0, 0}};
+    need(!BuildGoldAuditEnvelope(unsorted, 1).has_value(), "An unsorted assignment was encoded");
+    GoldAuditAnswer out_of_range{0, {0, 1, 2, 3, 100}, {0, 0, 0, 0, 0}};
+    need(!BuildGoldAuditEnvelope(out_of_range, 1).has_value(), "Partition 100 was encoded");
+    GoldAuditAnswer bad_slot{2, {0, 1, 2, 3, 99}, {0, 0, 0, 0, 0}};
+    need(!BuildGoldAuditEnvelope(bad_slot, 1).has_value(), "Slot 2 was encoded");
+    need(!BuildGoldAuditEnvelope(answer, uint64_t{1} << 48).has_value(), "An out-of-domain range was encoded");
+
+    // Trailing bytes and foreign scripts.
+    CScript trailing = *script;
+    trailing << OP_0;
+    need(!DecodeGoldAuditEnvelope(trailing).has_value(), "Trailing bytes were decoded");
+    need(!DecodeGoldAuditEnvelope(CScript{} << OP_RETURN << Bytes{'n', 'o'}).has_value(),
+         "A foreign tag was decoded");
+    need(!DecodeGoldAuditEnvelope(CScript{}).has_value(), "An empty script was decoded");
+}
+
+static void CheckLedger()
+{
+    const GoldCountsRecord record{31, Counts(7)};
+    Chain chain{9, {{4, record}}};
+    const auto ledger_claims = LedgerWith(chain, {{4, record}});
+    const auto target = ReadGoldAuditTarget(chain.tip(), ledger_claims, 31);
+    need(target.has_value(), "Fixture target missing");
+
+    const CScript first{CScript{} << OP_1}, second{CScript{} << OP_2};
+    GoldAuditLedger audits;
+    need(!audits.Audited(31), "A fresh range is reported as audited");
+
+    // One verified answer per slot, one answer per slot ever.
+    const auto zero = GoldAuditExpectedAnswer(*target, 0);
+    need(audits.Add(5, *target, first, zero) == GoldAuditAdmission::Accepted,
+         "A verified answer was refused");
+    need(!audits.Audited(31), "One slot is reported as a completed audit");
+    need(audits.Add(5, *target, first, zero) == GoldAuditAdmission::Replay,
+         "The identical answer was treated as a new claim");
+    need(audits.Add(6, *target, second, zero) == GoldAuditAdmission::SlotTaken,
+         "A second actor overwrote an answered slot");
+
+    // A wrong answer never consumes a slot: otherwise anyone could burn the range
+    // by answering badly. Slot 1 is still free here.
+    const auto one = GoldAuditExpectedAnswer(*target, 1);
+    auto wrong = one;
+    wrong.counts[0] = static_cast<uint8_t>(wrong.counts[0] + 1);
+    need(audits.Add(7, *target, second, wrong) == GoldAuditAdmission::NotVerified,
+         "A wrong answer was accepted");
+    need(audits.Add(7, *target, second, one) == GoldAuditAdmission::Accepted,
+         "A wrong answer consumed the slot");
+    need(audits.Audited(31), "Two verified slots did not complete the audit");
+    need(audits.AuditedRanges() == 1, "Audited range count is wrong");
+
+    // Slot 0 cannot be answered with slot 1's assignment, and the ledger only
+    // grows forward.
+    GoldAuditLedger other_rules;
+    auto crossed_answer = GoldAuditExpectedAnswer(*target, 1);
+    crossed_answer.slot = 0;
+    need(other_rules.Add(5, *target, first, crossed_answer) == GoldAuditAdmission::NotVerified,
+         "A crossed assignment was recorded");
+    need(other_rules.Add(5, *target, first, zero) == GoldAuditAdmission::Accepted,
+         "The correct slot 0 answer was refused after a crossed one");
+    need(other_rules.Add(4, *target, second, GoldAuditExpectedAnswer(*target, 1)) ==
+             GoldAuditAdmission::OutOfOrder,
+         "An older answer was accepted");
+
+    // The answers are kept as submitted, so a reader can see who audited what.
+    const auto* answers = audits.Answers(31);
+    need(answers && (*answers)[0] && (*answers)[0]->actor == first && (*answers)[0]->height == 5,
+         "The recorded slot lost its actor or height");
+    need(answers && (*answers)[1] && (*answers)[1]->actor == second && (*answers)[1]->height == 7,
+         "The second slot recorded the wrong actor");
+    need(audits.Answers(32) == nullptr, "An unanswered range has answers");
+}
+
 int main()
 {
+
     try {
         CheckSeedOrdering();
         CheckTarget();
         CheckAnswers();
+        CheckEnvelope();
+        CheckLedger();
         std::cout << "gold audit ok" << std::endl;
         return 0;
     } catch (const std::exception& failure) {
