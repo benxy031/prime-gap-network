@@ -50,7 +50,16 @@ inline NativeMainParameterDefinition BuildPgnTestnetDefinition(std::string_view 
         for(unsigned i=0;i<bytes;++i)rewards.push_back(static_cast<unsigned char>(value>>(8*i)));
     };
     put(200000,4);put(10,4);
-    for(const CAmount amount:{171*coin,32*coin,24*coin,8*coin,125*coin,1000*coin})put(amount,8);
+    // A counted range pays its auditor a quarter of the miner's share. Only a chain
+    // that commits the counts rule may carry that split, so the published rewards
+    // blob stays byte for byte as it was and the per-gold total is unchanged at
+    // 247.5 either way - 146.8 + 64 + 36.7, which chain_monetary_policy enforces
+    // against curve.initial_subsidy.
+    const bool counted=!suffix.empty();
+    const CAmount gold_share=counted?coin*1468/10:coin*171;
+    // audit_period_amount accumulates over one audit period of ten golds.
+    const CAmount audit_share=counted?coin*367:coin*125;
+    for(const CAmount amount:{gold_share,32*coin,24*coin,8*coin,audit_share,1000*coin})put(amount,8);
     put(40*65536,4);
     const std::string rewards_tag="PGNTESTNET-REWARDS-1";
     CMutableTransaction coinbase;coinbase.vin.resize(1);coinbase.vin[0].prevout.SetNull();
