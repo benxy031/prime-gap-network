@@ -49,16 +49,22 @@ GoldPartitionCounts Counts(uint8_t base)
 // needs no block bodies.
 struct Fixture {
     uint256 chain;
-    std::array<CBlock, 5> blocks;
-    std::array<uint256, 5> hashes;
+    std::vector<CBlock> blocks;
+    std::vector<uint256> hashes;
     std::vector<std::unique_ptr<CBlockIndex>> indices;
     std::unique_ptr<CCoinsViewDB> coins;
     std::unique_ptr<CCoinsViewCache> view;
     std::unique_ptr<NativeRequestHistoryArchive> history;
 
+    // `tail` extends the chain with plain blocks, which is what a test needs to
+    // reach a height a fixed five-block fixture can never describe - the audit
+    // window is thirteen blocks deep.
     Fixture(const fs::path& path, bool activate, const std::vector<std::optional<GoldCountsRecord>>& claims,
-            const std::vector<std::vector<CScript>>& audits = {}, const std::string& name = {})
+            const std::vector<std::vector<CScript>>& audits = {}, const std::string& name = {},
+            size_t tail = 0)
     {
+        blocks.resize(1 + claims.size() + tail);
+        hashes.resize(blocks.size());
         chain.begin()[0] = activate ? 21 : 22;
         // A deliberately narrow ticket width: each of the 100 partitions then
         // holds 50 odd positions, so a count of 255 is impossible and the
@@ -84,7 +90,7 @@ struct Fixture {
         hashes[0] = blocks[0].GetHash();
 
         need(claims.size() <= blocks.size() - 1, "Fixture claim list too long");
-        for (size_t height = 1; height <= claims.size(); ++height) {
+        for (size_t height = 1; height < blocks.size(); ++height) {
             CMutableTransaction coinbase;
             coinbase.vin.resize(1);
             coinbase.vin[0].prevout.SetNull();
@@ -96,10 +102,10 @@ struct Fixture {
             blocks[height].nTime = 200 + int64_t(height);
             blocks[height].hashPrevBlock = hashes[height - 1];
             blocks[height].nVersion = 4;
-            if (claims[height - 1]) {
+            if (height - 1 < claims.size() && claims[height - 1]) {
                 blocks[height].nVersion |= PGN_GOLD_COUNTS_VERSION_BIT;
-                const auto section =
-                    EncodeGoldCountsHeader(claims[height - 1]->range_number, claims[height - 1]->counts);
+                const auto& claim = *claims[height - 1];
+                const auto section = EncodeGoldCountsHeader(claim.range_number, claim.counts);
                 need(section.has_value(), "Fixture section rejected");
                 blocks[height].gold_counts = *section;
             }
@@ -107,7 +113,7 @@ struct Fixture {
             blocks[height].hashMerkleRoot = BlockMerkleRoot(blocks[height]);
             hashes[height] = blocks[height].GetHash();
         }
-        for (size_t height = 0; height <= claims.size(); ++height) {
+        for (size_t height = 0; height < blocks.size(); ++height) {
             auto index = std::make_unique<CBlockIndex>(blocks[height]);
             index->phashBlock = &hashes[height];
             index->nHeight = int32_t(height);
@@ -122,12 +128,12 @@ struct Fixture {
             DBParams{.path = path / stem, .cache_bytes = 1 << 20,
                      .memory_only = true, .wipe_data = false}, CoinsViewOptions{});
         view = std::make_unique<CCoinsViewCache>(coins.get());
-        view->SetBestBlock(hashes[claims.size()]);
-        view->StagePgnFactCommit({{}, FactHead{chain, hashes[claims.size()]}, {}});
+        view->SetBestBlock(hashes.back());
+        view->StagePgnFactCommit({{}, FactHead{chain, hashes.back()}, {}});
         history = std::make_unique<NativeRequestHistoryArchive>(
             path / fs::PathFromString((activate ? "history-on" : "history-off") + name), 1 << 20);
         const RequestHistoryArchiveBudget archive_budget{16384, 16384};
-        for (size_t height = 0; height <= claims.size(); ++height) {
+        for (size_t height = 0; height < blocks.size(); ++height) {
             need(history->StoreBlock(*view, *indices.back(), int32_t(height), blocks[height], archive_budget) ==
                      RequestArchiveVerdict::Stored,
                  "Whole native history was not stored");
@@ -401,6 +407,26 @@ int main(int argc, char** argv)
                                       {*honest_script, *honest_script})) ==
                      GoldAuditProposedVerdict::Duplicate,
                  "Two answers in one coinbase were accepted");
+
+            // Late result invalid by expiry: past the window the range's audit is
+            // decided, so an answer that arrives late cannot change it. The chain
+            // has to be long enough to have passed the deadline, which is why the
+            // fixture takes a tail.
+            const size_t past_deadline = size_t(GoldAuditDeadline(*t)) + 1;
+            Fixture late{path, true, {audited}, {}, "-audit-gate-late", past_deadline};
+            need(late.tip().nHeight > GoldAuditDeadline(*t), "The late fixture is not past the deadline");
+            need(check(late, Proposed(late.tip(), std::nullopt, {*honest_script})) ==
+                     GoldAuditProposedVerdict::Expired,
+                 "An answer past the audit window reached admission");
+
+            // Inside the window the same answer is still accepted, so the rule is an
+            // expiry and not a blanket refusal.
+            const auto late_target = ReadGoldAuditTarget(late.tip(), *claims, 41);
+            need(late_target.has_value(), "The late fixture lost its target");
+            need(GoldAuditDeadline(*late_target) == GoldAuditDeadline(*t),
+                 "The audit deadline moved with the tip");
+            need(Proposed(late.tip(), std::nullopt, {*honest_script}).vtx.front()->vout.size() == 2,
+                 "The late candidate is not shaped as expected");
 
             // On a chain without the rule the envelope is an ordinary zero-value
             // OP_RETURN, which is what the published testnet accepts today.

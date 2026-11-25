@@ -200,6 +200,7 @@ enum class GoldAuditProposedVerdict {
     Verified,    // an answer that verifies took a free slot
     UnpaidRange, // the range number was never paid, so there is nothing to audit
     SeedMissing, // the gold block has no seed block yet, so the answer is chosen, not proven
+    Expired,     // the audit window closed before this block, so the range is decided
     Duplicate,   // more than one answer in one coinbase
     Invalid,     // not canonical, paid, a taken slot, wrong counts, or out of order
     OutOfDomain, // the activation policy could not be read at all
@@ -257,6 +258,9 @@ inline GoldAuditProposedVerdict VerifyProposedGoldAudit(
     if (height <= owner->first + 1) return GoldAuditProposedVerdict::SeedMissing;
     const auto target = ReadGoldAuditTarget(parent, *claims, answer->range_number);
     if (!target) return GoldAuditProposedVerdict::SeedMissing;
+    // Late result invalid by expiry: past the window the range's audit is decided,
+    // and a late answer must not be able to change it.
+    if (height > GoldAuditDeadline(*target)) return GoldAuditProposedVerdict::Expired;
     const auto audits = ReadGoldAuditLedger(view, parent, archive, schedule_budget, *claims,
                                             maximum_script_bytes);
     if (!audits) return GoldAuditProposedVerdict::HistoryHeld;

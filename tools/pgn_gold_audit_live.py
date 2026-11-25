@@ -56,18 +56,28 @@ def main(argv=None):
 
     rpc = Rpc(arguments.rpcport, cookie_for(arguments.datadir, arguments.cookie))
     number = arguments.range
-    cases = []
+    cases, failures = [], []
+
+    # A refusal can come from the template, which is the miner being told before it
+    # spends the search, or from submitblock, which is the chain being authoritative.
+    # Both mean the same thing here: the chain would not take the answer.
+    refusals = ("rejected", "Gold audit answer is invalid")
 
     def submit(script):
         try:
             return mine(rpc, requests=[script])["block"]
         except RuntimeError as failure:
-            if "rejected" not in str(failure):
+            if not any(marker in str(failure) for marker in refusals):
                 raise
             return None
 
     def publish(script):
         return submit(script)
+
+    # A range number pays once, so a half-finished run cannot simply be repeated.
+    if target(rpc, number).get("auditable") or target(rpc, number + 100).get("auditable"):
+        raise ValueError("range " + str(number) + " or " + str(number + 100)
+                         + " is already paid on this chain; pick another")
 
     # The gold block and one successor, so the target exists at all.
     gold = mine(rpc, gold_section=gold_section(number))["block"]
@@ -92,15 +102,42 @@ def main(argv=None):
     cases.append(case("honest slot 1", "accepted", lambda: publish(
         audit_script(number, 1, declared["slot1_partitions"], declared["slot1_counts"]))))
 
+    # The window is what makes the audit decisive: a range nobody answers stops being
+    # answerable at all, so "no audit" becomes a final state a payment rule can read
+    # instead of a gap that stays open forever.
+    quiet = number + 100
+    mine(rpc, gold_section=gold_section(quiet))
+    mine(rpc)
+    window = target(rpc, quiet)
+    if window["audit_status"] != "open":
+        failures.append({"case": "fresh range status", "declared": window["audit_status"]})
+    # The deadline is the last height that can carry an answer, so the range is decided
+    # as soon as the tip reaches it.
+    while rpc("getblockcount", []) < window["audit_deadline"]:
+        mine(rpc)
+    expired = target(rpc, quiet)
+    if expired["audit_status"] != "expired":
+        failures.append({"case": "expired status", "declared": expired["audit_status"],
+                         "deadline": expired["audit_deadline"],
+                         "tip": rpc("getblockcount", [])})
+    cases.append(case("answer after the window", "rejected", lambda: publish(
+        audit_script(quiet, 0, expired["slot0_partitions"], expired["slot0_counts"]))))
+    if target(rpc, quiet)["audit_answered"] != 0:
+        failures.append({"case": "expired range took an answer"})
+
     recorded = target(rpc, number)
-    failures = [entry for entry in cases if not entry["PASS"]]
+    failures += [entry for entry in cases if not entry["PASS"]]
     if not recorded["audited"]:
         failures.append({"case": "audited after both slots", "declared": recorded["audited"]})
     if recorded["answered_slots"] != 2:
         failures.append({"case": "answered slots", "declared": recorded["answered_slots"]})
+    if recorded["audit_status"] != "audited":
+        failures.append({"case": "audited status", "declared": recorded["audit_status"]})
 
     result = {"schema": "PGN_GOLD_AUDIT_LIVE_V1", "range_number": number, "gold_block": gold,
               "audited": recorded["audited"], "answered_slots": recorded["answered_slots"],
+              "audit_deadline": recorded["audit_deadline"],
+              "expired_range": quiet, "expired_deadline": expired["audit_deadline"],
               "cases": cases, "failures": failures, "PASS": not failures}
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0 if result["PASS"] else 1

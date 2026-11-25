@@ -57,6 +57,21 @@ struct GoldAuditTarget {
     std::array<std::array<uint32_t, GoldAuditPartitionsPerSlot>, GoldAuditSlots> partitions;
 };
 
+// An audit that may be answered forever is an audit nobody has to answer: a miner
+// could declare counts, never be checked, and keep the range. The window makes the
+// outcome decisive, which is what the redesign's "late result invalid by expiry"
+// means once the counts are in the header. Twelve blocks is the published audit
+// lease length (NativeAuditLeaseBlocks), reused rather than invented; phase 4's
+// batching cadence replaces it with the batch block.
+inline constexpr int32_t GoldAuditWindowBlocks = 12;
+
+// The last height at which an answer is still worth anything. The seed sits at
+// gold_height + 1 and the window is counted from it, so the deadline is inclusive.
+inline int32_t GoldAuditDeadline(const GoldAuditTarget& target)
+{
+    return target.gold_height + 1 + GoldAuditWindowBlocks;
+}
+
 // The seed must exist on this chain, so a range whose gold block is the tip is
 // not auditable yet - the miner would otherwise know the selection in advance.
 inline std::optional<GoldAuditTarget> ReadGoldAuditTarget(const CBlockIndex& tip,
@@ -297,6 +312,37 @@ private:
     int32_t m_height{-1};
 };
 
+// What a paid range's audit looks like right now. Expired is not a failure - it is
+// the final answer for a range nobody audited in time, and a later payment rule has
+// to be able to read it as such.
+enum class GoldAuditStatus { Open, Audited, Expired };
+
+struct GoldAuditState {
+    GoldAuditStatus status{GoldAuditStatus::Open};
+    int32_t deadline{};
+    uint8_t answered{};
+};
+
+inline GoldAuditState GoldAuditRangeState(const GoldAuditLedger& audits, const GoldAuditTarget& target,
+                                          int32_t tip_height)
+{
+    GoldAuditState state;
+    state.deadline = GoldAuditDeadline(target);
+    if (const auto* answers = audits.Answers(target.record.range_number)) {
+        for (const auto& slot : *answers) {
+            if (slot) ++state.answered;
+        }
+    }
+    if (state.answered == GoldAuditSlots) {
+        state.status = GoldAuditStatus::Audited;
+    } else if (tip_height >= state.deadline) {
+        // Not ">": an answer needs a block slot at or before the deadline, and once
+        // the tip IS the deadline the next block is past it. The range is decided.
+        state.status = GoldAuditStatus::Expired;
+    }
+    return state;
+}
+
 // Replay of every counts audit on the current branch, read from the same
 // authenticated archive the report and audit replay use. Audits live in coinbase
 // outputs, so unlike the pay-once ledger this one needs the block bodies: the
@@ -369,6 +415,10 @@ inline std::shared_ptr<const GoldAuditLedger> ReadGoldAuditLedger(
                     if (block->nHeight <= owner->first + 1) continue;
                     const auto target = ReadGoldAuditTarget(parent, claims, envelope->range_number);
                     if (!target) return reject();
+                    // Admission refuses a late answer, so one cannot be on a chain this
+                    // replay accepts. Skipping rather than rejecting keeps an already
+                    // mined chain readable instead of making it unauthenticatable.
+                    if (block->nHeight > GoldAuditDeadline(*target)) continue;
                     const auto admission = cached.audits->Add(block->nHeight, block->GetBlockHash(),
                                                               *target, envelope->answer);
                     if (admission == GoldAuditAdmission::Accepted) changed = true;

@@ -289,6 +289,13 @@ RPCMethod getpgnbootstraptemplate(){
   if(!VerifyProposedNativeWorkDuties(active.CoinsTip(),tip,history.archive,*proposed.batch,
        science.policy,science.schedule,science.signature))
     throw JSONRPCError(RPC_VERIFY_ERROR,"Native audit service is required before requesting another search range; refresh work duty status");
+  // The same gate admission applies, so a miner learns the answer is refused before
+  // it spends the counter search instead of after submitblock.
+  const auto gold_audit=VerifyProposedGoldAudit(active.CoinsTip(),tip,history.archive,block,science.schedule,
+      science.policy,science.maximum_script_bytes);
+  if(gold_audit!=GoldAuditProposedVerdict::Absent&&gold_audit!=GoldAuditProposedVerdict::Verified&&
+     gold_audit!=GoldAuditProposedVerdict::Inactive)
+    throw JSONRPCError(RPC_VERIFY_ERROR,"Gold audit answer is invalid, expired, already answered, or for an unpaid range");
   if(!VerifyProposedNativeReportCommitments(active.CoinsTip(),tip,history.archive,block,science.policy,science.schedule,science.signature)||
      !VerifyProposedNativeAuditEvents(active.CoinsTip(),tip,history.archive,block,science.policy,science.schedule,science.signature))
     throw JSONRPCError(RPC_VERIFY_ERROR,"Report commitment is invalid, stale or conflicts with confirmed history");
@@ -822,6 +829,13 @@ RPCMethod getpgngoldaudit(){
   if(!target)return out;
   out.pushKV("auditable",true);out.pushKV("gold_height",target->gold_height);
   out.pushKV("gold_block",target->gold_block.GetHex());out.pushKV("seed",target->seed.GetHex());
+  // An audit that can be answered forever is one nobody has to answer, so the
+  // window is reported: past the deadline the range is decided, and a payment rule
+  // can read Expired as "nobody audited this in time" rather than as a missing value.
+  const auto state=GoldAuditRangeState(*audits,*target,tip.nHeight);
+  out.pushKV("audit_deadline",state.deadline);out.pushKV("audit_answered",uint64_t(state.answered));
+  out.pushKV("audit_status",state.status==GoldAuditStatus::Audited?"audited":
+      state.status==GoldAuditStatus::Expired?"expired":"open");
   for(size_t slot=0;slot<GoldAuditSlots;++slot){
    UniValue parts{UniValue::VARR},counts{UniValue::VARR};
    for(size_t i=0;i<GoldAuditPartitionsPerSlot;++i){parts.push_back(uint64_t(target->partitions[slot][i]));counts.push_back(uint64_t(target->record.counts[target->partitions[slot][i]]));}

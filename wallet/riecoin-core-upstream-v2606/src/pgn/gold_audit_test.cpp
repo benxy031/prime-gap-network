@@ -297,6 +297,48 @@ static void CheckLedger()
     need(audits.Answers(32) == nullptr, "An unanswered range has answers");
 }
 
+static void CheckWindow()
+{
+    const GoldCountsRecord record{17, Counts(3)};
+    Chain chain{8, {{3, record}}};
+    const auto ledger_claims = LedgerWith(chain, {{3, record}});
+    const auto target = [&] {
+        const auto found = ReadGoldAuditTarget(chain.tip(), ledger_claims, 17);
+        need(found.has_value(), "Window target missing");
+        return *found;
+    }();
+
+    // The deadline is counted from the seed, so it does not move with the tip.
+    const auto deadline = GoldAuditDeadline(target);
+    need(deadline == target.gold_height + 1 + GoldAuditWindowBlocks, "The deadline arithmetic moved");
+
+    // Nothing answered: open while a block can still land inside the window, expired
+    // from the moment the tip reaches the deadline, because the next block is past it.
+    const GoldAuditLedger empty;
+    need(GoldAuditRangeState(empty, target, deadline - 1).status == GoldAuditStatus::Open,
+         "An unanswered range expired before its deadline");
+    need(GoldAuditRangeState(empty, target, deadline).status == GoldAuditStatus::Expired,
+         "An unanswered range did not expire at its deadline");
+
+    // One answer is still incomplete, so the range must not read as audited.
+    GoldAuditLedger half;
+    need(half.Add(5, chain.hashes[5], target, GoldAuditExpectedAnswer(target, 0)) ==
+             GoldAuditAdmission::Accepted,
+         "The window fixture lost its first answer");
+    const auto partial = GoldAuditRangeState(half, target, deadline + 1);
+    need(partial.status == GoldAuditStatus::Expired && partial.answered == 1,
+         "A half-answered range did not report expired with one answer");
+
+    // Both answers complete the audit, and completion is not undone by the clock.
+    need(half.Add(6, chain.hashes[6], target, GoldAuditExpectedAnswer(target, 1)) ==
+             GoldAuditAdmission::Accepted,
+         "The window fixture lost its second answer");
+    const auto complete = GoldAuditRangeState(half, target, deadline + 1);
+    need(complete.status == GoldAuditStatus::Audited && complete.answered == 2,
+         "A completed audit was reported expired");
+    need(complete.deadline == deadline, "The reported deadline is wrong");
+}
+
 int main()
 {
 
@@ -306,6 +348,7 @@ int main()
         CheckAnswers();
         CheckEnvelope();
         CheckLedger();
+        CheckWindow();
         std::cout << "gold audit ok" << std::endl;
         return 0;
     } catch (const std::exception& failure) {
