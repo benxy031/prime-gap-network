@@ -6,6 +6,7 @@
 //
 // Closed fixture: synthetic blocks, an in-memory coins view and a temporary
 // archive. No process, wallet, transport or GPU.
+#include <pgn/candidate_block_science.h>
 #include <pgn/gold_counts_history.h>
 #include <pgn/native_bootstrap_hash.h>
 #include <pgn/native_test_bip322.h>
@@ -136,6 +137,11 @@ RangeScheduleBudget Schedule()
     const ConfirmedRequestScanBudget scan{16, 4, 16384, 1, request_budget};
     return RangeScheduleBudget{8, 16, 4, RequestHistoryArchiveBudget{16384, 16384}, scan,
                                RangeDrawBudget{4, 1 << 16, 1 << 16}};
+}
+
+NativeBlockScienceBudget Science()
+{
+    return NativeBlockScienceBudget{kPolicyBudget, Schedule(), ScriptWorkBudget{4096, 8192}, 32, 16384, 32768};
 }
 
 CScript Envelope(uint64_t number, const GoldPartitionCounts& counts)
@@ -272,6 +278,33 @@ int main(int argc, char** argv)
         // And it does not build a ledger it would never use.
         const auto dormant_ledger = ReadGoldCountsLedger(*dormant.view, dormant.tip(), schedule);
         need(dormant_ledger != nullptr, "Inactive chain ledger replay was held");
+
+        // The science path verifies real gold blocks, so it must refuse a paid
+        // range before it spends anything on the proof. A block with a science
+        // envelope tag and a duplicate counts header never reaches the proof.
+        {
+            const auto science_tag = Bytes{BlockScienceEnvelopeTag.begin(), BlockScienceEnvelopeTag.end()};
+            const CScript envelope = CScript{} << OP_RETURN << science_tag << Bytes{1, 2, 3};
+            CBlock candidate = Proposed(fixture.tip(), seven);
+            auto coinbase = CMutableTransaction{*candidate.vtx.front()};
+            coinbase.vout.emplace_back(0, envelope);
+            candidate.vtx = {MakeTransactionRef(coinbase)};
+            candidate.hashMerkleRoot = BlockMerkleRoot(candidate);
+            const auto checked = VerifyNativeCandidateBlockScience(*fixture.view, fixture.tip(),
+                                                                  *fixture.history, candidate, Science());
+            need(checked.verdict == NativeBlockScienceVerdict::GoldCountsRejected,
+                 "The science path accepted a paid range number");
+            // A fresh number gets past the gold gate and stops at the proof.
+            CBlock fresh_science = Proposed(fixture.tip(), GoldCountsRecord{12, Counts(4)});
+            auto fresh_coinbase = CMutableTransaction{*fresh_science.vtx.front()};
+            fresh_coinbase.vout.emplace_back(0, envelope);
+            fresh_science.vtx = {MakeTransactionRef(fresh_coinbase)};
+            fresh_science.hashMerkleRoot = BlockMerkleRoot(fresh_science);
+            const auto later = VerifyNativeCandidateBlockScience(*fixture.view, fixture.tip(),
+                                                                *fixture.history, fresh_science, Science());
+            need(later.verdict != NativeBlockScienceVerdict::GoldCountsRejected,
+                 "The science path refused an unclaimed range number at the gold gate");
+        }
 
         std::cout << R"({"PASS":true,"scope":"gold counts pay-once over authenticated history"})"
                   << std::endl;

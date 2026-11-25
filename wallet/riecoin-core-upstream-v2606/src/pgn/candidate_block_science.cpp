@@ -1,4 +1,5 @@
 #include <pgn/candidate_block_science.h>
+#include <pgn/gold_counts_history.h>
 #include <pgn/native_science_target.h>
 #include <pgn/canonical_encoding.h>
 #include <pgn/proposed_ticket_requests.h>
@@ -65,6 +66,15 @@ NativeBlockScienceCheck VerifyNativeCandidateBlockScience(const CCoinsView& view
     if(!Valid(budget))return {NativeBlockScienceVerdict::BudgetExceeded,{},{}};
     if(!parent.phashBlock||block.hashPrevBlock!=parent.GetBlockHash()||block.vtx.empty()||!block.vtx[0]||!block.vtx[0]->IsCoinBase())
         return {NativeBlockScienceVerdict::InvalidBlock,{},{}};
+    // Pay-once applies to every block that declares a gold range, not only to
+    // coordination bodies: a science block is exactly the block that carries the
+    // counts once the redesign lands. The check only walks the index, so it runs
+    // before any proof, report or audit work.
+    const auto gold=VerifyProposedGoldCounts(view,parent,history,block,budget.schedule,budget.policy);
+    if(gold.verdict==GoldCountsProposedVerdict::HistoryHeld)return {NativeBlockScienceVerdict::NativeHistoryHeld,{},{}};
+    if(gold.verdict!=GoldCountsProposedVerdict::Verified&&gold.verdict!=GoldCountsProposedVerdict::Absent&&
+       gold.verdict!=GoldCountsProposedVerdict::Inactive)
+        return {NativeBlockScienceVerdict::GoldCountsRejected,{},{}};
     if(!VerifyProposedNativeReportCommitments(view,parent,history,block,budget.policy,budget.schedule,budget.signature)||
        !VerifyProposedNativeAuditEvents(view,parent,history,block,budget.policy,budget.schedule,budget.signature))
         return {NativeBlockScienceVerdict::InvalidBlock,{},{}};

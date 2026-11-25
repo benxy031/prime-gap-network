@@ -18,7 +18,10 @@ std::optional<CScript> BuildCandidateBlockScienceEnvelope(const CandidateBlockSc
 // its caller omitted the opaque whole-body verification seal.
 bool HasNativeCandidateBlockScienceEnvelope(const CBlock&);
 enum class NativeBlockScienceVerdict {VerifiedCandidate,InvalidBlock,MissingProof,DuplicateProof,
-    InvalidEncoding,BudgetExceeded,NativeHistoryHeld,ScienceRejected};
+    InvalidEncoding,BudgetExceeded,NativeHistoryHeld,ScienceRejected,
+    // A declared gold range number is already paid, or the declaration itself is
+    // invalid. Separate from InvalidBlock so the reason survives in logs.
+    GoldCountsRejected};
 struct NativeBlockScienceCheck;
 class VerifiedNativeBlockScience {
     uint256 m_block,m_parent,m_source;size_t m_transactions;
